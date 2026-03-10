@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Shifting Veils</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">33 — Shifting Veils</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// 33 · Shifting Veils — Layered translucent noise curtains
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // URL param for embed scaling
+  var urlParams = new URLSearchParams(window.location.search);
+  var pixelScale = parseFloat(urlParams.get('p')) || 1;
+
+  var gl = canvas.getContext('webgl', { alpha: true, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  var vertSrc = [
+    'attribute vec2 a_pos;',
+    'void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }'
+  ].join('\n');
+
+  var fragSrc = [
+    'precision highp float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform float u_layerSpeed;',
+    'uniform float u_layerCount;',
+    '',
+    '#define PI 3.14159265359',
+    '#define TAU 6.28318530718',
+    '',
+    '// ── Hash functions for noise ──',
+    'float hash(vec2 p) {',
+    '  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);',
+    '}',
+    '',
+    'float hash3(vec3 p) {',
+    '  return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453123);',
+    '}',
+    '',
+    '// ── Smooth 2D value noise ──',
+    'float vnoise(vec2 p) {',
+    '  vec2 i = floor(p);',
+    '  vec2 f = fract(p);',
+    '  f = f * f * (3.0 - 2.0 * f);',
+    '  float a = hash(i);',
+    '  float b = hash(i + vec2(1.0, 0.0));',
+    '  float c = hash(i + vec2(0.0, 1.0));',
+    '  float d = hash(i + vec2(1.0, 1.0));',
+    '  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);',
+    '}',
+    '',
+    '// ── FBM (fractal Brownian motion) ──',
+    'float fbm(vec2 p) {',
+    '  float val = 0.0;',
+    '  float amp = 0.5;',
+    '  float freq = 1.0;',
+    '  for (int i = 0; i < 5; i++) {',
+    '    val += amp * vnoise(p * freq);',
+    '    freq *= 2.0;',
+    '    amp *= 0.5;',
+    '  }',
+    '  return val;',
+    '}',
+    '',
+    '// ── Domain-warped noise for organic flowing shapes ──',
+    'float warpedNoise(vec2 p, float t, float seed) {',
+    '  vec2 q = vec2(',
+    '    fbm(p + vec2(seed * 1.7, seed * 2.3) + t * 0.15),',
+    '    fbm(p + vec2(seed * 3.1 + 5.2, seed * 1.3 + 1.3) + t * 0.12)',
+    '  );',
+    '  vec2 r = vec2(',
+    '    fbm(p + 4.0 * q + vec2(1.7, 9.2) + t * 0.08),',
+    '    fbm(p + 4.0 * q + vec2(8.3, 2.8) + t * 0.1)',
+    '  );',
+    '  return fbm(p + 3.5 * r);',
+    '}',
+    '',
+    '// ── Rotation matrix ──',
+    'mat2 rot2(float a) {',
+    '  float c = cos(a), s = sin(a);',
+    '  return mat2(c, -s, s, c);',
+    '}',
+    '',
+    'void main() {',
+    '  vec2 uv = gl_FragCoord.xy / u_res;',
+    '  vec2 aspect = vec2(u_res.x / u_res.y, 1.0);',
+    '  vec2 p = uv * aspect;',
+    '  float t = u_time * u_layerSpeed;',
+    '',
+    '  // ── Warm amber palette colors per layer ──',
+    '  // From deepest (darkest) to frontmost (brightest)',
+    '  // Layer 0: deep sepia',
+    '  // Layer 1: warm brown',
+    '  // Layer 2: copper',
+    '  // Layer 3: amber gold',
+    '  // Layer 4: bright amber',
+    '  // Layer 5: pale gold',
+    '  // Layer 6: warm cream',
+    '',
+    '  // ── Accumulate color from back to front ──',
+    '  vec3 col = vec3(0.012, 0.01, 0.008); // Dark background base',
+    '',
+    '  int maxLayers = 7;',
+    '',
+    '  for (int i = 0; i < 7; i++) {',
+    '    if (float(i) >= u_layerCount) break;',
+    '',
+    '    float fi = float(i);',
+    '    float layerFrac = fi / max(u_layerCount - 1.0, 1.0);',
+    '',
+    '    // ── Each layer has unique movement ──',
+    '    // Different speed, direction, and scale per layer',
+    '    float speed = 0.3 + fi * 0.12;',
+    '    float scale = 1.8 + fi * 0.7;',
+    '    float angle = fi * 0.7 + 0.3;',
+    '',
+    '    // Parallax offset — deeper layers move slower',
+    '    float parallax = 0.3 + layerFrac * 0.7;',
+    '',
+    '    // Direction of drift per layer',
+    '    vec2 drift = vec2(',
+    '      cos(angle) * speed * t * parallax,',
+    '      sin(angle) * speed * t * parallax * 0.7',
+    '    );',
+    '',
+    '    // Rotate coordinates slightly per layer for variety',
+    '    vec2 lp = (p - 0.5 * aspect) * rot2(fi * 0.4 + t * 0.02 * (fi - 2.5)) + 0.5 * aspect;',
+    '    lp = lp * scale + drift;',
+    '',
+    '    // ── Domain-warped noise for flowing veil shape ──',
+    '    float n = warpedNoise(lp, t * (0.8 + fi * 0.15), fi * 3.7 + 1.0);',
+    '',
+    '    // ── Shape the veil: soft edges, flowing contours ──',
+    '    // Use smoothstep to create soft, curtain-like regions',
+    '    float veil = smoothstep(0.25, 0.55, n);',
+    '    veil *= smoothstep(0.85, 0.6, n);',
+    '    // Broaden some veils for variety',
+    '    float broad = smoothstep(0.2, 0.7, n) * 0.5;',
+    '    veil = max(veil, broad);',
+    '',
+    '    // ── Occasional transparency fade — reveals deeper layers ──',
+    '    // Each layer periodically becomes more transparent',
+    '    float fadePhase = t * 0.15 + fi * 1.3;',
+    '    float fadeCycle = sin(fadePhase) * 0.5 + 0.5;',
+    '    // Occasionally dip to near-zero opacity',
+    '    float reveal = smoothstep(0.0, 0.3, fadeCycle);',
+    '    // Mix between partial and full transparency',
+    '    float opacity = mix(0.08, 0.55, reveal);',
+    '',
+    '    // Deeper layers slightly more opaque to build depth',
+    '    opacity *= (0.6 + 0.4 * (1.0 - layerFrac));',
+    '',
+    '    // ── Layer color from the warm amber family ──',
+    '    vec3 layerColor;',
+    '    if (i == 0) {',
+    '      layerColor = vec3(0.12, 0.07, 0.04); // deep sepia',
+    '    } else if (i == 1) {',
+    '      layerColor = vec3(0.22, 0.12, 0.06); // warm brown',
+    '    } else if (i == 2) {',
+    '      layerColor = vec3(0.45, 0.25, 0.12); // copper',
+    '    } else if (i == 3) {',
+    '      layerColor = vec3(0.65, 0.42, 0.15); // amber gold',
+    '    } else if (i == 4) {',
+    '      layerColor = vec3(0.78, 0.55, 0.22); // bright amber',
+    '    } else if (i == 5) {',
+    '      layerColor = vec3(0.85, 0.65, 0.35); // pale gold',
+    '    } else {',
+    '      layerColor = vec3(0.9, 0.75, 0.5); // warm cream',
+    '    }',
+    '',
+    '    // ── Subtle color variation within each layer ──',
+    '    float colorShift = sin(n * 6.0 + t * 0.3 + fi * 2.0) * 0.05;',
+    '    layerColor += colorShift;',
+    '',
+    '    // ── Add subtle inner glow at veil edges ──',
+    '    float edgeGlow = smoothstep(0.0, 0.15, veil) * smoothstep(0.5, 0.25, veil);',
+    '    vec3 glowColor = layerColor * 1.4 + vec3(0.1, 0.06, 0.02);',
+    '    layerColor = mix(layerColor, glowColor, edgeGlow * 0.5);',
+    '',
+    '    // ── Composite this layer over the accumulated color ──',
+    '    float alpha = veil * opacity;',
+    '    col = mix(col, layerColor, alpha);',
+    '  }',
+    '',
+    '  // ── Subtle overall atmospheric glow ──',
+    '  // Warm center glow to add depth',
+    '  vec2 center = (uv - 0.5) * aspect;',
+    '  float centerDist = length(center);',
+    '  float atmosGlow = exp(-centerDist * centerDist * 2.0) * 0.04;',
+    '  col += vec3(0.6, 0.4, 0.2) * atmosGlow;',
+    '',
+    '  // ── Subtle breathing pulse on the whole image ──',
+    '  float breathe = sin(u_time * 0.2) * 0.02 + 1.0;',
+    '  col *= breathe;',
+    '',
+    '  // ── Tone mapping (subtle, keep the dark mood) ──',
+    '  col = col / (col + 0.5) * 1.1;',
+    '',
+    '  // ── Slight warmth push ──',
+    '  col = pow(col, vec3(0.95, 0.98, 1.05));',
+    '',
+    '  // ── Soft vignette ──',
+    '  float vig = 1.0 - dot(center / aspect, center / aspect) * 0.6;',
+    '  vig = smoothstep(0.0, 1.0, vig);',
+    '  col *= vig;',
+    '',
+    '  gl_FragColor = vec4(col, 1.0);',
+    '}'
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error('Shader compile error:', gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error('Program link error:', gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uLayerSpeed = gl.getUniformLocation(prog, 'u_layerSpeed');
+  var uLayerCount = gl.getUniformLocation(prog, 'u_layerCount');
+
+  var layerSpeedVal = 0.5;
+  var layerCountVal = 5.0;
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2) * pixelScale;
+
+  function resize() {
+    var w = Math.round(canvas.clientWidth * dpr);
+    var h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  function render(now) {
+    resize();
+    gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uLayerSpeed, layerSpeedVal);
+    gl.uniform1f(uLayerCount, layerCountVal);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  // ── PostMessage listener for parameter updates ──
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'LAYER_SPEED': layerSpeedVal = e.data.value; break;
+        case 'LAYER_COUNT': layerCountVal = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

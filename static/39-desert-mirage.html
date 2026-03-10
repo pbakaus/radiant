@@ -1,0 +1,897 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Desert Mirage</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">39 — Desert Mirage</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// 39 · Desert Mirage — Warm sand dunes with heat shimmer distortion
+// ─────────────────────────────────────────────
+(function() {
+  var canvas = document.getElementById('canvas');
+  var ctx = canvas.getContext('2d');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var _pad = parseFloat(new URLSearchParams(location.search).get('p')) || 1;
+
+  // Tunable parameters
+  var WIND_SPEED = 0.5;
+  var SHIMMER_INTENSITY = 1.0;
+
+  var width, height, dpr;
+
+  // Offscreen buffer for mirage distortion
+  var offCanvas, offCtx;
+
+  function resize() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    canvas.style.width = width + 'px';
+    canvas.style.height = height + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    // Create offscreen canvas for distortion sampling
+    offCanvas = document.createElement('canvas');
+    offCanvas.width = Math.round(width * dpr);
+    offCanvas.height = Math.round(height * dpr);
+    offCtx = offCanvas.getContext('2d');
+
+    initSandParticles();
+    initHeatParticles();
+    initGlints();
+  }
+
+  window.addEventListener('resize', resize);
+
+  // ── Noise helpers ──
+  // Permutation table for improved noise
+  var perm = new Uint8Array(512);
+  (function initPerm() {
+    var p = [];
+    for (var i = 0; i < 256; i++) p[i] = i;
+    // Fisher-Yates shuffle with seeded random
+    var seed = 42;
+    for (var i = 255; i > 0; i--) {
+      seed = (seed * 16807 + 0) % 2147483647;
+      var j = seed % (i + 1);
+      var tmp = p[i]; p[i] = p[j]; p[j] = tmp;
+    }
+    for (var i = 0; i < 512; i++) perm[i] = p[i & 255];
+  })();
+
+  var grad3 = [
+    [1,1,0],[-1,1,0],[1,-1,0],[-1,-1,0],
+    [1,0,1],[-1,0,1],[1,0,-1],[-1,0,-1],
+    [0,1,1],[0,-1,1],[0,1,-1],[0,-1,-1]
+  ];
+
+  function dot3(g, x, y) {
+    return g[0] * x + g[1] * y;
+  }
+
+  function fade(t) {
+    return t * t * t * (t * (t * 6 - 15) + 10);
+  }
+
+  function lerp(a, b, t) {
+    return a + t * (b - a);
+  }
+
+  function perlin(x, y) {
+    var X = Math.floor(x) & 255;
+    var Y = Math.floor(y) & 255;
+    x -= Math.floor(x);
+    y -= Math.floor(y);
+    var u = fade(x);
+    var v = fade(y);
+    var A = perm[X] + Y;
+    var B = perm[X + 1] + Y;
+    var g00 = grad3[perm[A] % 12];
+    var g10 = grad3[perm[B] % 12];
+    var g01 = grad3[perm[A + 1] % 12];
+    var g11 = grad3[perm[B + 1] % 12];
+    var n00 = dot3(g00, x, y);
+    var n10 = dot3(g10, x - 1, y);
+    var n01 = dot3(g01, x, y - 1);
+    var n11 = dot3(g11, x - 1, y - 1);
+    return lerp(lerp(n00, n10, u), lerp(n01, n11, u), v);
+  }
+
+  function fbm(x, y, octaves) {
+    var val = 0;
+    var amp = 0.5;
+    var freq = 1;
+    for (var i = 0; i < octaves; i++) {
+      val += amp * perlin(x * freq, y * freq);
+      freq *= 2.07;
+      amp *= 0.48;
+    }
+    return val;
+  }
+
+  // Simple hash for quick random
+  function hash(x, y) {
+    var s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
+    return s - Math.floor(s);
+  }
+
+  // ── Dune layer definitions ──
+  // Richer desert palette: distant layers hazy/washed, near layers saturated and warm
+  var duneLayers = [
+    { baseY: 0.40, amp: 22, freq: 0.0006, color: [215, 195, 175], shadow: [180, 155, 130], speed: 0.06, noiseAmp: 8 },   // far distant — hazy, desaturated
+    { baseY: 0.48, amp: 35, freq: 0.0010, color: [210, 175, 140], shadow: [165, 130, 95],  speed: 0.10, noiseAmp: 14 },  // mid-far
+    { baseY: 0.58, amp: 50, freq: 0.0016, color: [200, 155, 110], shadow: [150, 110, 75],  speed: 0.16, noiseAmp: 20 },  // mid
+    { baseY: 0.70, amp: 60, freq: 0.0022, color: [185, 130, 85],  shadow: [130, 85, 50],   speed: 0.24, noiseAmp: 25 },  // mid-near
+    { baseY: 0.84, amp: 45, freq: 0.0032, color: [160, 105, 60],  shadow: [105, 65, 35],   speed: 0.34, noiseAmp: 18 },  // near foreground
+  ];
+
+  // ── Sand particles (wind-blown) ──
+  var sandParticles = [];
+  var MAX_SAND = 400;
+
+  function initSandParticles() {
+    sandParticles = [];
+    for (var i = 0; i < MAX_SAND; i++) {
+      sandParticles.push(createSandParticle(true));
+    }
+  }
+
+  function createSandParticle(randomX) {
+    var layerIdx = Math.floor(Math.random() * duneLayers.length);
+    var layer = duneLayers[layerIdx];
+    // Particles closer to foreground should be larger
+    var depthScale = 0.4 + layerIdx * 0.15;
+    return {
+      x: randomX ? Math.random() * width : -10 - Math.random() * 60,
+      y: layer.baseY * height + (Math.random() - 0.5) * layer.amp * 3,
+      vx: 0.3 + Math.random() * 1.8,
+      vy: (Math.random() - 0.5) * 0.3,
+      size: (0.3 + Math.random() * 1.0) * depthScale * _pad,
+      alpha: 0.08 + Math.random() * 0.25,
+      life: 0.6 + Math.random() * 0.4,
+      layerIdx: layerIdx,
+      wobblePhase: Math.random() * Math.PI * 2,
+      wobbleFreq: 1.5 + Math.random() * 3,
+      wobbleAmp: 0.15 + Math.random() * 0.5,
+      trail: Math.random() < 0.3 // some particles leave a slight trail
+    };
+  }
+
+  // ── Heat haze particles — floating in the air above the dunes ──
+  var heatParticles = [];
+  var MAX_HEAT_PARTICLES = 120;
+
+  function initHeatParticles() {
+    heatParticles = [];
+    for (var i = 0; i < MAX_HEAT_PARTICLES; i++) {
+      heatParticles.push(createHeatParticle());
+    }
+  }
+
+  function createHeatParticle() {
+    var horizonY = duneLayers[0].baseY * height;
+    return {
+      x: Math.random() * width,
+      y: horizonY - 20 - Math.random() * 100,
+      vx: (Math.random() - 0.5) * 0.4,
+      vy: -0.1 - Math.random() * 0.3,
+      size: 2 + Math.random() * 6,
+      alpha: 0.01 + Math.random() * 0.03,
+      phase: Math.random() * Math.PI * 2,
+      freq: 0.8 + Math.random() * 2,
+      life: 1.0
+    };
+  }
+
+  // ── Sand glints ──
+  var glints = [];
+  var MAX_GLINTS = 120;
+
+  function initGlints() {
+    glints = [];
+    for (var i = 0; i < MAX_GLINTS; i++) {
+      glints.push({
+        x: Math.random() * width,
+        y: 0.38 * height + Math.random() * 0.58 * height,
+        phase: Math.random() * Math.PI * 2,
+        speed: 0.3 + Math.random() * 2.0,
+        maxAlpha: 0.2 + Math.random() * 0.6,
+        size: (0.4 + Math.random() * 1.2) * _pad,
+        onDuration: 0.04 + Math.random() * 0.08
+      });
+    }
+  }
+
+  // ── Dune profile function ──
+  function duneY(x, layer, time) {
+    var baseY = layer.baseY * height;
+    var drift = time * layer.speed * WIND_SPEED * 6;
+
+    // Use Perlin-based fbm for organic dune shapes
+    var nx = (x + drift) * layer.freq;
+
+    // Primary dune shape — broad smooth undulations
+    var y = Math.sin(nx * Math.PI * 2) * layer.amp;
+
+    // Asymmetric dune profile — steeper on one side (windward/leeward)
+    var sinVal = Math.sin(nx * Math.PI * 2 + 0.8);
+    y += (sinVal > 0 ? sinVal * sinVal : -sinVal * sinVal * 0.3) * layer.amp * 0.4;
+
+    // Secondary harmonic for complexity
+    y += Math.sin(nx * 1.7 * Math.PI * 2 + 1.3) * layer.amp * 0.25;
+
+    // Tertiary detail
+    y += Math.sin(nx * 3.3 * Math.PI * 2 + 2.7) * layer.amp * 0.1;
+
+    // Perlin noise for natural variation
+    y += fbm((x + drift) * 0.002, layer.baseY * 5, 3) * layer.noiseAmp;
+
+    return baseY + y;
+  }
+
+  // ── Draw sky gradient ──
+  function drawSky(time) {
+    var horizonY = duneLayers[0].baseY * height;
+
+    // Rich desert sky: deep blue at zenith fading through warm tones to bright horizon
+    var skyGrad = ctx.createLinearGradient(0, 0, 0, horizonY + 50);
+    skyGrad.addColorStop(0, 'rgb(8, 12, 28)');               // deep night blue at zenith
+    skyGrad.addColorStop(0.15, 'rgb(15, 25, 55)');            // deep blue
+    skyGrad.addColorStop(0.30, 'rgb(35, 45, 75)');            // muted blue
+    skyGrad.addColorStop(0.45, 'rgb(70, 55, 60)');            // blue-mauve transition
+    skyGrad.addColorStop(0.60, 'rgb(120, 70, 40)');           // warm brown
+    skyGrad.addColorStop(0.75, 'rgb(180, 110, 55)');          // rich amber
+    skyGrad.addColorStop(0.88, 'rgb(225, 165, 85)');          // golden amber
+    skyGrad.addColorStop(0.96, 'rgb(245, 200, 120)');         // bright gold
+    skyGrad.addColorStop(1, 'rgb(250, 220, 160)');            // bright warm white at horizon
+    ctx.fillStyle = skyGrad;
+    ctx.fillRect(0, 0, width, horizonY + 50);
+
+    // Sun — partially set, sitting right on the horizon
+    var sunX = width * 0.6;
+    var sunY = horizonY + 5;
+    var sunDiskRadius = Math.min(width, height) * 0.06;
+
+    // Outer glow — large warm bloom
+    var outerGlow = ctx.createRadialGradient(sunX, sunY, sunDiskRadius * 0.5, sunX, sunY, Math.min(width, height) * 0.5);
+    outerGlow.addColorStop(0, 'rgba(255, 200, 100, 0.20)');
+    outerGlow.addColorStop(0.2, 'rgba(255, 170, 70, 0.10)');
+    outerGlow.addColorStop(0.5, 'rgba(200, 120, 40, 0.04)');
+    outerGlow.addColorStop(1, 'rgba(150, 80, 20, 0)');
+    ctx.fillStyle = outerGlow;
+    ctx.fillRect(0, 0, width, horizonY + 50);
+
+    // Sun disk — clipped to above horizon for setting effect
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, width, horizonY + 2);
+    ctx.clip();
+
+    // Sun disk with subtle pulsing
+    var pulse = 1 + Math.sin(time * 0.3) * 0.02;
+    var sunGrad = ctx.createRadialGradient(sunX, sunY, 0, sunX, sunY, sunDiskRadius * pulse);
+    sunGrad.addColorStop(0, 'rgba(255, 245, 220, 0.95)');
+    sunGrad.addColorStop(0.3, 'rgba(255, 220, 150, 0.80)');
+    sunGrad.addColorStop(0.6, 'rgba(255, 180, 90, 0.50)');
+    sunGrad.addColorStop(0.85, 'rgba(240, 140, 50, 0.20)');
+    sunGrad.addColorStop(1, 'rgba(220, 100, 30, 0)');
+    ctx.fillStyle = sunGrad;
+    ctx.beginPath();
+    ctx.arc(sunX, sunY, sunDiskRadius * pulse * 1.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Bright core
+    var coreGrad = ctx.createRadialGradient(sunX, sunY, 0, sunX, sunY, sunDiskRadius * 0.4);
+    coreGrad.addColorStop(0, 'rgba(255, 255, 240, 0.9)');
+    coreGrad.addColorStop(1, 'rgba(255, 230, 180, 0)');
+    ctx.fillStyle = coreGrad;
+    ctx.beginPath();
+    ctx.arc(sunX, sunY, sunDiskRadius * 0.6, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+
+    // Horizontal light streak across horizon (golden hour effect)
+    var streakGrad = ctx.createLinearGradient(0, horizonY - 15, 0, horizonY + 15);
+    streakGrad.addColorStop(0, 'rgba(255, 210, 130, 0)');
+    streakGrad.addColorStop(0.4, 'rgba(255, 200, 110, 0.06)');
+    streakGrad.addColorStop(0.5, 'rgba(255, 190, 100, 0.10)');
+    streakGrad.addColorStop(0.6, 'rgba(255, 200, 110, 0.06)');
+    streakGrad.addColorStop(1, 'rgba(255, 210, 130, 0)');
+    ctx.fillStyle = streakGrad;
+    ctx.fillRect(0, horizonY - 15, width, 30);
+  }
+
+  // ── Heat shimmer / mirage distortion ──
+  function drawHeatShimmer(time) {
+    if (SHIMMER_INTENSITY < 0.01) return;
+
+    var horizonY = duneLayers[0].baseY * height;
+
+    ctx.save();
+
+    // == MIRAGE BANDS — visible wavering distortion lines near horizon ==
+    ctx.globalCompositeOperation = 'lighter';
+
+    var bandCount = 10;
+    for (var band = 0; band < bandCount; band++) {
+      var bandY = horizonY - 8 - band * 8 * _pad;
+      var bandFade = 1 - band / bandCount;
+      var bandAlpha = 0.025 * SHIMMER_INTENSITY * bandFade * bandFade;
+
+      ctx.beginPath();
+      var started = false;
+      for (var x = 0; x <= width; x += 2) {
+        // Multiple wave frequencies for organic shimmer
+        var w1 = Math.sin(x * 0.006 + time * 1.8 + band * 0.7) * 6;
+        var w2 = Math.sin(x * 0.013 + time * 3.5 - band * 1.1) * 3;
+        var w3 = Math.sin(x * 0.022 + time * 5.8 + band * 0.3) * 1.5;
+        var w4 = Math.sin(x * 0.04 + time * 8.2 + band * 2.0) * 0.8;
+        var distort = (w1 + w2 + w3 + w4) * SHIMMER_INTENSITY;
+
+        if (!started) {
+          ctx.moveTo(x, bandY + distort);
+          started = true;
+        } else {
+          ctx.lineTo(x, bandY + distort);
+        }
+      }
+      ctx.strokeStyle = 'rgba(255, 225, 160, ' + bandAlpha + ')';
+      ctx.lineWidth = (2 + band * 0.4) * _pad;
+      ctx.stroke();
+    }
+
+    // == MIRAGE GLOW — bright shimmering band at horizon ==
+    var glowHeight = 120;
+    var shimmerGlow = ctx.createLinearGradient(0, horizonY - glowHeight, 0, horizonY + 30);
+    shimmerGlow.addColorStop(0, 'rgba(255, 230, 180, 0)');
+    shimmerGlow.addColorStop(0.3, 'rgba(255, 220, 160, ' + (0.025 * SHIMMER_INTENSITY) + ')');
+    shimmerGlow.addColorStop(0.5, 'rgba(255, 210, 140, ' + (0.05 * SHIMMER_INTENSITY) + ')');
+    shimmerGlow.addColorStop(0.7, 'rgba(255, 220, 160, ' + (0.025 * SHIMMER_INTENSITY) + ')');
+    shimmerGlow.addColorStop(1, 'rgba(255, 230, 180, 0)');
+    ctx.fillStyle = shimmerGlow;
+
+    // Oscillate the glow subtly
+    var glowOff = Math.sin(time * 1.2) * 4 * SHIMMER_INTENSITY;
+    ctx.fillRect(glowOff, horizonY - glowHeight, width, glowHeight + 30);
+
+    ctx.restore();
+  }
+
+  // ── Pixel-level mirage distortion (applied after all scene rendering) ──
+  function applyMirageDistortion(time) {
+    if (SHIMMER_INTENSITY < 0.01) return;
+
+    var horizonY = duneLayers[0].baseY * height;
+    // The distortion zone: from well above horizon to somewhat below
+    var distortTop = Math.max(0, horizonY - 100);
+    var distortBot = Math.min(height, horizonY + 60);
+    var distortHeight = distortBot - distortTop;
+
+    if (distortHeight <= 0) return;
+
+    // Get the pixel data from the main canvas for the distortion region
+    var sx = 0;
+    var sy = Math.round(distortTop * dpr);
+    var sw = Math.round(width * dpr);
+    var sh = Math.round(distortHeight * dpr);
+
+    if (sw <= 0 || sh <= 0) return;
+
+    try {
+      var imageData = ctx.getImageData(sx, sy, sw, sh);
+      var data = imageData.data;
+      var copy = new Uint8ClampedArray(data);
+
+      // Apply horizontal displacement based on waves
+      for (var py = 0; py < sh; py++) {
+        var worldY = distortTop + py / dpr;
+        var distFromHorizon = Math.abs(worldY - horizonY);
+        // Stronger near horizon, fading away
+        var strength = Math.max(0, 1 - distFromHorizon / 90);
+        strength = strength * strength * strength; // cubic falloff
+        strength *= SHIMMER_INTENSITY;
+
+        if (strength < 0.001) continue;
+
+        // Multiple wave displacement
+        var disp = Math.sin(worldY * 0.05 + time * 2.5) * 8 * strength;
+        disp += Math.sin(worldY * 0.12 + time * 4.0) * 4 * strength;
+        disp += Math.sin(worldY * 0.03 + time * 1.5 + 1.7) * 6 * strength;
+
+        var dispPx = Math.round(disp * dpr);
+
+        for (var px = 0; px < sw; px++) {
+          var srcX = px + dispPx;
+          if (srcX < 0) srcX = 0;
+          if (srcX >= sw) srcX = sw - 1;
+
+          var dstIdx = (py * sw + px) * 4;
+          var srcIdx = (py * sw + srcX) * 4;
+
+          data[dstIdx] = copy[srcIdx];
+          data[dstIdx + 1] = copy[srcIdx + 1];
+          data[dstIdx + 2] = copy[srcIdx + 2];
+          data[dstIdx + 3] = copy[srcIdx + 3];
+        }
+      }
+
+      ctx.putImageData(imageData, sx, sy);
+    } catch (e) {
+      // Security or size error — skip distortion this frame
+    }
+  }
+
+  // ── Draw a single dune layer ──
+  function drawDuneLayer(layerIdx, time) {
+    var layer = duneLayers[layerIdx];
+    var r = layer.color[0];
+    var g = layer.color[1];
+    var b = layer.color[2];
+    var sr = layer.shadow[0];
+    var sg = layer.shadow[1];
+    var sb = layer.shadow[2];
+
+    // -- Compute dune profile --
+    var points = [];
+    for (var x = -4; x <= width + 4; x += 2) {
+      points.push({ x: x, y: duneY(x, layer, time) });
+    }
+
+    // -- Main fill --
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
+    for (var i = 1; i < points.length; i++) {
+      ctx.lineTo(points[i].x, points[i].y);
+    }
+    ctx.lineTo(width + 4, height);
+    ctx.lineTo(-4, height);
+    ctx.closePath();
+
+    // Gradient fill — sunlit crest to shadowed base
+    var topY = layer.baseY * height - layer.amp - layer.noiseAmp - 10;
+    var botY = height;
+    var duneGrad = ctx.createLinearGradient(0, topY, 0, botY);
+    duneGrad.addColorStop(0, 'rgb(' + r + ',' + g + ',' + b + ')');
+    duneGrad.addColorStop(0.2, 'rgb(' + r + ',' + g + ',' + b + ')');
+    duneGrad.addColorStop(0.5, 'rgb(' + sr + ',' + sg + ',' + sb + ')');
+    duneGrad.addColorStop(1, 'rgb(' + Math.floor(sr * 0.7) + ',' + Math.floor(sg * 0.65) + ',' + Math.floor(sb * 0.6) + ')');
+    ctx.fillStyle = duneGrad;
+    ctx.fill();
+
+    // -- Slope-based lighting: highlights on sunlit side, deeper shadows on lee side --
+    drawDuneSlopeLighting(points, layerIdx, layer, time);
+  }
+
+  // ── Slope-based dune lighting ──
+  function drawDuneSlopeLighting(points, layerIdx, layer, time) {
+    var r = layer.color[0];
+    var g = layer.color[1];
+    var b = layer.color[2];
+
+    ctx.save();
+
+    // Sun comes from the right, so negative slopes (going up to the right) are lit
+    // Positive slopes (going down to the right) are in shadow
+
+    // Highlight pass — sunlit slopes
+    ctx.globalCompositeOperation = 'lighter';
+    for (var i = 1; i < points.length - 1; i++) {
+      var slope = (points[i + 1].y - points[i - 1].y) / (points[i + 1].x - points[i - 1].x);
+
+      if (slope < -0.1) {
+        // Sunlit slope — the steeper, the brighter
+        var intensity = Math.min(1, Math.abs(slope) * 1.2);
+        var alpha = intensity * (0.08 + layerIdx * 0.015);
+
+        ctx.fillStyle = 'rgba(' + Math.min(255, r + 50) + ',' + Math.min(255, g + 45) + ',' + Math.min(255, b + 35) + ',' + alpha + ')';
+        ctx.fillRect(points[i].x - 1, points[i].y, 3, 3);
+      }
+    }
+
+    // Shadow pass — lee side slopes
+    ctx.globalCompositeOperation = 'multiply';
+    ctx.beginPath();
+    var inShadow = false;
+    for (var i = 1; i < points.length - 1; i++) {
+      var slope = (points[i + 1].y - points[i - 1].y) / (points[i + 1].x - points[i - 1].x);
+
+      if (slope > 0.15) {
+        if (!inShadow) {
+          ctx.beginPath();
+          ctx.moveTo(points[i].x, points[i].y);
+          inShadow = true;
+        } else {
+          ctx.lineTo(points[i].x, points[i].y);
+        }
+      } else if (inShadow) {
+        // Close shadow shape
+        ctx.lineTo(points[i].x, points[i].y);
+        ctx.lineTo(points[i].x, height);
+        ctx.lineTo(points[i - 5 < 1 ? 1 : i - 5].x, height);
+        ctx.closePath();
+        var shadowIntensity = 0.92 - layerIdx * 0.01;
+        ctx.fillStyle = 'rgba(' + Math.floor(120 * shadowIntensity) + ',' + Math.floor(100 * shadowIntensity) + ',' + Math.floor(80 * shadowIntensity) + ',1)';
+        ctx.fill();
+        inShadow = false;
+      }
+    }
+
+    // Crest highlight line
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.beginPath();
+    var prevSlope = 0;
+    var drawingCrest = false;
+    for (var i = 2; i < points.length - 2; i++) {
+      var slope = (points[i + 1].y - points[i - 1].y) / (points[i + 1].x - points[i - 1].x);
+
+      // Crest = where slope transitions from negative to positive (local minimum in Y)
+      if (prevSlope < -0.05 && slope > -0.05) {
+        if (!drawingCrest) {
+          ctx.moveTo(points[i].x, points[i].y);
+          drawingCrest = true;
+        }
+      }
+      if (drawingCrest) {
+        ctx.lineTo(points[i].x, points[i].y);
+        if (slope > 0.15) {
+          drawingCrest = false;
+        }
+      }
+      prevSlope = slope;
+    }
+    var crestAlpha = 0.06 + layerIdx * 0.02;
+    ctx.strokeStyle = 'rgba(255, 240, 210, ' + crestAlpha + ')';
+    ctx.lineWidth = (1 + layerIdx * 0.3) * _pad;
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  // ── Wind ripple texture on dunes ──
+  function drawRipples(layerIdx, time) {
+    var layer = duneLayers[layerIdx];
+    if (layerIdx < 2) return; // Only on closer dunes
+
+    ctx.save();
+    ctx.globalAlpha = 0.04 + layerIdx * 0.01;
+
+    var drift = time * layer.speed * WIND_SPEED * 6;
+
+    for (var x = 0; x < width; x += 4) {
+      var baseYVal = duneY(x, layer, time);
+
+      // Draw small ripple lines perpendicular to wind
+      for (var ry = 0; ry < 40; ry += 6) {
+        var y = baseYVal + ry;
+        if (y > height) break;
+
+        var ripple = Math.sin((x + drift * 2) * 0.08 + ry * 0.5) * 0.5 + 0.5;
+        if (ripple > 0.6) {
+          ctx.fillStyle = 'rgba(255, 230, 200, ' + (ripple - 0.6) * 0.15 + ')';
+          ctx.fillRect(x, y, 3, 1);
+        }
+      }
+    }
+
+    ctx.restore();
+  }
+
+  // ── Draw sand particles ──
+  function drawSandParticles(time, dt) {
+    for (var i = 0; i < sandParticles.length; i++) {
+      var p = sandParticles[i];
+
+      // Animate
+      p.wobblePhase += p.wobbleFreq * dt;
+      p.x += p.vx * WIND_SPEED * dt * 60;
+      p.y += p.vy * dt * 60 + Math.sin(p.wobblePhase) * p.wobbleAmp * dt * 60;
+
+      // Slight gravity pull
+      p.vy += 0.008 * dt;
+
+      // Decrease life
+      p.life -= dt * 0.12;
+
+      // Respawn if offscreen or dead
+      if (p.x > width + 30 || p.life <= 0 || p.y > height) {
+        sandParticles[i] = createSandParticle(false);
+        continue;
+      }
+
+      // Get matching dune layer color
+      var layer = duneLayers[p.layerIdx];
+      var lr = layer.color[0];
+      var lg = layer.color[1];
+      var lb = layer.color[2];
+
+      // Brighten for visibility
+      var pr = Math.min(255, lr + 40);
+      var pg = Math.min(255, lg + 35);
+      var pb = Math.min(255, lb + 25);
+
+      var alpha = p.alpha * Math.min(1, p.life * 4);
+
+      // Trail effect for some particles
+      if (p.trail && alpha > 0.05) {
+        ctx.strokeStyle = 'rgba(' + pr + ',' + pg + ',' + pb + ',' + (alpha * 0.3) + ')';
+        ctx.lineWidth = p.size * 0.5;
+        ctx.beginPath();
+        ctx.moveTo(p.x - p.vx * 3, p.y - p.vy * 3);
+        ctx.lineTo(p.x, p.y);
+        ctx.stroke();
+      }
+
+      ctx.fillStyle = 'rgba(' + pr + ',' + pg + ',' + pb + ',' + alpha + ')';
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // ── Heat haze particles ──
+  function drawHeatParticles(time, dt) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+
+    for (var i = 0; i < heatParticles.length; i++) {
+      var p = heatParticles[i];
+
+      p.x += p.vx * dt * 60 + Math.sin(p.phase + time * p.freq) * 0.5;
+      p.y += p.vy * dt * 60;
+      p.phase += dt * 2;
+      p.life -= dt * 0.08;
+
+      if (p.life <= 0 || p.y < duneLayers[0].baseY * height - 150) {
+        heatParticles[i] = createHeatParticle();
+        continue;
+      }
+
+      var alpha = p.alpha * Math.min(1, p.life * 3) * SHIMMER_INTENSITY;
+      var sz = p.size * (1 + (1 - p.life) * 2); // grow as they rise
+
+      var hpGrad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, sz);
+      hpGrad.addColorStop(0, 'rgba(255, 220, 160, ' + alpha + ')');
+      hpGrad.addColorStop(0.5, 'rgba(255, 200, 130, ' + (alpha * 0.4) + ')');
+      hpGrad.addColorStop(1, 'rgba(255, 180, 100, 0)');
+      ctx.fillStyle = hpGrad;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, sz, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
+
+  // ── Draw sand glints ──
+  function drawGlints(time) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+
+    for (var i = 0; i < glints.length; i++) {
+      var gl = glints[i];
+      var cycle = (Math.sin(time * gl.speed + gl.phase) + 1) * 0.5;
+
+      if (cycle > (1 - gl.onDuration)) {
+        var t = (cycle - (1 - gl.onDuration)) / gl.onDuration;
+        var intensity = Math.sin(t * Math.PI);
+        var alpha = intensity * gl.maxAlpha;
+
+        // Warm white glint
+        ctx.fillStyle = 'rgba(255, 245, 220, ' + alpha + ')';
+        ctx.beginPath();
+        ctx.arc(gl.x, gl.y, gl.size, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Cross-shaped sparkle for brighter glints
+        if (alpha > 0.3) {
+          ctx.strokeStyle = 'rgba(255, 240, 200, ' + (alpha * 0.4) + ')';
+          ctx.lineWidth = 0.5 * _pad;
+          var armLen = gl.size * 5;
+          ctx.beginPath();
+          ctx.moveTo(gl.x - armLen, gl.y);
+          ctx.lineTo(gl.x + armLen, gl.y);
+          ctx.moveTo(gl.x, gl.y - armLen);
+          ctx.lineTo(gl.x, gl.y + armLen);
+          ctx.stroke();
+        }
+
+        // Glow
+        if (alpha > 0.15) {
+          var glowSize = gl.size * 5;
+          var glowGrad = ctx.createRadialGradient(gl.x, gl.y, 0, gl.x, gl.y, glowSize);
+          glowGrad.addColorStop(0, 'rgba(255, 235, 190, ' + (alpha * 0.25) + ')');
+          glowGrad.addColorStop(1, 'rgba(255, 200, 130, 0)');
+          ctx.fillStyle = glowGrad;
+          ctx.beginPath();
+          ctx.arc(gl.x, gl.y, glowSize, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
+
+    ctx.restore();
+  }
+
+  // ── Atmospheric haze between layers ──
+  function drawHaze(layerIdx, time) {
+    var layer = duneLayers[layerIdx];
+    var nextLayer = duneLayers[Math.min(layerIdx + 1, duneLayers.length - 1)];
+    var topY = layer.baseY * height - layer.amp - 25;
+    var botY = nextLayer.baseY * height + 10;
+
+    // Stronger haze for distant layers (atmospheric perspective)
+    var hazeAlpha = 0.06 - layerIdx * 0.008;
+    if (hazeAlpha <= 0) return;
+
+    var hazeGrad = ctx.createLinearGradient(0, topY, 0, botY);
+    hazeGrad.addColorStop(0, 'rgba(230, 195, 150, ' + hazeAlpha + ')');
+    hazeGrad.addColorStop(0.4, 'rgba(215, 175, 130, ' + (hazeAlpha * 0.6) + ')');
+    hazeGrad.addColorStop(1, 'rgba(195, 155, 110, 0)');
+    ctx.fillStyle = hazeGrad;
+    ctx.fillRect(0, topY, width, botY - topY);
+  }
+
+  // ── Distant dune silhouette haze — very far dunes barely visible ──
+  function drawDistantHaze(time) {
+    var horizonY = duneLayers[0].baseY * height;
+
+    ctx.save();
+    ctx.globalAlpha = 0.12;
+
+    // Ghost dunes in the far distance — just hazy bumps on the horizon
+    ctx.beginPath();
+    for (var x = -4; x <= width + 4; x += 3) {
+      var nx = x * 0.0004 + time * 0.02;
+      var y = horizonY + Math.sin(nx * Math.PI * 2) * 12 +
+              Math.sin(nx * 2.3 * Math.PI * 2 + 0.5) * 6 +
+              fbm(x * 0.001 + time * 0.01, 0.5, 2) * 8;
+      if (x === -4) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.lineTo(width + 4, horizonY + 30);
+    ctx.lineTo(-4, horizonY + 30);
+    ctx.closePath();
+
+    var ghostGrad = ctx.createLinearGradient(0, horizonY - 15, 0, horizonY + 30);
+    ghostGrad.addColorStop(0, 'rgb(225, 200, 170)');
+    ghostGrad.addColorStop(1, 'rgb(210, 180, 150)');
+    ctx.fillStyle = ghostGrad;
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  // ── Vignette ──
+  function drawVignette() {
+    var cx = width / 2;
+    var cy = height / 2;
+    var maxDim = Math.max(width, height);
+    var vignette = ctx.createRadialGradient(cx, cy, maxDim * 0.3, cx, cy, maxDim * 0.85);
+    vignette.addColorStop(0, 'rgba(10, 10, 10, 0)');
+    vignette.addColorStop(0.7, 'rgba(8, 6, 4, 0.15)');
+    vignette.addColorStop(1, 'rgba(5, 3, 2, 0.55)');
+    ctx.fillStyle = vignette;
+    ctx.fillRect(0, 0, width, height);
+  }
+
+  // ── Film grain overlay for texture ──
+  function drawGrain(time) {
+    ctx.save();
+    ctx.globalAlpha = 0.015;
+    // Instead of per-pixel noise (expensive), draw scattered dots
+    var count = Math.floor(width * height * 0.0003);
+    for (var i = 0; i < count; i++) {
+      var gx = Math.random() * width;
+      var gy = Math.random() * height;
+      var brightness = Math.random() > 0.5 ? 255 : 0;
+      ctx.fillStyle = 'rgb(' + brightness + ',' + brightness + ',' + brightness + ')';
+      ctx.fillRect(gx, gy, 1, 1);
+    }
+    ctx.restore();
+  }
+
+  // ── Main loop ──
+  var lastTime = 0;
+
+  resize();
+
+  function render(timestamp) {
+    if (!lastTime) lastTime = timestamp;
+    var dt = Math.min((timestamp - lastTime) / 1000, 0.05);
+    lastTime = timestamp;
+
+    if (prefersReduced) dt *= 0.1;
+
+    var time = timestamp / 1000;
+
+    // Clear
+    ctx.clearRect(0, 0, width, height);
+
+    // Sky with sun
+    drawSky(time);
+
+    // Distant ghost dunes on horizon
+    drawDistantHaze(time);
+
+    // Heat shimmer wavering bands
+    drawHeatShimmer(time);
+
+    // Heat haze particles rising
+    drawHeatParticles(time, dt);
+
+    // Draw dune layers back to front with haze between
+    for (var i = 0; i < duneLayers.length; i++) {
+      if (i > 0) {
+        drawHaze(i - 1, time);
+      }
+      drawDuneLayer(i, time);
+      drawRipples(i, time);
+    }
+
+    // Pixel-level mirage distortion near horizon
+    applyMirageDistortion(time);
+
+    // Sand glints
+    drawGlints(time);
+
+    // Wind-blown sand particles
+    drawSandParticles(time, dt);
+
+    // Vignette
+    drawVignette();
+
+    // Subtle film grain
+    drawGrain(time);
+
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  // ── Visibility pause ──
+  document.addEventListener('visibilitychange', function() {
+    if (!document.hidden) {
+      lastTime = 0;
+    }
+  });
+
+  // ── PostMessage listener for parameter updates ──
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'WIND_SPEED': WIND_SPEED = e.data.value; break;
+        case 'SHIMMER_INTENSITY': SHIMMER_INTENSITY = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

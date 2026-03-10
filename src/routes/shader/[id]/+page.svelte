@@ -3,7 +3,7 @@
 	import SourceViewer from '$lib/components/SourceViewer.svelte';
 	import { colorSchemes } from '$lib/color-schemes';
 	import { generateLayoutSource } from '$lib/source-templates';
-	import type { ShaderParam } from '$lib/shaders';
+	import { getShaderNumber, type ShaderParam } from '$lib/shaders';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
@@ -11,6 +11,7 @@
 	type Layout = 'full' | 'hero' | 'background' | 'accent';
 
 	const shader = $derived(data.shader);
+	const number = $derived(getShaderNumber(shader));
 
 	let activeLayout: Layout = $state('full');
 	let activeScheme = $state(colorSchemes[0]);
@@ -63,7 +64,7 @@
 </script>
 
 <svelte:head>
-	<title>{shader.number} — {shader.title}</title>
+	<title>{number} — {shader.title}</title>
 </svelte:head>
 
 <div class="page" class:source-open={showSource}>
@@ -74,7 +75,7 @@
 	<div class="main">
 		<header>
 			<a href="/" class="back">&larr; Gallery</a>
-			<div class="shader-id">{shader.number} — {shader.title}</div>
+			<div class="shader-id">{number} — {shader.title}</div>
 		</header>
 		<div class="preview-area">
 			<ShaderPreview {shader} layout={activeLayout} filter={activeScheme.filter} />
@@ -83,6 +84,13 @@
 
 	<aside class="sidebar">
 		<div class="sidebar-inner">
+			{#if shader.inspiration}
+			<div class="sidebar-section inspiration-section">
+				<span class="sidebar-label">Inspired by</span>
+				<div class="inspiration-name">{shader.inspiration}</div>
+			</div>
+			{/if}
+
 			<div class="sidebar-section">
 				<span class="sidebar-label">Layout</span>
 				<div class="sidebar-buttons">
@@ -234,6 +242,14 @@
 		flex-direction: column;
 		gap: 1.25rem;
 		padding: 1.25rem 1rem;
+	}
+
+	/* Inspiration */
+	.inspiration-name {
+		font-size: 0.85rem;
+		font-weight: 500;
+		color: #c8956c;
+		font-style: italic;
 	}
 
 	/* Sidebar sections */

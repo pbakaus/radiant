@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vinyl Grooves</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">58 — Vinyl Grooves</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// 58 · Vinyl Grooves — Spinning vinyl with prismatic groove diffraction
+// ─────────────────────────────────────────────
+(function() {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var _pad = parseFloat(new URLSearchParams(location.search).get('p')) || 1;
+
+  var gl = canvas.getContext('webgl', { alpha: true, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  // Tunable parameters
+  var ROTATION_SPEED = 1.0;
+  var GROOVE_DENSITY = 1.0;
+
+  var vertSrc = [
+    'attribute vec2 a_pos;',
+    'void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }'
+  ].join('\n');
+
+  var fragSrc = [
+    'precision highp float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform float u_rotSpeed;',
+    'uniform float u_grooveDensity;',
+    '',
+    '#define PI 3.14159265359',
+    '#define TAU 6.28318530718',
+    '',
+    '// ── Hash ──',
+    'float hash(float n) {',
+    '  return fract(sin(n) * 43758.5453123);',
+    '}',
+    '',
+    'float hash2(vec2 p) {',
+    '  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);',
+    '}',
+    '',
+    '// ── Smooth value noise ──',
+    'float vnoise(float x) {',
+    '  float i = floor(x);',
+    '  float f = fract(x);',
+    '  f = f * f * (3.0 - 2.0 * f);',
+    '  return mix(hash(i), hash(i + 1.0), f);',
+    '}',
+    '',
+    'float vnoise2(vec2 p) {',
+    '  vec2 i = floor(p);',
+    '  vec2 f = fract(p);',
+    '  f = f * f * (3.0 - 2.0 * f);',
+    '  float a = hash2(i);',
+    '  float b = hash2(i + vec2(1.0, 0.0));',
+    '  float c = hash2(i + vec2(0.0, 1.0));',
+    '  float d = hash2(i + vec2(1.0, 1.0));',
+    '  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);',
+    '}',
+    '',
+    '// ── HSV to RGB ──',
+    'vec3 hsv2rgb(float h, float s, float v) {',
+    '  vec3 c = vec3(h, s, v);',
+    '  vec3 rgb = clamp(abs(mod(c.x * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);',
+    '  return c.z * mix(vec3(1.0), rgb, c.y);',
+    '}',
+    '',
+    '// ── Groove micro-structure ──',
+    '// Simulates the V-shaped groove cross-section of a vinyl record.',
+    '// Returns a groove profile value: 1.0 at groove walls, 0.0 at groove floor.',
+    'float grooveProfile(float r, float density) {',
+    '  // Primary fine grooves — ~300 lines per inch on a real record',
+    '  float grooveFreq = 280.0 * density;',
+    '  float groove = r * grooveFreq;',
+    '  float grooveFract = fract(groove);',
+    '',
+    '  // V-shaped groove profile: sharp valley, reflective walls',
+    '  float profile = abs(grooveFract - 0.5) * 2.0;',
+    '  // Sharpen the groove walls',
+    '  profile = pow(profile, 0.7);',
+    '',
+    '  return profile;',
+    '}',
+    '',
+    '// ── Groove waveform modulation ──',
+    '// Simulates the audio waveform cut into the groove walls.',
+    '// This creates the characteristic wobble visible under magnification.',
+    'float grooveWaveform(float angle, float r) {',
+    '  float wave = 0.0;',
+    '  // Low frequency (bass)',
+    '  wave += sin(angle * 3.0 + r * 47.0) * 0.4;',
+    '  // Mid frequency',
+    '  wave += sin(angle * 7.0 + r * 91.0 + 1.3) * 0.3;',
+    '  // High frequency (treble)',
+    '  wave += sin(angle * 17.0 + r * 157.0 + 2.7) * 0.2;',
+    '  // Ultra-fine detail',
+    '  wave += sin(angle * 31.0 + r * 233.0 + 4.1) * 0.1;',
+    '  return wave;',
+    '}',
+    '',
+    '// ── Diffraction grating color ──',
+    '// Vinyl grooves act as a diffraction grating, splitting white light',
+    '// into spectral colors. The color depends on the angle between',
+    '// the groove tangent, incident light, and viewing direction.',
+    'vec3 diffractionColor(float gratingAngle, float intensity) {',
+    '  // Map the grating angle to a hue — simulates spectral dispersion',
+    '  // Different diffraction orders create different color bands',
+    '  float hue1 = fract(gratingAngle * 0.5 + 0.0);',
+    '  float hue2 = fract(gratingAngle * 0.5 + 0.33);',
+    '  float hue3 = fract(gratingAngle * 0.5 + 0.67);',
+    '',
+    '  // First-order diffraction (strongest)',
+    '  vec3 color1 = hsv2rgb(hue1, 0.7, 1.0) * 0.6;',
+    '  // Second-order (fainter, offset)',
+    '  vec3 color2 = hsv2rgb(hue2, 0.5, 0.8) * 0.25;',
+    '  // Third-order (very faint)',
+    '  vec3 color3 = hsv2rgb(hue3, 0.4, 0.6) * 0.15;',
+    '',
+    '  return (color1 + color2 + color3) * intensity;',
+    '}',
+    '',
+    'void main() {',
+    '  vec2 uv = (gl_FragCoord.xy - u_res * 0.5) / min(u_res.x, u_res.y);',
+    '  float t = u_time * u_rotSpeed;',
+    '',
+    '  // ── Record geometry ──',
+    '  float dist = length(uv);',
+    '  float angle = atan(uv.y, uv.x);',
+    '',
+    '  // Record boundaries',
+    '  float recordRadius = 0.44;',
+    '  float labelRadius = recordRadius * 0.27;',
+    '  float grooveInner = labelRadius + 0.01;',
+    '  float grooveOuter = recordRadius - 0.015;',
+    '',
+    '  // ── Background — deep dark ──',
+    '  vec3 col = vec3(0.012, 0.010, 0.010);',
+    '',
+    '  // Subtle warm ambient glow beneath the record',
+    '  float ambientGlow = exp(-dist * dist * 1.8) * 0.03;',
+    '  col += vec3(0.08, 0.05, 0.03) * ambientGlow;',
+    '',
+    '  // ── Record disc ──',
+    '  if (dist < recordRadius) {',
+    '    // Record rotation — the grooves spin under the light',
+    '    float rpm = 33.333;',
+    '    float rotationAngle = t * rpm / 60.0 * TAU;',
+    '    float rotatedAngle = angle + rotationAngle;',
+    '',
+    '    // Normalized radial position within groove area',
+    '    float rNorm = (dist - grooveInner) / (grooveOuter - grooveInner);',
+    '    rNorm = clamp(rNorm, 0.0, 1.0);',
+    '',
+    '    // ── Vinyl base color — very dark with subtle warmth ──',
+    '    vec3 vinylBase = vec3(0.02, 0.018, 0.016);',
+    '    // Slight radial variation',
+    '    vinylBase += vec3(0.005) * vnoise2(vec2(dist * 20.0, angle * 3.0));',
+    '',
+    '    col = vinylBase;',
+    '',
+    '    // ── Groove structure ──',
+    '    if (dist > grooveInner && dist < grooveOuter) {',
+    '      // Groove profile — the V-shaped cross section',
+    '      float profile = grooveProfile(dist, u_grooveDensity);',
+    '',
+    '      // Audio waveform modulation — makes grooves visibly wobble',
+    '      float waveform = grooveWaveform(rotatedAngle, dist) * 0.0004;',
+    '      float modulatedDist = dist + waveform;',
+    '      float modulatedProfile = grooveProfile(modulatedDist, u_grooveDensity);',
+    '',
+    '      // Groove visibility — subtle dark/light alternation',
+    '      float grooveShading = mix(0.015, 0.03, modulatedProfile);',
+    '      col = vec3(grooveShading, grooveShading * 0.95, grooveShading * 0.9);',
+    '',
+    '      // ── Light sources for reflections ──',
+    '      // Primary warm spotlight — upper right, slowly drifting',
+    '      vec2 light1Pos = vec2(0.6, 0.5);',
+    '      // Secondary cool fill light — lower left',
+    '      vec2 light2Pos = vec2(-0.5, -0.4);',
+    '',
+    '      // ── Specular reflection off groove walls ──',
+    '      // The groove walls are angled, creating directional reflections.',
+    '      // As the record rotates, different parts of each groove',
+    '      // catch the light at different angles.',
+    '',
+    '      // Direction from this point to light',
+    '      vec2 toLight1 = normalize(light1Pos - uv);',
+    '      vec2 toLight2 = normalize(light2Pos - uv);',
+    '',
+    '      // Groove tangent direction (perpendicular to radial)',
+    '      vec2 radialDir = normalize(uv);',
+    '      vec2 tangentDir = vec2(-radialDir.y, radialDir.x);',
+    '',
+    '      // Angle between light direction and groove tangent',
+    '      // This determines which spectral color is reflected',
+    '      float lightGrooveAngle1 = dot(toLight1, tangentDir);',
+    '      float lightGrooveAngle2 = dot(toLight2, tangentDir);',
+    '',
+    '      // Distance-based light falloff from each source',
+    '      float lightDist1 = length(light1Pos - uv);',
+    '      float lightDist2 = length(light2Pos - uv);',
+    '      float lightFalloff1 = 1.0 / (1.0 + lightDist1 * lightDist1 * 2.0);',
+    '      float lightFalloff2 = 1.0 / (1.0 + lightDist2 * lightDist2 * 3.0);',
+    '',
+    '      // ── Prismatic diffraction from grooves ──',
+    '      // The fine groove spacing acts as a diffraction grating.',
+    '      // The reflected color depends on the angle.',
+    '',
+    '      // Primary light diffraction',
+    '      float gratingPhase1 = lightGrooveAngle1 + rotatedAngle * 0.05;',
+    '      vec3 diffraction1 = diffractionColor(gratingPhase1, lightFalloff1);',
+    '',
+    '      // Secondary light diffraction',
+    '      float gratingPhase2 = lightGrooveAngle2 + rotatedAngle * 0.05 + 0.5;',
+    '      vec3 diffraction2 = diffractionColor(gratingPhase2, lightFalloff2);',
+    '',
+    '      // Groove walls reflect more when the profile is at the wall angle',
+    '      float wallReflectivity = smoothstep(0.3, 0.8, modulatedProfile);',
+    '',
+    '      // ── Specular highlight bands ──',
+    '      // On a real record, you see bright arcs where the groove angle',
+    '      // perfectly reflects light to the viewer.',
+    '',
+    '      // Primary specular arc',
+    '      float specAngle1 = acos(clamp(lightGrooveAngle1, -1.0, 1.0));',
+    '      float specBand1 = exp(-pow(specAngle1 - PI * 0.25, 2.0) * 8.0);',
+    '      specBand1 += exp(-pow(specAngle1 - PI * 0.75, 2.0) * 8.0) * 0.5;',
+    '',
+    '      // Secondary specular arc',
+    '      float specAngle2 = acos(clamp(lightGrooveAngle2, -1.0, 1.0));',
+    '      float specBand2 = exp(-pow(specAngle2 - PI * 0.3, 2.0) * 6.0) * 0.6;',
+    '',
+    '      // ── Combine reflections ──',
+    '      // Warm ambient reflected light off the vinyl surface',
+    '      vec3 ambientReflection = vec3(0.04, 0.03, 0.025) * lightFalloff1;',
+    '',
+    '      // Prismatic groove reflections',
+    '      vec3 grooveReflection = vec3(0.0);',
+    '      grooveReflection += diffraction1 * specBand1 * wallReflectivity * 1.2;',
+    '      grooveReflection += diffraction2 * specBand2 * wallReflectivity * 0.8;',
+    '',
+    '      // Warm specular highlight — the bright band of reflected light',
+    '      vec3 warmSpec = vec3(0.95, 0.75, 0.5);',
+    '      float specIntensity1 = specBand1 * lightFalloff1 * wallReflectivity;',
+    '      float specIntensity2 = specBand2 * lightFalloff2 * wallReflectivity;',
+    '      vec3 specularHighlight = warmSpec * (specIntensity1 * 0.15 + specIntensity2 * 0.08);',
+    '',
+    '      // ── Broad light sheen ──',
+    '      // The overall warm glow where the spotlight falls on the record',
+    '      float sheen = exp(-lightDist1 * lightDist1 * 3.0) * 0.08;',
+    '      sheen += exp(-lightDist2 * lightDist2 * 4.0) * 0.03;',
+    '      vec3 sheenColor = vec3(0.2, 0.15, 0.1) * sheen;',
+    '',
+    '      // ── Micro-groove detail shimmer ──',
+    '      // Very fine flickering as individual grooves catch light',
+    '      float microGroove = fract(dist * 280.0 * u_grooveDensity);',
+    '      float microFlicker = pow(abs(sin(microGroove * PI)), 12.0);',
+    '      float microAngle = sin(rotatedAngle * 3.0 + dist * 200.0);',
+    '      float microSpec = microFlicker * max(microAngle, 0.0) * lightFalloff1 * 0.1;',
+    '',
+    '      // ── Additional rainbow bands ──',
+    '      // Multiple diffraction orders create concentric rainbow arcs',
+    '      float bandPhase = rotatedAngle + dist * 60.0;',
+    '      float rainbowBand = sin(bandPhase * 2.0) * 0.5 + 0.5;',
+    '      rainbowBand = pow(rainbowBand, 3.0);',
+    '      float rainbowHue = fract(dist * 8.0 + angle * 0.3 + t * 0.02);',
+    '      vec3 rainbowColor = hsv2rgb(rainbowHue, 0.6, 0.4) * rainbowBand;',
+    '      rainbowColor *= specBand1 * lightFalloff1 * 0.3;',
+    '',
+    '      // ── Assemble final groove color ──',
+    '      col += ambientReflection;',
+    '      col += grooveReflection;',
+    '      col += specularHighlight;',
+    '      col += sheenColor;',
+    '      col += vec3(microSpec) * vec3(1.0, 0.9, 0.8);',
+    '      col += rainbowColor;',
+    '',
+    '      // ── Lead-in and run-out grooves ──',
+    '      // Wider spacing at the edges',
+    '      float edgeFade = smoothstep(0.0, 0.03, rNorm) * smoothstep(1.0, 0.97, rNorm);',
+    '      col *= edgeFade * 0.9 + 0.1;',
+    '    }',
+    '',
+    '    // ── Center label ──',
+    '    if (dist < labelRadius) {',
+    '      // Warm amber/gold label — Tyler-inspired earthy tones',
+    '      float labelR = dist / labelRadius;',
+    '      vec3 labelColor = mix(',
+    '        vec3(0.45, 0.30, 0.12),',
+    '        vec3(0.30, 0.18, 0.08),',
+    '        labelR',
+    '      );',
+    '',
+    '      // Subtle paper texture on the label',
+    '      float paperTex = vnoise2(vec2(',
+    '        cos(rotatedAngle) * dist * 50.0,',
+    '        sin(rotatedAngle) * dist * 50.0',
+    '      ));',
+    '      labelColor += vec3(0.03, 0.02, 0.01) * paperTex;',
+    '',
+    '      // Label ring decoration',
+    '      float ring1 = smoothstep(0.72, 0.74, labelR) - smoothstep(0.76, 0.78, labelR);',
+    '      labelColor += vec3(0.1, 0.07, 0.03) * ring1;',
+    '',
+    '      // Spindle hole',
+    '      float spindleHole = smoothstep(0.08, 0.06, labelR);',
+    '      labelColor = mix(labelColor, vec3(0.01), spindleHole);',
+    '',
+    '      // Light reflection on label',
+    '      vec2 light1Pos = vec2(0.6, 0.5);',
+    '      float labelLight = exp(-length(light1Pos - uv) * length(light1Pos - uv) * 4.0);',
+    '      labelColor += vec3(0.15, 0.1, 0.05) * labelLight;',
+    '',
+    '      col = labelColor;',
+    '    }',
+    '',
+    '    // ── Record edge ──',
+    '    float edgeDist = recordRadius - dist;',
+    '    float edgeHighlight = smoothstep(0.008, 0.0, edgeDist) * 0.3;',
+    '    col += vec3(0.15, 0.12, 0.08) * edgeHighlight;',
+    '',
+    '    // Edge shadow/bevel',
+    '    float edgeShadow = smoothstep(0.02, 0.0, edgeDist);',
+    '    col *= 1.0 - edgeShadow * 0.3;',
+    '',
+    '    // Anti-alias the record edge',
+    '    float edgeAA = smoothstep(recordRadius, recordRadius - 0.002, dist);',
+    '    col *= edgeAA;',
+    '  }',
+    '',
+    '  // ── Drop shadow beneath record ──',
+    '  if (dist >= recordRadius) {',
+    '    float shadowDist = dist - recordRadius;',
+    '    float shadow = exp(-shadowDist * shadowDist * 80.0) * 0.25;',
+    '    col = mix(col, vec3(0.0), shadow);',
+    '  }',
+    '',
+    '  // ── Vignette ──',
+    '  float vig = 1.0 - dot(uv * 0.8, uv * 0.8);',
+    '  vig = smoothstep(0.0, 1.0, vig);',
+    '  col *= 0.7 + vig * 0.3;',
+    '',
+    '  // ── Tone mapping ──',
+    '  col = col / (1.0 + col * 0.2);',
+    '',
+    '  // ── Final warmth ──',
+    '  col = pow(max(col, 0.0), vec3(0.95, 0.98, 1.05));',
+    '',
+    '  gl_FragColor = vec4(col, 1.0);',
+    '}'
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error('Shader compile error:', gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error('Program link error:', gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uRotSpeed = gl.getUniformLocation(prog, 'u_rotSpeed');
+  var uGrooveDensity = gl.getUniformLocation(prog, 'u_grooveDensity');
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2) * _pad;
+
+  function resize() {
+    var w = Math.round(canvas.clientWidth * dpr);
+    var h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  function render(now) {
+    resize();
+    gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uRotSpeed, ROTATION_SPEED);
+    gl.uniform1f(uGrooveDensity, GROOVE_DENSITY);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  // ── PostMessage listener for parameter updates ──
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'ROTATION_SPEED': ROTATION_SPEED = e.data.value; break;
+        case 'GROOVE_DENSITY': GROOVE_DENSITY = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

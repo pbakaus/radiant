@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bossa Nova Drift</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Bossa Nova Drift</div>
+<canvas id="canvas"></canvas>
+<script>
+(function() {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var gl = canvas.getContext('webgl', { alpha: false, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  var vertSrc = 'attribute vec2 a_pos; void main(){gl_Position=vec4(a_pos,0,1);}';
+
+  var fragSrc = [
+    'precision highp float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform float u_complexity;',
+    'uniform float u_driftSpeed;',
+    '',
+    '// Value noise for domain warping',
+    'float hash(vec2 p){',
+    '  vec3 p3=fract(vec3(p.xyx)*vec3(.1031,.1030,.0973));',
+    '  p3+=dot(p3,p3.yzx+33.33);',
+    '  return fract((p3.x+p3.y)*p3.z);',
+    '}',
+    '',
+    'float vnoise(vec2 p){',
+    '  vec2 i=floor(p);',
+    '  vec2 f=fract(p);',
+    '  f=f*f*(3.0-2.0*f);',
+    '  float a=hash(i);',
+    '  float b=hash(i+vec2(1,0));',
+    '  float c=hash(i+vec2(0,1));',
+    '  float d=hash(i+vec2(1,1));',
+    '  return mix(mix(a,b,f.x),mix(c,d,f.x),f.y);',
+    '}',
+    '',
+    '// Bossa nova phase functions — each with different rhythmic feel',
+    'float bossaPhase(float t, int style){',
+    '  float pi=3.14159265;',
+    '',
+    '  // Style 0: Straight 4/4 with gentle swing',
+    '  if(style==0) return t+sin(t*pi*2.0)*0.08;',
+    '',
+    '  // Style 1: 3-against-4 polyrhythm',
+    '  if(style==1) return t*0.75+sin(t*pi*1.5)*0.12;',
+    '',
+    '  // Style 2: Bossa clave 3+3+2 pattern',
+    '  if(style==2){',
+    '    float beat=mod(t,1.0);',
+    '    float push=0.0;',
+    '    push+=smoothstep(0.0,0.375,beat)*0.375;',
+    '    push+=smoothstep(0.375,0.75,beat)*0.375;',
+    '    push+=smoothstep(0.75,1.0,beat)*0.25;',
+    '    return floor(t)+push+sin(t*pi*2.5)*0.05;',
+    '  }',
+    '',
+    '  // Style 3: 6/8 triplet undercurrent',
+    '  if(style==3) return t*1.5+sin(t*pi*3.0)*0.06;',
+    '',
+    '  // Style 4: Anticipated beat (slightly ahead)',
+    '  if(style==4) return t*1.02+sin(t*pi*2.0-0.3)*0.1;',
+    '',
+    '  // Style 5: Half-time languid drift',
+    '  return t*0.5+sin(t*pi)*0.15;',
+    '}',
+    '',
+    'void main(){',
+    '  vec2 uv=(gl_FragCoord.xy-u_res*0.5)/min(u_res.x,u_res.y);',
+    '  float t=u_time*u_driftSpeed;',
+    '',
+    '  // Domain warping for organic feel',
+    '  vec2 warp=vec2(',
+    '    vnoise(uv*2.0+t*0.05)*0.03,',
+    '    vnoise(uv*2.0+vec2(50.0)+t*0.04)*0.03',
+    '  );',
+    '  vec2 p=uv+warp;',
+    '',
+    '  float totalWave=0.0;',
+    '  int numWaves=int(u_complexity);',
+    '',
+    '  // Wave set 1: Straight 4/4 base pulse',
+    '  {',
+    '    float angle=0.0+t*0.02;',
+    '    float cs=cos(angle),sn=sin(angle);',
+    '    float proj=p.x*cs+p.y*sn;',
+    '    float phase=bossaPhase(t,0);',
+    '    totalWave+=sin(proj*28.0+phase*2.5)*0.5+0.5;',
+    '  }',
+    '',
+    '  // Wave set 2: 3-against-4 polyrhythm',
+    '  if(numWaves>=3){',
+    '    float angle=1.047+t*0.015;',
+    '    float cs=cos(angle),sn=sin(angle);',
+    '    float proj=p.x*cs+p.y*sn;',
+    '    float phase=bossaPhase(t,1);',
+    '    totalWave+=sin(proj*35.0+phase*3.0)*0.5+0.5;',
+    '  }',
+    '',
+    '  // Wave set 3: Bossa clave syncopation',
+    '  if(numWaves>=4){',
+    '    float angle=2.094+t*(-0.012);',
+    '    float cs=cos(angle),sn=sin(angle);',
+    '    float proj=p.x*cs+p.y*sn;',
+    '    float phase=bossaPhase(t,2);',
+    '    totalWave+=sin(proj*24.0+phase*2.0)*0.5+0.5;',
+    '  }',
+    '',
+    '  // Wave set 4: Triplet undercurrent',
+    '  if(numWaves>=5){',
+    '    float angle=0.524+t*0.018;',
+    '    float cs=cos(angle),sn=sin(angle);',
+    '    float proj=p.x*cs+p.y*sn;',
+    '    float phase=bossaPhase(t,3);',
+    '    totalWave+=sin(proj*40.0+phase*3.5)*0.5+0.5;',
+    '  }',
+    '',
+    '  // Wave set 5: Anticipated beat tension',
+    '  if(numWaves>=6){',
+    '    float angle=-0.785+t*(-0.01);',
+    '    float cs=cos(angle),sn=sin(angle);',
+    '    float proj=p.x*cs+p.y*sn;',
+    '    float phase=bossaPhase(t,4);',
+    '    totalWave+=sin(proj*20.0+phase*1.8)*0.5+0.5;',
+    '  }',
+    '',
+    '  // Wave set 6: Languid half-time drift',
+    '  if(numWaves>=7){',
+    '    float angle=1.571+t*0.008;',
+    '    float cs=cos(angle),sn=sin(angle);',
+    '    float proj=p.x*cs+p.y*sn;',
+    '    float phase=bossaPhase(t,5);',
+    '    totalWave+=sin(proj*15.0+phase*1.2)*0.5+0.5;',
+    '  }',
+    '',
+    '  // Normalize by number of active waves',
+    '  float activeWaves=max(2.0,min(float(numWaves),7.0));',
+    '  totalWave/=activeWaves;',
+    '',
+    '  // Moire interference — enhance contrast at intersections',
+    '  float moire=pow(totalWave,2.5);',
+    '',
+    '  // Breathing modulation — slow polyrhythmic swell',
+    '  float breath=0.85+0.15*sin(t*0.3)*sin(t*0.19+0.5);',
+    '  moire*=breath;',
+    '',
+    '  // Color ramp: dark amber -> gold -> cream',
+    '  vec3 col;',
+    '  if(moire<0.2){',
+    '    col=mix(vec3(0.02,0.015,0.01),vec3(0.12,0.07,0.03),moire/0.2);',
+    '  } else if(moire<0.5){',
+    '    col=mix(vec3(0.12,0.07,0.03),vec3(0.55,0.38,0.15),(moire-0.2)/0.3);',
+    '  } else if(moire<0.8){',
+    '    col=mix(vec3(0.55,0.38,0.15),vec3(0.82,0.62,0.28),(moire-0.5)/0.3);',
+    '  } else {',
+    '    col=mix(vec3(0.82,0.62,0.28),vec3(0.95,0.85,0.55),(moire-0.8)/0.2);',
+    '  }',
+    '',
+    '  // Subtle warm highlight at peaks',
+    '  float highlight=smoothstep(0.7,1.0,moire);',
+    '  col+=vec3(0.1,0.06,0.02)*highlight;',
+    '',
+    '  // Vignette',
+    '  float vig=1.0-smoothstep(0.3,1.3,length(uv*vec2(0.8,1.0)));',
+    '  col*=0.5+0.5*vig;',
+    '',
+    '  // Film grain',
+    '  float grain=(hash(gl_FragCoord.xy+fract(t*0.1)*100.0)-0.5)*0.02;',
+    '  col+=grain;',
+    '',
+    '  // Gamma',
+    '  col=pow(max(col,0.0),vec3(0.95));',
+    '',
+    '  gl_FragColor=vec4(clamp(col,0.0,1.0),1.0);',
+    '}',
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error(gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error(gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uComplexity = gl.getUniformLocation(prog, 'u_complexity');
+  var uDriftSpeed = gl.getUniformLocation(prog, 'u_driftSpeed');
+  var complexityVal = 5.0;
+  var driftSpeedVal = 0.4;
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+  var running = true;
+
+  function resize() {
+    var w = Math.round(canvas.clientWidth * dpr);
+    var h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  function render(now) {
+    if (!running) return;
+    resize();
+    gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uComplexity, complexityVal);
+    gl.uniform1f(uDriftSpeed, driftSpeedVal);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  document.addEventListener('visibilitychange', function() {
+    if (document.hidden) {
+      running = false;
+    } else {
+      running = true;
+      requestAnimationFrame(render);
+    }
+  });
+
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'WAVE_COMPLEXITY': complexityVal = e.data.value; break;
+        case 'DRIFT_SPEED': driftSpeedVal = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

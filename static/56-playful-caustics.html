@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Playful Caustics</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">56 — Playful Caustics</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// 56 · Playful Caustics — Voronoi-based swimming pool caustic light
+// ─────────────────────────────────────────────
+(function() {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var _pad = parseFloat(new URLSearchParams(location.search).get('p')) || 1;
+
+  var gl = canvas.getContext('webgl', { alpha: true, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  // Tunable parameters
+  var WATER_SPEED = 1.0;
+  var CAUSTIC_INTENSITY = 1.0;
+
+  var vertSrc = [
+    'attribute vec2 a_pos;',
+    'void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }'
+  ].join('\n');
+
+  var fragSrc = [
+    'precision highp float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform float u_waterSpeed;',
+    'uniform float u_causticIntensity;',
+    '',
+    '#define TAU 6.28318530718',
+    '',
+    '// ── Rotation matrix ──',
+    'mat2 rot2(float a) {',
+    '  float c = cos(a), s = sin(a);',
+    '  return mat2(c, -s, s, c);',
+    '}',
+    '',
+    '// ── Hash functions ──',
+    'vec2 hash2(vec2 p) {',
+    '  p = vec2(dot(p, vec2(127.1, 311.7)),',
+    '           dot(p, vec2(269.5, 183.3)));',
+    '  return fract(sin(p) * 43758.5453);',
+    '}',
+    '',
+    'float hash1(vec2 p) {',
+    '  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);',
+    '}',
+    '',
+    '// ═══════════════════════════════════════════════════════',
+    '// Voronoi caustic layer',
+    '// Uses animated Voronoi cells where the distance field',
+    '// derivative creates bright caustic network patterns.',
+    '// The key insight: real caustics form where refracted',
+    '// rays converge. We approximate this by computing the',
+    '// minimum of distances to wandering Voronoi cell centers',
+    '// then sharpening the result to get bright network lines.',
+    '// ═══════════════════════════════════════════════════════',
+    'float voronoiCaustic(vec2 uv, float t, float scale) {',
+    '  vec2 p = uv * scale;',
+    '  vec2 ip = floor(p);',
+    '  vec2 fp = fract(p);',
+    '',
+    '  // Track two closest distances for edge detection',
+    '  float d1 = 1e9;',
+    '  float d2 = 1e9;',
+    '',
+    '  for (int y = -1; y <= 1; y++) {',
+    '    for (int x = -1; x <= 1; x++) {',
+    '      vec2 neighbor = vec2(float(x), float(y));',
+    '      vec2 cellId = ip + neighbor;',
+    '      vec2 h = hash2(cellId);',
+    '',
+    '      // Animate cell centers with sinusoidal orbits',
+    '      // Each cell drifts in a unique circular-ish path',
+    '      // The "playful" quality comes from varying speeds',
+    '      // and slightly bouncy motion',
+    '      float speed1 = 0.8 + h.x * 0.6;',
+    '      float speed2 = 0.7 + h.y * 0.7;',
+    '      vec2 offset = vec2(',
+    '        sin(t * speed1 + h.x * TAU) * 0.4 +',
+    '        sin(t * speed1 * 1.7 + h.y * 5.0) * 0.15,',
+    '        cos(t * speed2 + h.y * TAU) * 0.4 +',
+    '        cos(t * speed2 * 1.3 + h.x * 4.0) * 0.15',
+    '      );',
+    '',
+    '      vec2 cellPos = neighbor + 0.5 + offset * 0.5 - fp;',
+    '      float d = dot(cellPos, cellPos);',
+    '',
+    '      if (d < d1) {',
+    '        d2 = d1;',
+    '        d1 = d;',
+    '      } else if (d < d2) {',
+    '        d2 = d;',
+    '      }',
+    '    }',
+    '  }',
+    '',
+    '  d1 = sqrt(d1);',
+    '  d2 = sqrt(d2);',
+    '',
+    '  // Caustic network: bright lines where two cells meet',
+    '  // The difference d2-d1 is small at cell edges',
+    '  float edge = d2 - d1;',
+    '',
+    '  // Sharp caustic ridges with soft falloff',
+    '  float caustic = smoothstep(0.12, 0.0, edge);',
+    '  caustic = pow(caustic, 1.5);',
+    '',
+    '  // Add secondary brightness from cell proximity',
+    '  // This gives a softer, broader glow around the caustic network',
+    '  float glow = smoothstep(0.5, 0.0, d1) * 0.3;',
+    '',
+    '  return caustic + glow;',
+    '}',
+    '',
+    '// ═══════════════════════════════════════════════════════',
+    '// Water ripple distortion',
+    '// Simulates the refractive distortion of a gently',
+    '// moving water surface above. This warps the UV space',
+    '// before computing caustics, adding organic waviness.',
+    '// ═══════════════════════════════════════════════════════',
+    'vec2 waterDistort(vec2 uv, float t) {',
+    '  vec2 d = vec2(0.0);',
+    '  // Large gentle swells',
+    '  d.x += sin(uv.y * 2.3 + t * 0.7) * 0.03;',
+    '  d.y += cos(uv.x * 2.1 + t * 0.6) * 0.03;',
+    '  // Medium ripples',
+    '  d.x += sin(uv.y * 5.7 + uv.x * 3.1 + t * 1.3) * 0.012;',
+    '  d.y += cos(uv.x * 4.9 - uv.y * 2.7 + t * 1.1) * 0.012;',
+    '  // Quick playful chop',
+    '  d.x += sin(uv.y * 11.0 + t * 2.5) * 0.004;',
+    '  d.y += cos(uv.x * 9.0 + t * 2.2) * 0.004;',
+    '  return d;',
+    '}',
+    '',
+    'void main() {',
+    '  vec2 uv = (gl_FragCoord.xy - u_res * 0.5) / min(u_res.x, u_res.y);',
+    '  float t = u_time * u_waterSpeed;',
+    '',
+    '  // ── Water surface distortion applied to UV space ──',
+    '  vec2 warp = waterDistort(uv, t);',
+    '  vec2 uvW = uv + warp;',
+    '',
+    '  // ═══════════════════════════════════════════════════════',
+    '  // CAUSTIC LAYERS',
+    '  // Three overlapping Voronoi caustic patterns at different',
+    '  // scales and rotation angles. The overlap creates the',
+    '  // complex, webbed pattern of real pool caustics.',
+    '  // ═══════════════════════════════════════════════════════',
+    '',
+    '  // Layer 1: Primary large-scale caustic web',
+    '  vec2 uv1 = rot2(0.15) * uvW;',
+    '  float c1 = voronoiCaustic(uv1, t, 4.0);',
+    '',
+    '  // Layer 2: Medium-scale, different rotation and time phase',
+    '  vec2 uv2 = rot2(-0.4) * uvW + vec2(5.3, 3.7);',
+    '  float c2 = voronoiCaustic(uv2, t * 1.15 + 7.0, 5.5);',
+    '',
+    '  // Layer 3: Fine detail, faster motion, adds sparkle',
+    '  vec2 uv3 = rot2(0.85) * uvW + vec2(11.1, 8.3);',
+    '  float c3 = voronoiCaustic(uv3, t * 1.35 + 17.0, 8.0);',
+    '',
+    '  // Weighted combination — large pattern dominates',
+    '  float caustics = c1 * 0.50 + c2 * 0.30 + c3 * 0.20;',
+    '',
+    '  // Boost with intensity parameter',
+    '  caustics *= u_causticIntensity;',
+    '',
+    '  // ═══════════════════════════════════════════════════════',
+    '  // COLOR COMPOSITION',
+    '  // Deep aqua water base with warm golden caustic light.',
+    '  // The feel: looking down into a sun-drenched pool where',
+    '  // golden light dances on a blue-tiled floor.',
+    '  // ═══════════════════════════════════════════════════════',
+    '',
+    '  // ── Deep water base — dark aqua blue ──',
+    '  vec3 deepWater = vec3(0.02, 0.06, 0.10);',
+    '',
+    '  // ── Aqua midtone — where caustics begin to appear ──',
+    '  vec3 aqua = vec3(0.04, 0.18, 0.28);',
+    '',
+    '  // ── Bright caustic colors ──',
+    '  vec3 causticAqua = vec3(0.15, 0.55, 0.65);',
+    '  vec3 warmGold = vec3(0.85, 0.65, 0.30);',
+    '  vec3 brightWhite = vec3(0.95, 0.92, 0.80);',
+    '',
+    '  // ── Build base water color with subtle variation ──',
+    '  float waterVar = sin(uvW.x * 3.0 + t * 0.15) *',
+    '                   cos(uvW.y * 2.5 + t * 0.12) * 0.5 + 0.5;',
+    '  vec3 base = mix(deepWater, aqua, waterVar * 0.4 + 0.15);',
+    '',
+    '  // ── Apply caustic light on top of the water ──',
+    '  // Low intensity: subtle aqua brightening',
+    '  vec3 col = base;',
+    '  col += causticAqua * smoothstep(0.0, 0.5, caustics) * 0.5;',
+    '',
+    '  // Medium intensity: warm gold mixing in',
+    '  col += warmGold * smoothstep(0.25, 0.8, caustics) * 0.55;',
+    '',
+    '  // High intensity: bright near-white at caustic peaks',
+    '  col += brightWhite * smoothstep(0.6, 1.2, caustics) * 0.6;',
+    '',
+    '  // ── Chromatic edges — slight color separation at caustic borders ──',
+    '  // Gives that beautiful prismatic fringing of underwater light',
+    '  float cShift = 0.008;',
+    '  float cR = voronoiCaustic(rot2(0.15) * (uv + warp + vec2(cShift, 0.0)), t, 4.0);',
+    '  float cB = voronoiCaustic(rot2(0.15) * (uv + warp - vec2(cShift, 0.0)), t, 4.0);',
+    '  float chrDiff = abs(cR - cB);',
+    '  col.r += chrDiff * 0.15;',
+    '  col.b += chrDiff * 0.1;',
+    '',
+    '  // ── Dancing sparkle highlights ──',
+    '  // Occasional sharp bright points where caustics momentarily focus',
+    '  float sparkle = 0.0;',
+    '  for (int i = 0; i < 3; i++) {',
+    '    float fi = float(i);',
+    '    vec2 sp = uvW * (6.0 + fi * 3.5);',
+    '    float phase = t * (1.8 + fi * 0.6) + fi * 2.17;',
+    '    float sx = sin(sp.x * 3.7 + phase + cos(sp.y * 2.3 + phase * 0.7));',
+    '    float sy = cos(sp.y * 3.3 - phase * 0.8 + sin(sp.x * 2.9 + phase * 1.2));',
+    '    float s = sx * sy;',
+    '    sparkle += pow(max(s, 0.0), 28.0) * (0.6 - fi * 0.12);',
+    '  }',
+    '  col += brightWhite * sparkle * 1.5;',
+    '',
+    '  // ── Soft sunlight gradient — brighter at top ──',
+    '  // Simulates the directional quality of sunlight entering water',
+    '  float sunGrad = smoothstep(-0.8, 0.8, uv.y) * 0.15 + 0.85;',
+    '  col *= sunGrad;',
+    '',
+    '  // ── Gentle warm shift across surface ──',
+    '  // Dappled sunlight patches that slowly drift',
+    '  float dapple = sin(uv.x * 1.5 + t * 0.08) *',
+    '                 cos(uv.y * 1.8 + t * 0.06) * 0.5 + 0.5;',
+    '  col *= mix(vec3(1.0), vec3(1.06, 1.02, 0.94), dapple * 0.15);',
+    '',
+    '  // ── Vignette — warm darkening at edges ──',
+    '  float vig = 1.0 - dot(uv, uv) * 0.4;',
+    '  vig = smoothstep(0.0, 1.0, vig);',
+    '  col *= vig;',
+    '',
+    '  // ── Tone mapping — keep bright caustics vivid ──',
+    '  col = col / (1.0 + col * 0.2);',
+    '',
+    '  // ── Final color grading — warm sunny push ──',
+    '  col = pow(max(col, 0.0), vec3(0.95, 0.97, 1.05));',
+    '',
+    '  // ── Minimum ambient — never pure black ──',
+    '  col = max(col, vec3(0.008, 0.012, 0.018));',
+    '',
+    '  gl_FragColor = vec4(col, 1.0);',
+    '}'
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error('Shader compile error:', gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error('Program link error:', gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uWaterSpeed = gl.getUniformLocation(prog, 'u_waterSpeed');
+  var uCausticIntensity = gl.getUniformLocation(prog, 'u_causticIntensity');
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2) * _pad;
+
+  function resize() {
+    var w = Math.round(canvas.clientWidth * dpr);
+    var h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  function render(now) {
+    resize();
+    gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uWaterSpeed, WATER_SPEED);
+    gl.uniform1f(uCausticIntensity, CAUSTIC_INTENSITY);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  // ── PostMessage listener for parameter updates ──
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'WATER_SPEED': WATER_SPEED = e.data.value; break;
+        case 'CAUSTIC_INTENSITY': CAUSTIC_INTENSITY = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

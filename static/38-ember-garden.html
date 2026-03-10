@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ember Garden</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">38 — Ember Garden</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// 38 · Ember Garden — Glowing embers rising from smoldering ground
+// Resolution-independent WebGL fragment shader
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var _pad = parseFloat(new URLSearchParams(location.search).get('p')) || 1;
+
+  var gl = canvas.getContext('webgl', { alpha: false, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  var vertSrc = 'attribute vec2 a_pos; void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }';
+
+  var fragSrc = [
+    'precision highp float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform float u_timeScale;',
+    'uniform float u_heatGlow;',
+    '',
+    '// ── Hash & Noise ──',
+    'float hash(vec2 p) {',
+    '  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);',
+    '}',
+    '',
+    'float hash13(vec3 p) {',
+    '  return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453);',
+    '}',
+    '',
+    'vec2 hash2(vec2 p) {',
+    '  return vec2(',
+    '    fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453),',
+    '    fract(sin(dot(p, vec2(269.5, 183.3))) * 43758.5453)',
+    '  );',
+    '}',
+    '',
+    'float vnoise(vec2 p) {',
+    '  vec2 i = floor(p);',
+    '  vec2 f = fract(p);',
+    '  f = f * f * (3.0 - 2.0 * f);',
+    '  float a = hash(i);',
+    '  float b = hash(i + vec2(1.0, 0.0));',
+    '  float c = hash(i + vec2(0.0, 1.0));',
+    '  float d = hash(i + vec2(1.0, 1.0));',
+    '  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);',
+    '}',
+    '',
+    'float fbm(vec2 p) {',
+    '  float v = 0.0;',
+    '  float a = 0.5;',
+    '  mat2 rot = mat2(0.8, 0.6, -0.6, 0.8);',
+    '  for (int i = 0; i < 5; i++) {',
+    '    v += a * vnoise(p);',
+    '    p = rot * p * 2.1;',
+    '    a *= 0.5;',
+    '  }',
+    '  return v;',
+    '}',
+    '',
+    'float fbm3(vec2 p) {',
+    '  float v = 0.0;',
+    '  float a = 0.5;',
+    '  mat2 rot = mat2(0.8, 0.6, -0.6, 0.8);',
+    '  for (int i = 0; i < 3; i++) {',
+    '    v += a * vnoise(p);',
+    '    p = rot * p * 2.1;',
+    '    a *= 0.5;',
+    '  }',
+    '  return v;',
+    '}',
+    '',
+    '// ── Temperature to color mapping ──',
+    '// Maps 0..1 temperature to ember colors:',
+    '// dark -> deep red -> red -> orange -> amber -> yellow-white',
+    'vec3 emberColor(float t) {',
+    '  vec3 c;',
+    '  if (t < 0.2) {',
+    '    c = mix(vec3(0.02, 0.005, 0.003), vec3(0.25, 0.04, 0.01), t / 0.2);',
+    '  } else if (t < 0.4) {',
+    '    c = mix(vec3(0.25, 0.04, 0.01), vec3(0.7, 0.12, 0.02), (t - 0.2) / 0.2);',
+    '  } else if (t < 0.6) {',
+    '    c = mix(vec3(0.7, 0.12, 0.02), vec3(0.92, 0.35, 0.04), (t - 0.4) / 0.2);',
+    '  } else if (t < 0.8) {',
+    '    c = mix(vec3(0.92, 0.35, 0.04), vec3(1.0, 0.65, 0.15), (t - 0.6) / 0.2);',
+    '  } else {',
+    '    c = mix(vec3(1.0, 0.65, 0.15), vec3(1.0, 0.92, 0.65), (t - 0.8) / 0.2);',
+    '  }',
+    '  return c;',
+    '}',
+    '',
+    '// ── Ember bed: noise-based glowing coal surface ──',
+    'float emberBed(vec2 uv, float t) {',
+    '  // Ground line at ~82% from top',
+    '  float groundY = 0.18;',
+    '  if (uv.y > groundY) return 0.0;',
+    '',
+    '  // Distance below the ground surface',
+    '  float depth = (groundY - uv.y) / groundY;',
+    '',
+    '  // Multiple noise layers for shifting hot spots',
+    '  vec2 p = uv * vec2(6.0, 12.0);',
+    '  float n1 = fbm(p + vec2(t * 0.15, t * 0.05));',
+    '  float n2 = fbm(p * 1.7 + vec2(-t * 0.1, t * 0.08) + 5.0);',
+    '  float n3 = vnoise(p * 0.5 + vec2(t * 0.07, 0.0));',
+    '',
+    '  // Combine noise for hot spot pattern',
+    '  float hotness = n1 * 0.5 + n2 * 0.35 + n3 * 0.15;',
+    '  hotness = smoothstep(0.3, 0.75, hotness);',
+    '',
+    '  // Hot spots pulse independently',
+    '  float pulse = 0.7 + 0.3 * sin(t * 0.8 + n1 * 6.28);',
+    '  hotness *= pulse;',
+    '',
+    '  // Intensity peaks just below the surface and fades deeper',
+    '  float surfaceFade = smoothstep(0.0, 0.08, depth) * smoothstep(1.0, 0.15, depth);',
+    '  hotness *= surfaceFade;',
+    '',
+    '  // Rough surface edge: noise-modulated ground line',
+    '  float edgeNoise = fbm3(vec2(uv.x * 25.0 + t * 0.3, 0.5)) * 0.025;',
+    '  float surfaceMask = smoothstep(groundY + edgeNoise + 0.005, groundY + edgeNoise - 0.015, uv.y);',
+    '  hotness *= surfaceMask;',
+    '',
+    '  return hotness;',
+    '}',
+    '',
+    '// ── Rising ember sparks (procedural particles via math) ──',
+    'float emberSpark(vec2 uv, float t, float id, float speed) {',
+    '  // Each spark has unique properties derived from its id',
+    '  float h = hash(vec2(id, 0.0));',
+    '  float h2 = hash(vec2(id, 1.0));',
+    '  float h3 = hash(vec2(id, 2.0));',
+    '  float h4 = hash(vec2(id, 3.0));',
+    '  float h5 = hash(vec2(id, 4.0));',
+    '',
+    '  // Spawn x-position across the width, clustered toward center',
+    '  float spawnX = 0.1 + 0.8 * h;',
+    '',
+    '  // Rise cycle: time-based with per-spark phase offset',
+    '  float cycleLen = 4.0 + h2 * 6.0;',
+    '  float phase = mod(t * speed + h3 * cycleLen, cycleLen);',
+    '  float lifeT = phase / cycleLen;',
+    '',
+    '  // Vertical position: rises from ground to top',
+    '  float groundY = 0.18;',
+    '  float y = groundY + lifeT * (0.85 + h4 * 0.3);',
+    '',
+    '  // Horizontal drift: sinusoidal sway',
+    '  float driftFreq = 1.5 + h2 * 2.5;',
+    '  float driftAmp = 0.02 + h5 * 0.06;',
+    '  float x = spawnX + sin(t * driftFreq * 0.5 + h3 * 6.28 + lifeT * 3.0) * driftAmp;',
+    '  x += sin(t * 0.7 + h * 10.0) * 0.01;',
+    '',
+    '  // Spark size (resolution-independent, in UV space)',
+    '  float baseSize = 0.0015 + h4 * 0.004;',
+    '  // Aspect ratio correction',
+    '  float aspect = u_res.x / u_res.y;',
+    '  vec2 diff = vec2((uv.x - x) * aspect, uv.y - y);',
+    '  float dist = length(diff);',
+    '',
+    '  // Temperature: starts hot, cools as it rises',
+    '  float temp = 1.0 - lifeT * (0.6 + h2 * 0.4);',
+    '  temp *= 0.7 + 0.3 * sin(t * (5.0 + h5 * 8.0) + h3 * 6.28); // flicker',
+    '  temp = max(temp, 0.0);',
+    '',
+    '  // Fade in at birth, fade out as temperature drops',
+    '  float fadeIn = smoothstep(0.0, 0.05, lifeT);',
+    '  float fadeOut = smoothstep(0.0, 0.15, temp);',
+    '  float alpha = fadeIn * fadeOut;',
+    '',
+    '  // Soft circular glow',
+    '  float glow = baseSize / (dist + 0.0001);',
+    '  glow = pow(glow, 1.5) * 0.01;',
+    '  glow = min(glow, 3.0);',
+    '',
+    '  return glow * alpha * temp;',
+    '}',
+    '',
+    '// ── Large floating ember chunks ──',
+    'float emberChunk(vec2 uv, float t, float id) {',
+    '  float h = hash(vec2(id + 100.0, 0.0));',
+    '  float h2 = hash(vec2(id + 100.0, 1.0));',
+    '  float h3 = hash(vec2(id + 100.0, 2.0));',
+    '  float h4 = hash(vec2(id + 100.0, 3.0));',
+    '  float h5 = hash(vec2(id + 100.0, 4.0));',
+    '',
+    '  float spawnX = 0.15 + 0.7 * h;',
+    '  float cycleLen = 7.0 + h2 * 8.0;',
+    '  float phase = mod(t * 0.6 + h3 * cycleLen, cycleLen);',
+    '  float lifeT = phase / cycleLen;',
+    '',
+    '  float groundY = 0.18;',
+    '  float y = groundY + lifeT * 0.7;',
+    '',
+    '  float driftAmp = 0.03 + h5 * 0.05;',
+    '  float x = spawnX + sin(t * 0.4 + h3 * 6.28 + lifeT * 2.0) * driftAmp;',
+    '  // Spiral motion for some chunks',
+    '  if (h4 > 0.6) {',
+    '    float spiralSpeed = 1.0 + h2 * 1.5;',
+    '    float spiralDir = h5 > 0.5 ? 1.0 : -1.0;',
+    '    x += cos(t * spiralSpeed * spiralDir + h3 * 6.28) * 0.02;',
+    '    y += sin(t * spiralSpeed * spiralDir + h3 * 6.28) * 0.005;',
+    '  }',
+    '',
+    '  float aspect = u_res.x / u_res.y;',
+    '  vec2 diff = vec2((uv.x - x) * aspect, uv.y - y);',
+    '  float dist = length(diff);',
+    '',
+    '  float size = 0.004 + h4 * 0.006;',
+    '',
+    '  float temp = 0.9 - lifeT * 0.7;',
+    '  temp *= 0.8 + 0.2 * sin(t * (2.0 + h5 * 3.0) + h3 * 6.28);',
+    '  temp = max(temp, 0.0);',
+    '',
+    '  float fadeIn = smoothstep(0.0, 0.06, lifeT);',
+    '  float fadeOut = smoothstep(0.0, 0.2, temp);',
+    '  float alpha = fadeIn * fadeOut;',
+    '',
+    '  // Soft glow with wider halo',
+    '  float core = smoothstep(size, size * 0.2, dist);',
+    '  float halo = size * 3.0 / (dist + 0.001);',
+    '  halo = pow(halo, 1.3) * 0.003;',
+    '  halo = min(halo, 2.0);',
+    '',
+    '  return (core * 0.7 + halo) * alpha * temp;',
+    '}',
+    '',
+    'void main() {',
+    '  vec2 uv = gl_FragCoord.xy / u_res;',
+    '  // Flip so y=0 is bottom, y=1 is top',
+    '  uv.y = 1.0 - uv.y;',
+    '',
+    '  float t = u_time * u_timeScale;',
+    '  float heatGlow = u_heatGlow;',
+    '',
+    '  // ── Background: dark with subtle warm gradient at bottom ──',
+    '  vec3 col = vec3(0.035, 0.03, 0.028);',
+    '',
+    '  // ── Ambient warm glow filling the lower viewport ──',
+    '  float ambientStr = smoothstep(0.65, 0.0, uv.y);',
+    '  ambientStr = pow(ambientStr, 1.8);',
+    '  float ambPulse = 0.75 + 0.25 * sin(t * 0.35);',
+    '  vec3 ambientCol = mix(',
+    '    vec3(0.12, 0.03, 0.008),',
+    '    vec3(0.22, 0.07, 0.015),',
+    '    smoothstep(0.5, 0.0, uv.y)',
+    '  );',
+    '  col += ambientCol * ambientStr * 0.7 * ambPulse * heatGlow;',
+    '',
+    '  // Side glow variation',
+    '  float sideGlow1 = exp(-pow((uv.x - 0.25) * 3.0, 2.0)) * smoothstep(0.5, 0.0, uv.y);',
+    '  float sideGlow2 = exp(-pow((uv.x - 0.75) * 3.0, 2.0)) * smoothstep(0.5, 0.0, uv.y);',
+    '  col += vec3(0.08, 0.025, 0.006) * (sideGlow1 + sideGlow2) * 0.3 * ambPulse * heatGlow;',
+    '',
+    '  // ── Ember bed (coal surface) ──',
+    '  float bedHeat = emberBed(uv, t) * heatGlow;',
+    '  vec3 bedCol = emberColor(bedHeat * 0.9) * bedHeat * 2.5;',
+    '  col += bedCol;',
+    '',
+    '  // Ember bed scattered hot dots (Voronoi-like bright points)',
+    '  float groundY = 0.18;',
+    '  if (uv.y < groundY + 0.02) {',
+    '    vec2 dotUV = uv * vec2(30.0, 60.0);',
+    '    vec2 gid = floor(dotUV);',
+    '    float minDist = 1.0;',
+    '    float dotHeat = 0.0;',
+    '    for (int dy = -1; dy <= 1; dy++) {',
+    '      for (int dx = -1; dx <= 1; dx++) {',
+    '        vec2 neighbor = gid + vec2(float(dx), float(dy));',
+    '        vec2 point = neighbor + hash2(neighbor) * 0.8;',
+    '        float d = length(dotUV - point);',
+    '        if (d < minDist) {',
+    '          minDist = d;',
+    '          float h = hash(neighbor + 0.5);',
+    '          float pulse = 0.4 + 0.6 * sin(t * (1.0 + h * 3.0) + h * 6.28);',
+    '          dotHeat = pulse * smoothstep(0.35, 0.0, d) * h;',
+    '        }',
+    '      }',
+    '    }',
+    '    float dotFade = smoothstep(groundY + 0.02, groundY - 0.01, uv.y);',
+    '    float edgeNoise = fbm3(vec2(uv.x * 25.0 + t * 0.3, 0.5)) * 0.025;',
+    '    dotFade *= smoothstep(groundY + edgeNoise + 0.005, groundY + edgeNoise - 0.01, uv.y);',
+    '    col += emberColor(0.5 + dotHeat * 0.4) * dotHeat * dotFade * 1.5 * heatGlow;',
+    '  }',
+    '',
+    '  // Dark ground below the ember bed surface',
+    '  float darkGround = smoothstep(groundY - 0.04, groundY - 0.08, uv.y);',
+    '  float surfEdge = fbm3(vec2(uv.x * 25.0 + t * 0.3, 0.5)) * 0.025;',
+    '  darkGround *= smoothstep(groundY + surfEdge, groundY + surfEdge - 0.03, uv.y);',
+    '  col = mix(col, vec3(0.025, 0.018, 0.015), darkGround * 0.6);',
+    '',
+    '  // ── Heat shimmer above the ember bed ──',
+    '  float shimmerZone = smoothstep(0.6, 0.18, uv.y) * smoothstep(0.16, 0.2, uv.y);',
+    '  float shimmer = 0.0;',
+    '  for (int i = 0; i < 3; i++) {',
+    '    float fi = float(i);',
+    '    float sy = uv.y + fi * 0.04;',
+    '    float sn = sin(uv.x * (20.0 + fi * 5.0) + t * (2.0 + fi * 0.7) + fi * 2.0) * 0.5 + 0.5;',
+    '    sn *= sin(uv.x * (8.0 + fi * 3.0) - t * 1.3 + fi * 1.5) * 0.5 + 0.5;',
+    '    shimmer += sn * 0.012 * (1.0 - fi * 0.25);',
+    '  }',
+    '  col += vec3(1.0, 0.55, 0.2) * shimmer * shimmerZone * heatGlow;',
+    '',
+    '  // ── Rising ember sparks (many small particles) ──',
+    '  float sparkAccum = 0.0;',
+    '  float sparkTemp = 0.0;',
+    '  for (int i = 0; i < 60; i++) {',
+    '    float fi = float(i);',
+    '    float sp = emberSpark(uv, t, fi, 0.8 + hash(vec2(fi, 5.0)) * 0.4);',
+    '    if (sp > 0.001) {',
+    '      float h = hash(vec2(fi, 6.0));',
+    '      sparkAccum += sp;',
+    '      sparkTemp += sp * (0.4 + h * 0.6);',
+    '    }',
+    '  }',
+    '  if (sparkAccum > 0.001) {',
+    '    float avgTemp = sparkTemp / sparkAccum;',
+    '    col += emberColor(avgTemp) * sparkAccum * 3.0;',
+    '  }',
+    '',
+    '  // ── Larger floating ember chunks ──',
+    '  float chunkAccum = 0.0;',
+    '  float chunkTemp = 0.0;',
+    '  for (int i = 0; i < 18; i++) {',
+    '    float fi = float(i);',
+    '    float ch = emberChunk(uv, t, fi);',
+    '    if (ch > 0.001) {',
+    '      float h = hash(vec2(fi + 100.0, 6.0));',
+    '      chunkAccum += ch;',
+    '      chunkTemp += ch * (0.3 + h * 0.5);',
+    '    }',
+    '  }',
+    '  if (chunkAccum > 0.001) {',
+    '    float avgTemp = chunkTemp / chunkAccum;',
+    '    col += emberColor(avgTemp) * chunkAccum * 2.5;',
+    '  }',
+    '',
+    '  // ── Subtle smoke wisps (dark, semi-transparent noise) ──',
+    '  float smokeZone = smoothstep(0.55, 0.2, uv.y) * smoothstep(0.15, 0.2, uv.y);',
+    '  float smoke1 = fbm(uv * vec2(4.0, 8.0) + vec2(t * 0.1, t * 0.25));',
+    '  float smoke2 = fbm(uv * vec2(3.0, 6.0) + vec2(-t * 0.08, t * 0.2) + 10.0);',
+    '  float smoke = (smoke1 * 0.6 + smoke2 * 0.4);',
+    '  smoke = smoothstep(0.4, 0.7, smoke) * 0.06 * smokeZone;',
+    '  col = mix(col, vec3(0.04, 0.03, 0.025), smoke);',
+    '',
+    '  // ── Vignette ──',
+    '  vec2 vigUV = gl_FragCoord.xy / u_res - 0.5;',
+    '  float vig = 1.0 - dot(vigUV, vigUV) * 1.2;',
+    '  vig = smoothstep(0.0, 0.7, vig);',
+    '  col *= mix(0.6, 1.0, vig);',
+    '',
+    '  // ── Tone mapping & gamma ──',
+    '  col = col / (col + 0.8);',
+    '  col = pow(col, vec3(0.95));',
+    '',
+    '  gl_FragColor = vec4(col, 1.0);',
+    '}',
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error(gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error(gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uTimeScale = gl.getUniformLocation(prog, 'u_timeScale');
+  var uHeatGlow = gl.getUniformLocation(prog, 'u_heatGlow');
+  var timeScaleVal = 1.0;
+  var heatGlowVal = 0.85;
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  function resize() {
+    var w = Math.round(canvas.clientWidth * dpr);
+    var h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  var running = true;
+
+  function render(now) {
+    if (!running) return;
+    resize();
+    gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uTimeScale, timeScaleVal);
+    gl.uniform1f(uHeatGlow, heatGlowVal);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  // Pause when not visible
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) {
+      running = false;
+    } else {
+      running = true;
+      requestAnimationFrame(render);
+    }
+  });
+
+  requestAnimationFrame(render);
+
+  // PostMessage API for parameter updates
+  window.addEventListener('message', function (e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'timeScale': timeScaleVal = e.data.value; break;
+        case 'HEAT_GLOW':
+        case 'heatGlow': heatGlowVal = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Disco Refraction</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">12 — Disco Refraction</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// 12 · Disco Refraction — Prismatic caustic light refractions
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // URL param for embed scaling
+  var urlParams = new URLSearchParams(window.location.search);
+  var pixelScale = parseFloat(urlParams.get('p')) || 1;
+
+  var gl = canvas.getContext('webgl', { alpha: true, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  var vertSrc = [
+    'attribute vec2 a_pos;',
+    'void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }'
+  ].join('\n');
+
+  var fragSrc = [
+    'precision highp float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform float u_bpm;',
+    'uniform float u_intensity;',
+    '',
+    '#define PI 3.14159265359',
+    '#define TAU 6.28318530718',
+    '',
+    '// ── Hash ──',
+    'float hash(vec2 p) {',
+    '  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);',
+    '}',
+    '',
+    '// ── Smooth noise ──',
+    'float noise(vec2 p) {',
+    '  vec2 i = floor(p);',
+    '  vec2 f = fract(p);',
+    '  f = f * f * (3.0 - 2.0 * f);',
+    '  float a = hash(i);',
+    '  float b = hash(i + vec2(1.0, 0.0));',
+    '  float c = hash(i + vec2(0.0, 1.0));',
+    '  float d = hash(i + vec2(1.0, 1.0));',
+    '  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);',
+    '}',
+    '',
+    '// ── Rotation ──',
+    'mat2 rot(float a) {',
+    '  float c = cos(a), s = sin(a);',
+    '  return mat2(c, -s, s, c);',
+    '}',
+    '',
+    '// ── Spectral color from wavelength-like parameter ──',
+    '// Maps 0..1 through a rich saturated prismatic spectrum',
+    'vec3 spectrum(float t) {',
+    '  vec3 a = vec3(0.5, 0.5, 0.5);',
+    '  vec3 b = vec3(0.55, 0.55, 0.55);',
+    '  vec3 c = vec3(1.0, 1.0, 1.0);',
+    '  vec3 d = vec3(0.0, 0.1, 0.2);',
+    '  return a + b * cos(TAU * (c * t + d));',
+    '}',
+    '',
+    '// ── Deep saturated disco spectrum ──',
+    'vec3 discoSpectrum(float t) {',
+    '  vec3 col = vec3(',
+    '    sin(t * TAU) * 0.5 + 0.5,',
+    '    sin(t * TAU + TAU / 3.0) * 0.5 + 0.5,',
+    '    sin(t * TAU + 2.0 * TAU / 3.0) * 0.5 + 0.5',
+    '  );',
+    '  // Push saturation: distance from gray',
+    '  float avg = (col.r + col.g + col.b) / 3.0;',
+    '  col = mix(vec3(avg), col, 1.6);',
+    '  return clamp(col, 0.0, 1.0);',
+    '}',
+    '',
+    '// ── Beat function: sharp exponential pulse at BPM ──',
+    'float beat(float t, float bpm) {',
+    '  float b = fract(t * bpm / 60.0);',
+    '  return exp(-b * 5.0);',
+    '}',
+    '',
+    'float halfBeat(float t, float bpm) {',
+    '  float b = fract(t * bpm / 30.0);',
+    '  return exp(-b * 7.0);',
+    '}',
+    '',
+    '// ── Caustic refraction pattern ──',
+    '// Simulates light focused through an uneven refractive surface',
+    'float caustic(vec2 uv, float t) {',
+    '  float val = 0.0;',
+    '  // Layer multiple displaced sine grids to approximate caustic focusing',
+    '  for (int i = 0; i < 3; i++) {',
+    '    float fi = float(i);',
+    '    float scale = 3.0 + fi * 2.0;',
+    '    float speed = 0.4 + fi * 0.15;',
+    '    vec2 p = uv * scale;',
+    '    p += vec2(',
+    '      sin(t * speed + fi * 1.7) * 0.8,',
+    '      cos(t * speed * 0.7 + fi * 2.3) * 0.8',
+    '    );',
+    '    // Two overlapping sine waves create caustic-like concentrations',
+    '    float wave1 = sin(p.x + sin(p.y + t * speed) * 1.5);',
+    '    float wave2 = sin(p.y + sin(p.x + t * speed * 0.8) * 1.5);',
+    '    float c = pow(abs(wave1 * wave2), 0.6);',
+    '    val += c;',
+    '  }',
+    '  return val / 3.0;',
+    '}',
+    '',
+    '// ── Prismatic beam: a sweeping light refraction with chromatic spread ──',
+    'vec3 prismaticBeam(vec2 uv, vec2 origin, float angle, float t, float width, float chromaticSpread) {',
+    '  vec2 dir = vec2(cos(angle), sin(angle));',
+    '  vec2 perp = vec2(-dir.y, dir.x);',
+    '  vec2 d = uv - origin;',
+    '  float along = dot(d, dir);',
+    '  float across = dot(d, perp);',
+    '',
+    '  // Beam envelope',
+    '  float beamWidth = width + abs(along) * 0.12;',
+    '  float envelope = exp(-across * across / (beamWidth * beamWidth));',
+    '',
+    '  // Fade behind origin, extend forward',
+    '  float forwardMask = smoothstep(-0.05, 0.15, along);',
+    '  float distFade = exp(-along * along * 0.4);',
+    '',
+    '  // Chromatic separation: offset R, G, B perpendicular to beam',
+    '  vec3 col = vec3(0.0);',
+    '  for (int c = 0; c < 5; c++) {',
+    '    float fc = (float(c) - 2.0) / 2.0;',
+    '    float offset = fc * chromaticSpread;',
+    '    float channelBeam = exp(-(across + offset) * (across + offset) / (beamWidth * beamWidth * 0.6));',
+    '    col += discoSpectrum(float(c) / 5.0 + t * 0.02) * channelBeam * 0.35;',
+    '  }',
+    '',
+    '  return col * forwardMask * distFade;',
+    '}',
+    '',
+    'void main() {',
+    '  vec2 uv = (gl_FragCoord.xy - u_res * 0.5) / min(u_res.x, u_res.y);',
+    '  float t = u_time;',
+    '  float intensity = u_intensity;',
+    '',
+    '  // ── Beat timing ──',
+    '  float bpm = u_bpm;',
+    '  float mainBeat = beat(t, bpm);',
+    '  float halfBt = halfBeat(t, bpm);',
+    '  float beatPhase = fract(t * bpm / 60.0);',
+    '',
+    '  // ── Background: near-black with very subtle shifting warmth ──',
+    '  vec3 col = vec3(0.008, 0.004, 0.016);',
+    '  col += vec3(0.01, 0.005, 0.015) * (0.5 + 0.5 * sin(t * 0.15));',
+    '',
+    '  // ── Layer 1: Caustic refraction field ──',
+    '  // Multiple caustic layers with different color offsets for prismatic separation',
+    '  {',
+    '    vec2 cuv = uv;',
+    '    // Slow overall drift',
+    '    cuv += vec2(sin(t * 0.1) * 0.2, cos(t * 0.08) * 0.2);',
+    '',
+    '    // Red channel caustic',
+    '    float cR = caustic(cuv + vec2(0.02, 0.0), t * 0.9);',
+    '    // Green channel caustic (slightly displaced)',
+    '    float cG = caustic(cuv, t);',
+    '    // Blue channel caustic (displaced other way)',
+    '    float cB = caustic(cuv - vec2(0.02, 0.01), t * 1.1);',
+    '',
+    '    vec3 causticCol = vec3(cR, cG, cB);',
+    '    // Boost contrast: dark areas darker, bright areas brighter',
+    '    causticCol = pow(causticCol, vec3(1.8));',
+    '    causticCol *= 0.45 * intensity;',
+    '',
+    '    // Beat-reactive brightness pulse',
+    '    causticCol *= 0.7 + 0.3 * mainBeat;',
+    '',
+    '    col += causticCol;',
+    '  }',
+    '',
+    '  // ── Layer 2: Sweeping prismatic light beams ──',
+    '  // Multiple light sources orbiting off-screen, casting refracted beams across the surface',
+    '  {',
+    '    for (int i = 0; i < 7; i++) {',
+    '      float fi = float(i);',
+    '      // Light source orbits around the edges of the frame',
+    '      float orbitAngle = t * (0.12 + fi * 0.06) + fi * TAU / 7.0;',
+    '      float orbitRadius = 0.9 + 0.3 * sin(t * 0.2 + fi * 1.5);',
+    '      vec2 origin = vec2(cos(orbitAngle), sin(orbitAngle)) * orbitRadius;',
+    '',
+    '      // Beam points roughly toward center but wanders',
+    '      float beamAngle = atan(-origin.y, -origin.x);',
+    '      beamAngle += sin(t * 0.3 + fi * 2.1) * 0.5;',
+    '',
+    '      // Beat-synced angle jitter',
+    '      beamAngle += sin(beatPhase * TAU + fi * 1.7) * 0.08 * mainBeat;',
+    '',
+    '      float width = 0.04 + 0.02 * sin(t * 0.4 + fi);',
+    '      float chromSpread = 0.015 + 0.01 * sin(t * 0.25 + fi * 0.7);',
+    '',
+    '      vec3 beam = prismaticBeam(uv, origin, beamAngle, t + fi * 3.0, width, chromSpread);',
+    '',
+    '      // Each beam pulses at slightly offset beat phase',
+    '      float beamPulse = 0.5 + 0.5 * mainBeat * step(0.4, fract(fi * 0.37 + beatPhase));',
+    '      col += beam * beamPulse * intensity;',
+    '    }',
+    '  }',
+    '',
+    '  // ── Layer 3: Prismatic interference rings ──',
+    '  // Concentric distorted rings like light through a crystal sphere',
+    '  {',
+    '    for (int i = 0; i < 4; i++) {',
+    '      float fi = float(i);',
+    '      // Each ring source at a different slowly-moving position',
+    '      vec2 center = vec2(',
+    '        sin(t * 0.13 + fi * 2.5) * 0.35,',
+    '        cos(t * 0.11 + fi * 1.8) * 0.35',
+    '      );',
+    '',
+    '      float dist = length(uv - center);',
+    '',
+    '      // Multiple concentric rings',
+    '      float ringFreq = 12.0 + fi * 4.0;',
+    '      float ringPhase = dist * ringFreq - t * (1.5 + fi * 0.3);',
+    '',
+    '      // Warped rings: distort with noise for organic feel',
+    '      float warp = noise(uv * 4.0 + t * 0.2 + fi * 10.0) * 2.0;',
+    '      ringPhase += warp;',
+    '',
+    '      float ring = pow(max(sin(ringPhase), 0.0), 6.0);',
+    '',
+    '      // Spectral color varies along the ring circumference',
+    '      float angle = atan(uv.y - center.y, uv.x - center.x);',
+    '      vec3 ringCol = discoSpectrum(angle / TAU + fi * 0.25 + t * 0.03);',
+    '',
+    '      // Distance falloff',
+    '      float falloff = exp(-dist * 2.5);',
+    '',
+    '      // Beat pulse',
+    '      float ringPulse = 0.6 + 0.4 * halfBt;',
+    '',
+    '      col += ringCol * ring * falloff * ringPulse * 0.2 * intensity;',
+    '    }',
+    '  }',
+    '',
+    '  // ── Layer 4: Moire interference from overlapping wave patterns ──',
+    '  {',
+    '    float moire = 0.0;',
+    '    vec3 moireCol = vec3(0.0);',
+    '',
+    '    for (int i = 0; i < 5; i++) {',
+    '      float fi = float(i);',
+    '      float a = fi * TAU / 5.0 + t * 0.08;',
+    '      vec2 dir = vec2(cos(a), sin(a));',
+    '',
+    '      // Each set of parallel waves',
+    '      float freq = 18.0 + fi * 6.0;',
+    '      float wave = sin(dot(uv, dir) * freq + t * (0.8 + fi * 0.2));',
+    '      wave = wave * 0.5 + 0.5; // 0..1',
+    '',
+    '      // Chromatic shift per wave set',
+    '      vec3 waveCol = discoSpectrum(fi / 5.0 + t * 0.015);',
+    '      moireCol += waveCol * wave;',
+    '      moire += wave;',
+    '    }',
+    '',
+    '    // The interference creates bright spots where waves align',
+    '    moire /= 5.0;',
+    '    moireCol /= 5.0;',
+    '',
+    '    // Non-linear contrast to emphasize the constructive interference',
+    '    float moireIntensity = pow(moire, 4.0);',
+    '',
+    '    // Subtle beat reactivity',
+    '    moireIntensity *= 0.7 + 0.3 * mainBeat;',
+    '',
+    '    col += moireCol * moireIntensity * 0.35 * intensity;',
+    '  }',
+    '',
+    '  // ── Layer 5: Bright spectral flares ──',
+    '  // Concentrated points of prismatic light that drift and pulse',
+    '  {',
+    '    for (int i = 0; i < 8; i++) {',
+    '      float fi = float(i);',
+    '      vec2 flarePos = vec2(',
+    '        sin(t * (0.15 + fi * 0.04) + fi * 5.0) * (0.5 + 0.2 * sin(fi * 2.3)),',
+    '        cos(t * (0.12 + fi * 0.05) + fi * 3.7) * (0.4 + 0.2 * cos(fi * 1.9))',
+    '      );',
+    '',
+    '      float d = length(uv - flarePos);',
+    '',
+    '      // Soft glow',
+    '      float glow = exp(-d * d * 40.0);',
+    '',
+    '      // Sharp bright core',
+    '      float core = exp(-d * d * 300.0);',
+    '',
+    '      // Spectral color shifts over time',
+    '      vec3 flareCol = discoSpectrum(fi * 0.125 + t * 0.04);',
+    '',
+    '      // Beat-synced pulsing: different flares fire on different beats',
+    '      float flareBeat = pow(max(sin(beatPhase * TAU + fi * TAU / 8.0), 0.0), 4.0);',
+    '      float pulse = 0.3 + 0.7 * flareBeat * mainBeat;',
+    '',
+    '      col += flareCol * (glow * 0.6 + core * 2.0) * pulse * 0.5 * intensity;',
+    '    }',
+    '  }',
+    '',
+    '  // ── Layer 6: Chromatic aberration streaks ──',
+    '  // Long thin prismatic lines that sweep across, like light through venetian blinds',
+    '  {',
+    '    for (int i = 0; i < 4; i++) {',
+    '      float fi = float(i);',
+    '      float sweepAngle = t * (0.2 + fi * 0.08) + fi * PI / 4.0;',
+    '      vec2 sweepDir = vec2(cos(sweepAngle), sin(sweepAngle));',
+    '      vec2 sweepPerp = vec2(-sweepDir.y, sweepDir.x);',
+    '',
+    '      // Position along the perpendicular: the "slit" location',
+    '      float slitPos = sin(t * (0.3 + fi * 0.1) + fi * 2.0) * 0.6;',
+    '      float across = dot(uv, sweepPerp) - slitPos;',
+    '',
+    '      // Chromatic fan: each color at a slightly different angle',
+    '      for (int c = 0; c < 5; c++) {',
+    '        float fc = (float(c) - 2.0) / 2.0;',
+    '        float offset = fc * 0.012;',
+    '        float slit = exp(-(across + offset) * (across + offset) * 800.0);',
+    '        vec3 slitCol = spectrum(float(c) / 5.0 + fi * 0.2);',
+    '        float slitPulse = 0.4 + 0.6 * pow(mainBeat, 0.7);',
+    '        col += slitCol * slit * slitPulse * 0.15 * intensity;',
+    '      }',
+    '    }',
+    '  }',
+    '',
+    '  // ── Global beat flash ──',
+    '  float globalFlash = pow(mainBeat, 4.0) * 0.06;',
+    '  col += vec3(globalFlash) * discoSpectrum(t * 0.025);',
+    '',
+    '  // ── Tone mapping ──',
+    '  // Filmic curve: preserves bright prismatic peaks without harsh clipping',
+    '  col = col / (1.0 + col * 0.3);',
+    '',
+    '  // Slight contrast and saturation boost for glamour',
+    '  col = pow(max(col, vec3(0.0)), vec3(0.88));',
+    '',
+    '  // ── Vignette ──',
+    '  float vig = 1.0 - dot(uv, uv) * 0.35;',
+    '  col *= max(vig, 0.0);',
+    '',
+    '  gl_FragColor = vec4(col, 1.0);',
+    '}'
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error('Shader compile error:', gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error('Program link error:', gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uBpm = gl.getUniformLocation(prog, 'u_bpm');
+  var uIntensity = gl.getUniformLocation(prog, 'u_intensity');
+
+  var bpmVal = 120.0;
+  var intensityVal = 1.0;
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2) * pixelScale;
+
+  function resize() {
+    var w = Math.round(canvas.clientWidth * dpr);
+    var h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  function render(now) {
+    resize();
+    gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uBpm, bpmVal);
+    gl.uniform1f(uIntensity, intensityVal);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  // ── PostMessage listener for parameter updates ──
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'BPM': bpmVal = e.data.value; break;
+        case 'INTENSITY': intensityVal = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

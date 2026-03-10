@@ -1,6 +1,28 @@
 <script lang="ts">
-	import { shaders } from '$lib/shaders';
+	import { shaders, tagLabels, type ShaderTag } from '$lib/shaders';
 	import ShaderCard from '$lib/components/ShaderCard.svelte';
+
+	let activeTags: Set<ShaderTag> = $state(new Set());
+
+	const allTags = $derived(
+		Object.keys(tagLabels) as ShaderTag[]
+	);
+
+	const filteredShaders = $derived(
+		activeTags.size === 0
+			? shaders
+			: shaders.filter((s) => s.tags.some((t) => activeTags.has(t)))
+	);
+
+	function toggleTag(tag: ShaderTag) {
+		const next = new Set(activeTags);
+		if (next.has(tag)) {
+			next.delete(tag);
+		} else {
+			next.add(tag);
+		}
+		activeTags = next;
+	}
 </script>
 
 <svelte:head>
@@ -8,20 +30,45 @@
 </svelte:head>
 
 <header>
-	<h1>Shaders</h1>
-	<p>A collection of canvas-based generative animations. Click to explore, configure, and download.</p>
+	<div class="header-top">
+		<h1>Shaders</h1>
+		<p>A collection of canvas-based generative animations. Click to explore, configure, and download.</p>
+	</div>
+	<div class="filters">
+		{#each allTags as tag}
+			<button
+				class="filter-btn"
+				class:active={activeTags.has(tag)}
+				onclick={() => toggleTag(tag)}
+			>
+				{tagLabels[tag]}
+			</button>
+		{/each}
+		{#if activeTags.size > 0}
+			<button class="filter-btn clear-btn" onclick={() => (activeTags = new Set())}>
+				Clear
+			</button>
+		{/if}
+	</div>
 </header>
 
 <div class="grid">
-	{#each shaders as shader (shader.id)}
+	{#each filteredShaders as shader (shader.id)}
 		<ShaderCard {shader} />
 	{/each}
 </div>
+
+{#if filteredShaders.length === 0}
+	<div class="empty">No shaders match the selected filters.</div>
+{/if}
 
 <style>
 	header {
 		padding: 2rem 3rem;
 		border-bottom: 1px solid rgba(200, 149, 108, 0.15);
+		display: flex;
+		flex-direction: column;
+		gap: 1.25rem;
 	}
 	header h1 {
 		font-size: 1.5rem;
@@ -34,10 +81,56 @@
 		font-size: 0.85rem;
 		color: rgba(232, 224, 216, 0.5);
 	}
+
+	/* Filter bar */
+	.filters {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.35rem;
+	}
+	.filter-btn {
+		padding: 0.35rem 0.7rem;
+		font-size: 0.7rem;
+		font-family: inherit;
+		letter-spacing: 0.03em;
+		color: rgba(232, 224, 216, 0.5);
+		background: transparent;
+		border: 1px solid rgba(200, 149, 108, 0.12);
+		border-radius: 100px;
+		cursor: pointer;
+		transition:
+			border-color 0.2s,
+			color 0.2s,
+			background 0.2s;
+	}
+	.filter-btn:hover {
+		border-color: rgba(200, 149, 108, 0.35);
+		color: #e8e0d8;
+	}
+	.filter-btn.active {
+		border-color: rgba(200, 149, 108, 0.6);
+		color: #c8956c;
+		background: rgba(200, 149, 108, 0.08);
+	}
+	.clear-btn {
+		color: rgba(232, 224, 216, 0.3);
+		border-color: transparent;
+	}
+	.clear-btn:hover {
+		color: rgba(232, 224, 216, 0.6);
+	}
+
 	.grid {
 		display: grid;
 		grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
 		gap: 1.5rem;
 		padding: 2rem 3rem;
+	}
+
+	.empty {
+		text-align: center;
+		padding: 4rem 2rem;
+		color: rgba(232, 224, 216, 0.3);
+		font-size: 0.9rem;
 	}
 </style>

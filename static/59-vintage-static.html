@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vintage Static</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">59 — Vintage Static</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// 59 · Vintage Static — Retro TV color bars melting into warm interference
+// ─────────────────────────────────────────────
+(function() {
+  var canvas = document.getElementById('canvas');
+  var ctx = canvas.getContext('2d');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var _pad = parseFloat(new URLSearchParams(location.search).get('p')) || 1;
+
+  // Tunable parameters
+  let GLITCH_INTENSITY = 0.5;
+  let MELT_SPEED = 0.5;
+
+  var width, height, dpr;
+
+  function resize() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    canvas.style.width = width + 'px';
+    canvas.style.height = height + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
+  window.addEventListener('resize', resize);
+  resize();
+
+  // ── Warm color bar palette ──
+  var barColors = [
+    [240, 235, 220],  // warm white
+    [210, 170, 60],   // gold
+    [60, 185, 160],   // warm teal
+    [80, 165, 60],    // warm green
+    [185, 60, 140],   // warm magenta
+    [200, 60, 55],    // warm red
+    [45, 60, 170],    // warm blue
+    [200, 149, 108]   // amber accent
+  ];
+
+  // ── Noise / random helpers ──
+  var seed = 42;
+  function fastRand() {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    return seed / 0x7fffffff;
+  }
+
+  function hash(x) {
+    var s = Math.sin(x * 127.1 + 311.7) * 43758.5453;
+    return s - Math.floor(s);
+  }
+
+  function smoothNoise(x) {
+    var ix = Math.floor(x);
+    var fx = x - ix;
+    fx = fx * fx * (3.0 - 2.0 * fx);
+    return hash(ix) * (1.0 - fx) + hash(ix + 1) * fx;
+  }
+
+  // ── Melt state ──
+  // Each column tracks how far it has melted
+  var meltColumns = [];
+  var meltColumnCount = 0;
+  var meltCycleTime = 0;
+  var MELT_CYCLE_DURATION = 8; // seconds before bars reform
+
+  function initMelt() {
+    meltColumnCount = Math.ceil(width / 2) + 1;
+    meltColumns = new Array(meltColumnCount);
+    for (var i = 0; i < meltColumnCount; i++) {
+      meltColumns[i] = 0;
+    }
+  }
+
+  initMelt();
+  window.addEventListener('resize', function() {
+    resize();
+    initMelt();
+  });
+
+  // ── Off-screen buffer for the bar image that melts ──
+  var barBuffer = document.createElement('canvas');
+  var barCtx = barBuffer.getContext('2d');
+
+  function renderBars() {
+    barBuffer.width = canvas.width;
+    barBuffer.height = canvas.height;
+    barCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    var numBars = barColors.length;
+    var barWidth = width / numBars;
+
+    for (var i = 0; i < numBars; i++) {
+      var c = barColors[i];
+      barCtx.fillStyle = 'rgb(' + c[0] + ',' + c[1] + ',' + c[2] + ')';
+      barCtx.fillRect(Math.floor(i * barWidth), 0, Math.ceil(barWidth) + 1, height);
+    }
+  }
+
+  // ── Draw melting bars ──
+  function drawMeltedBars(time, cycleT) {
+    var numBars = barColors.length;
+    var barWidth = width / numBars;
+
+    // Melt progress: 0 = bars intact, 1 = fully melted
+    // cycleT goes 0..1 over MELT_CYCLE_DURATION
+    var meltProgress = Math.min(cycleT * MELT_SPEED * 2, 1.0);
+
+    // Reform phase: bars snap back at the end
+    var reforming = cycleT > 0.85;
+    var reformT = reforming ? (cycleT - 0.85) / 0.15 : 0;
+    reformT = reformT * reformT * (3 - 2 * reformT); // smooth
+
+    if (reforming) {
+      meltProgress = meltProgress * (1 - reformT);
+    }
+
+    for (var i = 0; i < numBars; i++) {
+      var c = barColors[i];
+      var x = Math.floor(i * barWidth);
+      var w = Math.ceil(barWidth) + 1;
+
+      // Each bar melts at slightly different rate
+      var barMeltOffset = smoothNoise(i * 3.7 + time * 0.3) * 0.3;
+      var barMelt = Math.min(Math.max(meltProgress + barMeltOffset - 0.15, 0), 1);
+
+      // Draw the bar in vertical slices that drip
+      var sliceWidth = 3;
+      var numSlices = Math.ceil(w / sliceWidth);
+
+      for (var s = 0; s < numSlices; s++) {
+        var sx = x + s * sliceWidth;
+        var sliceSeed = i * 100 + s;
+
+        // Each slice drips at its own rate
+        var dripAmount = barMelt * height * (0.3 + smoothNoise(sliceSeed * 1.7 + time * MELT_SPEED * 0.5) * 0.7);
+        var dripStretch = 1 + barMelt * (0.5 + smoothNoise(sliceSeed * 2.3) * 1.5);
+
+        // Color shifts slightly as it melts
+        var heatShift = barMelt * 0.3;
+        var r = Math.min(255, c[0] + heatShift * 30);
+        var g = Math.max(0, c[1] - heatShift * 20);
+        var b = Math.max(0, c[2] - heatShift * 15);
+
+        // Draw the dripping slice
+        var sliceHeight = height * dripStretch;
+        var yOffset = dripAmount;
+
+        // Main drip body
+        ctx.fillStyle = 'rgb(' + Math.round(r) + ',' + Math.round(g) + ',' + Math.round(b) + ')';
+        ctx.globalAlpha = 1 - barMelt * 0.3;
+        ctx.fillRect(sx, yOffset, sliceWidth, sliceHeight);
+
+        // Drip tip — paint-like blob at the bottom
+        if (barMelt > 0.1) {
+          var tipY = yOffset + sliceHeight;
+          var tipSize = barMelt * 8 * (0.5 + smoothNoise(sliceSeed * 3.1 + time) * 0.5);
+          ctx.beginPath();
+          ctx.ellipse(sx + sliceWidth / 2, tipY, sliceWidth * 0.6, tipSize, 0, 0, Math.PI * 2);
+          ctx.globalAlpha = 0.7 - barMelt * 0.3;
+          ctx.fill();
+        }
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ── Scan lines ──
+  function drawScanLines(time) {
+    // Persistent scan line pattern
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.08)';
+    for (var y = 0; y < height; y += 3) {
+      ctx.fillRect(0, y, width, 1);
+    }
+
+    // Rolling scan line (bright band that moves down)
+    var rollSpeed = 0.15;
+    var rollY = ((time * rollSpeed * height) % (height * 1.4)) - height * 0.2;
+    var rollHeight = 40 + Math.sin(time * 2) * 20;
+
+    var rollGrad = ctx.createLinearGradient(0, rollY - rollHeight, 0, rollY + rollHeight);
+    rollGrad.addColorStop(0, 'rgba(200, 180, 150, 0)');
+    rollGrad.addColorStop(0.3, 'rgba(200, 180, 150, 0.04)');
+    rollGrad.addColorStop(0.5, 'rgba(255, 240, 210, 0.07)');
+    rollGrad.addColorStop(0.7, 'rgba(200, 180, 150, 0.04)');
+    rollGrad.addColorStop(1, 'rgba(200, 180, 150, 0)');
+    ctx.fillStyle = rollGrad;
+    ctx.fillRect(0, rollY - rollHeight, width, rollHeight * 2);
+
+    // Second dimmer rolling line
+    var roll2Y = ((time * rollSpeed * 0.7 * height + height * 0.6) % (height * 1.4)) - height * 0.2;
+    var roll2Grad = ctx.createLinearGradient(0, roll2Y - 15, 0, roll2Y + 15);
+    roll2Grad.addColorStop(0, 'rgba(180, 160, 130, 0)');
+    roll2Grad.addColorStop(0.5, 'rgba(180, 160, 130, 0.03)');
+    roll2Grad.addColorStop(1, 'rgba(180, 160, 130, 0)');
+    ctx.fillStyle = roll2Grad;
+    ctx.fillRect(0, roll2Y - 15, width, 30);
+  }
+
+  // ── VHS tracking glitch ──
+  function drawTrackingGlitch(time) {
+    var glitchChance = GLITCH_INTENSITY * 0.15;
+
+    // Sporadic horizontal displacement
+    seed = Math.floor(time * 30) * 7919;
+    for (var g = 0; g < 5; g++) {
+      if (fastRand() > glitchChance) continue;
+
+      var gy = Math.floor(fastRand() * height);
+      var gh = 2 + Math.floor(fastRand() * 15 * GLITCH_INTENSITY);
+      var gx = (fastRand() - 0.5) * 40 * GLITCH_INTENSITY;
+
+      // Grab a horizontal strip and shift it
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, gy, width, gh);
+      ctx.clip();
+      ctx.drawImage(canvas, gx, 0);
+
+      // Chromatic split on the glitch band
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = 0.15 * GLITCH_INTENSITY;
+      ctx.fillStyle = 'rgba(200, 80, 60, 0.5)';
+      ctx.fillRect(gx + 2, gy, width, gh);
+      ctx.fillStyle = 'rgba(60, 150, 200, 0.5)';
+      ctx.fillRect(gx - 2, gy, width, gh);
+      ctx.restore();
+    }
+
+    // Occasional large tracking tear
+    seed = Math.floor(time * 3) * 1321;
+    if (fastRand() < GLITCH_INTENSITY * 0.08) {
+      var tearY = fastRand() * height;
+      var tearH = 20 + fastRand() * 60 * GLITCH_INTENSITY;
+      var tearShift = (fastRand() - 0.5) * width * 0.3 * GLITCH_INTENSITY;
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, tearY, width, tearH);
+      ctx.clip();
+      ctx.drawImage(canvas, tearShift, 0);
+      ctx.restore();
+    }
+  }
+
+  // ── Static / snow overlay ──
+  function drawStatic(time) {
+    var imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    var data = imgData.data;
+
+    // Only process a subset of pixels for performance
+    var density = 0.03 * GLITCH_INTENSITY;
+    seed = Math.floor(time * 60) * 9973;
+
+    var totalPixels = canvas.width * canvas.height;
+    var step = Math.max(1, Math.floor(1 / density));
+
+    for (var p = 0; p < totalPixels; p += step) {
+      // Pseudo-random selection using fast LCG
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      var idx = ((seed % totalPixels) | 0) * 4;
+
+      // Random static brightness — warm-tinted
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      var brightness = (seed & 0xff);
+
+      // Warm tint the static
+      data[idx] = Math.min(255, data[idx] + brightness);
+      data[idx + 1] = Math.min(255, data[idx + 1] + Math.floor(brightness * 0.85));
+      data[idx + 2] = Math.min(255, data[idx + 2] + Math.floor(brightness * 0.7));
+    }
+
+    ctx.putImageData(imgData, 0, 0);
+  }
+
+  // ── Chromatic aberration burst ──
+  var lastAberrationTime = 0;
+  var aberrationDuration = 0;
+  var aberrationActive = false;
+
+  function drawChromaticAberration(time) {
+    // Trigger occasional bursts
+    seed = Math.floor(time * 2) * 4973;
+    if (!aberrationActive && fastRand() < GLITCH_INTENSITY * 0.03) {
+      aberrationActive = true;
+      lastAberrationTime = time;
+      aberrationDuration = 0.1 + fastRand() * 0.3;
+    }
+
+    if (aberrationActive) {
+      var elapsed = time - lastAberrationTime;
+      if (elapsed > aberrationDuration) {
+        aberrationActive = false;
+        return;
+      }
+
+      var intensity = Math.sin((elapsed / aberrationDuration) * Math.PI) * GLITCH_INTENSITY;
+      var offset = intensity * 8;
+
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = intensity * 0.15;
+
+      // Red channel shift
+      ctx.drawImage(canvas, offset, 0);
+
+      // Cyan channel shift opposite
+      ctx.drawImage(canvas, -offset, 0);
+
+      ctx.restore();
+    }
+  }
+
+  // ── CRT barrel distortion + vignette ──
+  function drawCRTEffect(time) {
+    // CRT curvature via vignette darkening at edges
+    var cx = width / 2;
+    var cy = height / 2;
+    var maxDist = Math.sqrt(cx * cx + cy * cy);
+
+    // Corner darkening (simulates barrel curvature)
+    var vigGrad = ctx.createRadialGradient(cx, cy, maxDist * 0.4, cx, cy, maxDist * 1.1);
+    vigGrad.addColorStop(0, 'rgba(0, 0, 0, 0)');
+    vigGrad.addColorStop(0.6, 'rgba(0, 0, 0, 0.05)');
+    vigGrad.addColorStop(0.8, 'rgba(0, 0, 0, 0.2)');
+    vigGrad.addColorStop(0.95, 'rgba(0, 0, 0, 0.5)');
+    vigGrad.addColorStop(1, 'rgba(0, 0, 0, 0.8)');
+    ctx.fillStyle = vigGrad;
+    ctx.fillRect(0, 0, width, height);
+
+    // Edge curvature — darken edges more strongly (top/bottom/left/right)
+    // Top edge curve
+    var edgeGrad = ctx.createLinearGradient(0, 0, 0, height * 0.04);
+    edgeGrad.addColorStop(0, 'rgba(0, 0, 0, 0.7)');
+    edgeGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    ctx.fillStyle = edgeGrad;
+    ctx.fillRect(0, 0, width, height * 0.04);
+
+    // Bottom edge curve
+    edgeGrad = ctx.createLinearGradient(0, height, 0, height * 0.96);
+    edgeGrad.addColorStop(0, 'rgba(0, 0, 0, 0.7)');
+    edgeGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    ctx.fillStyle = edgeGrad;
+    ctx.fillRect(0, height * 0.96, width, height * 0.04);
+
+    // Left edge curve
+    edgeGrad = ctx.createLinearGradient(0, 0, width * 0.03, 0);
+    edgeGrad.addColorStop(0, 'rgba(0, 0, 0, 0.6)');
+    edgeGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    ctx.fillStyle = edgeGrad;
+    ctx.fillRect(0, 0, width * 0.03, height);
+
+    // Right edge curve
+    edgeGrad = ctx.createLinearGradient(width, 0, width * 0.97, 0);
+    edgeGrad.addColorStop(0, 'rgba(0, 0, 0, 0.6)');
+    edgeGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    ctx.fillStyle = edgeGrad;
+    ctx.fillRect(width * 0.97, 0, width * 0.03, height);
+
+    // Subtle screen glow — warm phosphor tint
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = 0.02;
+    ctx.fillStyle = 'rgba(200, 160, 100, 1)';
+    ctx.fillRect(0, 0, width, height);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+  }
+
+  // ── Phosphor dot pattern ──
+  function drawPhosphorDots(time) {
+    // Subtle RGB phosphor column pattern
+    ctx.globalAlpha = 0.04;
+    ctx.globalCompositeOperation = 'lighter';
+    for (var px = 0; px < width; px += 3) {
+      var colIdx = px % 9;
+      if (colIdx < 3) {
+        ctx.fillStyle = 'rgba(255, 80, 60, 1)';
+      } else if (colIdx < 6) {
+        ctx.fillStyle = 'rgba(80, 255, 80, 1)';
+      } else {
+        ctx.fillStyle = 'rgba(60, 80, 255, 1)';
+      }
+      ctx.fillRect(px, 0, 1, height);
+    }
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+  }
+
+  // ── Main render loop ──
+  var startTime = null;
+  var running = true;
+
+  function render(timestamp) {
+    if (!running) {
+      requestAnimationFrame(render);
+      return;
+    }
+
+    if (!startTime) startTime = timestamp;
+    var time = prefersReduced ? 0 : (timestamp - startTime) / 1000;
+
+    // Melt cycle tracking
+    var cycleT = (time * MELT_SPEED * 0.15) % 1.0;
+
+    // Clear
+    ctx.fillStyle = '#0a0a0a';
+    ctx.fillRect(0, 0, width, height);
+
+    // Draw melting color bars
+    drawMeltedBars(time, cycleT);
+
+    // Scan lines
+    drawScanLines(time);
+
+    // VHS tracking glitch
+    drawTrackingGlitch(time);
+
+    // Static snow
+    drawStatic(time);
+
+    // Chromatic aberration burst
+    drawChromaticAberration(time);
+
+    // Phosphor dots
+    drawPhosphorDots(time);
+
+    // CRT curvature + vignette
+    drawCRTEffect(time);
+
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  // ── Visibility handling ──
+  document.addEventListener('visibilitychange', function() {
+    if (document.hidden) {
+      running = false;
+    } else {
+      running = true;
+      startTime = null;
+    }
+  });
+
+  // ── PostMessage param listener ──
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'GLITCH_INTENSITY': GLITCH_INTENSITY = e.data.value; break;
+        case 'MELT_SPEED': MELT_SPEED = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

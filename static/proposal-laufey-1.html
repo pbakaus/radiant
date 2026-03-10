@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Resonant Strings</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Resonant Strings</div>
+<canvas id="canvas"></canvas>
+<script>
+(function() {
+  var canvas = document.getElementById('canvas');
+  var ctx = canvas.getContext('2d');
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+  var W, H;
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var HARMONIC_COUNT = 5;
+  var VIBRATION_SPEED = 1.0;
+
+  var NUM_STRINGS = 7;
+  var time = 0;
+  var running = true;
+
+  // Rosin dust particles
+  var particles = [];
+  var MAX_PARTICLES = 200;
+
+  function resize() {
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = W * dpr;
+    canvas.height = H * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // Warm palette
+  var colors = [
+    { r: 200, g: 149, b: 108 },
+    { r: 212, g: 165, b: 116 },
+    { r: 224, g: 180, b: 140 },
+    { r: 190, g: 140, b: 100 },
+    { r: 230, g: 190, b: 150 },
+    { r: 210, g: 160, b: 120 },
+    { r: 180, g: 140, b: 110 }
+  ];
+
+  // Each string has properties
+  var strings = [];
+  for (var i = 0; i < NUM_STRINGS; i++) {
+    strings.push({
+      x: W * (0.12 + i * 0.76 / (NUM_STRINGS - 1)),
+      color: colors[i % colors.length],
+      baseFreq: 0.8 + i * 0.15,
+      phase: i * 0.7,
+      thickness: 1.8 - i * 0.12
+    });
+  }
+
+  function getStringX(s) {
+    return W * (0.12 + s * 0.76 / (NUM_STRINGS - 1));
+  }
+
+  // Harmonic envelope — modes fade in and out
+  function harmonicAmp(mode, t) {
+    var period = 8.0 + mode * 2.5;
+    var phase = mode * 1.3;
+    var env = Math.sin(t * 0.15 / period + phase) * 0.5 + 0.5;
+    env = Math.pow(env, 1.5);
+    // Higher modes have less base amplitude
+    var baseAmp = 1.0 / (1.0 + mode * 0.4);
+    return baseAmp * env;
+  }
+
+  // Calculate displacement of a string at position along its length
+  function stringDisplacement(stringIdx, yNorm, t) {
+    var s = strings[stringIdx];
+    var disp = 0;
+    for (var n = 1; n <= HARMONIC_COUNT; n++) {
+      var amp = harmonicAmp(n, t) * (12 + 5 * Math.sin(stringIdx * 0.5));
+      var omega = s.baseFreq * n * 2.0 * VIBRATION_SPEED;
+      disp += amp * Math.sin(n * Math.PI * yNorm) * Math.cos(omega * t + s.phase * n);
+    }
+    return disp;
+  }
+
+  function spawnParticle(x, y, intensity) {
+    if (particles.length >= MAX_PARTICLES) return;
+    particles.push({
+      x: x + (Math.random() - 0.5) * 6,
+      y: y,
+      vx: (Math.random() - 0.5) * 0.3,
+      vy: (Math.random() - 0.5) * 0.2 - 0.1,
+      life: 1.0,
+      decay: 0.005 + Math.random() * 0.01,
+      size: 0.5 + Math.random() * 1.5,
+      intensity: intensity
+    });
+  }
+
+  function render(now) {
+    if (!running) return;
+    if (prefersReduced) {
+      ctx.fillStyle = '#0a0a0a';
+      ctx.fillRect(0, 0, W, H);
+      requestAnimationFrame(render);
+      return;
+    }
+
+    time = now * 0.001;
+
+    // Update string positions on resize
+    for (var si = 0; si < NUM_STRINGS; si++) {
+      strings[si].x = getStringX(si);
+    }
+
+    // Clear with slight fade for subtle trailing
+    ctx.fillStyle = 'rgba(10, 10, 10, 0.15)';
+    ctx.fillRect(0, 0, W, H);
+
+    var margin = H * 0.08;
+    var stringLen = H - margin * 2;
+
+    // Draw resonance connections between strings at harmonic nodes
+    ctx.globalCompositeOperation = 'lighter';
+    for (var n = 1; n <= HARMONIC_COUNT; n++) {
+      var amp = harmonicAmp(n, time);
+      if (amp < 0.1) continue;
+      // Nodes are at y = k/n for k = 0..n
+      for (var k = 1; k < n; k++) {
+        var nodeY = margin + (k / n) * stringLen;
+        for (var si = 0; si < NUM_STRINGS - 1; si++) {
+          var x1 = strings[si].x;
+          var x2 = strings[si + 1].x;
+          var alpha = amp * 0.04;
+          ctx.beginPath();
+          ctx.moveTo(x1, nodeY);
+          ctx.lineTo(x2, nodeY);
+          ctx.strokeStyle = 'rgba(200, 149, 108, ' + alpha + ')';
+          ctx.lineWidth = 0.5;
+          ctx.stroke();
+        }
+      }
+    }
+
+    // Draw each string
+    var SEGMENTS = 200;
+    for (var si = 0; si < NUM_STRINGS; si++) {
+      var s = strings[si];
+      var col = s.color;
+
+      // Glow pass
+      ctx.beginPath();
+      for (var j = 0; j <= SEGMENTS; j++) {
+        var yNorm = j / SEGMENTS;
+        var y = margin + yNorm * stringLen;
+        var dx = stringDisplacement(si, yNorm, time);
+        if (j === 0) ctx.moveTo(s.x + dx, y);
+        else ctx.lineTo(s.x + dx, y);
+      }
+      ctx.strokeStyle = 'rgba(' + col.r + ',' + col.g + ',' + col.b + ', 0.08)';
+      ctx.lineWidth = 8;
+      ctx.lineCap = 'round';
+      ctx.stroke();
+
+      // Medium glow
+      ctx.beginPath();
+      for (var j = 0; j <= SEGMENTS; j++) {
+        var yNorm = j / SEGMENTS;
+        var y = margin + yNorm * stringLen;
+        var dx = stringDisplacement(si, yNorm, time);
+        if (j === 0) ctx.moveTo(s.x + dx, y);
+        else ctx.lineTo(s.x + dx, y);
+      }
+      ctx.strokeStyle = 'rgba(' + col.r + ',' + col.g + ',' + col.b + ', 0.2)';
+      ctx.lineWidth = 3;
+      ctx.stroke();
+
+      // Core string
+      ctx.beginPath();
+      for (var j = 0; j <= SEGMENTS; j++) {
+        var yNorm = j / SEGMENTS;
+        var y = margin + yNorm * stringLen;
+        var dx = stringDisplacement(si, yNorm, time);
+        if (j === 0) ctx.moveTo(s.x + dx, y);
+        else ctx.lineTo(s.x + dx, y);
+      }
+      ctx.strokeStyle = 'rgba(' + Math.min(255, col.r + 40) + ',' + Math.min(255, col.g + 40) + ',' + Math.min(255, col.b + 30) + ', 0.7)';
+      ctx.lineWidth = s.thickness;
+      ctx.stroke();
+
+      // Antinode highlights — bright spots at maximum amplitude
+      for (var j = 0; j <= SEGMENTS; j += 4) {
+        var yNorm = j / SEGMENTS;
+        var y = margin + yNorm * stringLen;
+        var dx = stringDisplacement(si, yNorm, time);
+        var absDx = Math.abs(dx);
+        if (absDx > 6) {
+          var brightness = Math.min(1, (absDx - 6) / 15);
+          var r = 2 + brightness * 4;
+          var grad = ctx.createRadialGradient(s.x + dx, y, 0, s.x + dx, y, r);
+          grad.addColorStop(0, 'rgba(' + Math.min(255, col.r + 60) + ',' + Math.min(255, col.g + 60) + ',' + Math.min(255, col.b + 40) + ',' + (brightness * 0.4) + ')');
+          grad.addColorStop(1, 'rgba(' + col.r + ',' + col.g + ',' + col.b + ', 0)');
+          ctx.beginPath();
+          ctx.arc(s.x + dx, y, r, 0, Math.PI * 2);
+          ctx.fillStyle = grad;
+          ctx.fill();
+
+          // Spawn rosin dust
+          if (Math.random() < brightness * 0.03) {
+            spawnParticle(s.x + dx, y, brightness);
+          }
+        }
+      }
+
+      // Bridge and nut markers
+      ctx.beginPath();
+      ctx.arc(s.x, margin, 2.5, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(200, 149, 108, 0.4)';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(s.x, margin + stringLen, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Update and draw particles
+    for (var i = particles.length - 1; i >= 0; i--) {
+      var p = particles[i];
+      p.x += p.vx;
+      p.y += p.vy;
+      p.vy += 0.005; // gentle gravity
+      p.life -= p.decay;
+      if (p.life <= 0) {
+        particles.splice(i, 1);
+        continue;
+      }
+      var alpha = p.life * p.intensity * 0.5;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(220, 180, 140, ' + alpha + ')';
+      ctx.fill();
+    }
+
+    ctx.globalCompositeOperation = 'source-over';
+
+    // Vignette
+    var vGrad = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.3, W / 2, H / 2, Math.max(W, H) * 0.75);
+    vGrad.addColorStop(0, 'rgba(10, 10, 10, 0)');
+    vGrad.addColorStop(1, 'rgba(10, 10, 10, 0.5)');
+    ctx.fillStyle = vGrad;
+    ctx.fillRect(0, 0, W, H);
+
+    requestAnimationFrame(render);
+  }
+
+  ctx.fillStyle = '#0a0a0a';
+  ctx.fillRect(0, 0, W, H);
+  requestAnimationFrame(render);
+
+  document.addEventListener('visibilitychange', function() {
+    if (document.hidden) {
+      running = false;
+    } else {
+      running = true;
+      requestAnimationFrame(render);
+    }
+  });
+
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'HARMONIC_COUNT': HARMONIC_COUNT = Math.round(e.data.value); break;
+        case 'VIBRATION_SPEED': VIBRATION_SPEED = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

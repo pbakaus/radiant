@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rain Window</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Rain Window</div>
+<canvas id="canvas"></canvas>
+<script>
+(function() {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var gl = canvas.getContext('webgl', { alpha: false, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  var vertSrc = 'attribute vec2 a_pos; void main(){gl_Position=vec4(a_pos,0,1);}';
+
+  var fragSrc = [
+    'precision highp float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform float u_dropRate;',
+    'uniform float u_blur;',
+    '',
+    'float hash(vec2 p){',
+    '  vec3 p3=fract(vec3(p.xyx)*vec3(.1031,.1030,.0973));',
+    '  p3+=dot(p3,p3.yzx+33.33);',
+    '  return fract((p3.x+p3.y)*p3.z);',
+    '}',
+    '',
+    'float hash1(float n){ return fract(sin(n)*43758.5453); }',
+    '',
+    '// Simplex-like noise',
+    'vec3 mod289(vec3 x){return x-floor(x*(1.0/289.0))*289.0;}',
+    'vec2 mod289v(vec2 x){return x-floor(x*(1.0/289.0))*289.0;}',
+    'vec3 permute(vec3 x){return mod289(((x*34.0)+1.0)*x);}',
+    'float snoise(vec2 v){',
+    '  const vec4 C=vec4(0.211324865405187,0.366025403784439,-0.577350269189626,0.024390243902439);',
+    '  vec2 i=floor(v+dot(v,C.yy));',
+    '  vec2 x0=v-i+dot(i,C.xx);',
+    '  vec2 i1=(x0.x>x0.y)?vec2(1,0):vec2(0,1);',
+    '  vec4 x12=x0.xyxy+C.xxzz; x12.xy-=i1;',
+    '  i=mod289v(i);',
+    '  vec3 p=permute(permute(i.y+vec3(0,i1.y,1))+i.x+vec3(0,i1.x,1));',
+    '  vec3 m=max(0.5-vec3(dot(x0,x0),dot(x12.xy,x12.xy),dot(x12.zw,x12.zw)),0.0);',
+    '  m=m*m; m=m*m;',
+    '  vec3 x=2.0*fract(p*C.www)-1.0;',
+    '  vec3 h=abs(x)-0.5;',
+    '  vec3 ox=floor(x+0.5);',
+    '  vec3 a0=x-ox;',
+    '  m*=1.79284291400159-0.85373472095314*(a0*a0+h*h);',
+    '  vec3 g;',
+    '  g.x=a0.x*x0.x+h.x*x0.y;',
+    '  g.yz=a0.yz*x12.xz+h.yz*x12.yw;',
+    '  return 130.0*dot(m,g);',
+    '}',
+    '',
+    '// Warm bokeh background - soft circles of light',
+    'vec3 bokeh(vec2 uv, float t){',
+    '  vec3 col=vec3(0.02,0.018,0.015);',
+    '  for(int i=0;i<20;i++){',
+    '    float fi=float(i);',
+    '    float seed=fi*7.13;',
+    '    vec2 pos=vec2(hash(vec2(seed,1.0))*2.0-1.0, hash(vec2(seed,2.0))*2.0-1.0);',
+    '    pos+=vec2(sin(t*0.03+seed)*0.02, cos(t*0.02+seed*1.3)*0.02);',
+    '    float r=0.04+hash(vec2(seed,3.0))*0.12;',
+    '    float d=length(uv-pos);',
+    '    float brightness=smoothstep(r,r*0.1,d);',
+    '    float pulse=0.7+0.3*sin(t*0.2+seed*2.0);',
+    '    vec3 warmth=mix(',
+    '      vec3(0.78,0.58,0.24),',
+    '      vec3(0.95,0.75,0.45),',
+    '      hash(vec2(seed,4.0))',
+    '    );',
+    '    col+=warmth*brightness*pulse*(0.15+hash(vec2(seed,5.0))*0.2);',
+    '  }',
+    '  // Smaller dimmer lights',
+    '  for(int i=0;i<30;i++){',
+    '    float fi=float(i);',
+    '    float seed=fi*13.37+100.0;',
+    '    vec2 pos=vec2(hash(vec2(seed,1.0))*2.2-1.1, hash(vec2(seed,2.0))*2.2-1.1);',
+    '    pos+=vec2(sin(t*0.02+seed)*0.01, cos(t*0.03+seed)*0.01);',
+    '    float r=0.01+hash(vec2(seed,3.0))*0.04;',
+    '    float d=length(uv-pos);',
+    '    float brightness=smoothstep(r,0.0,d);',
+    '    vec3 warmth=mix(vec3(0.6,0.45,0.2),vec3(0.9,0.7,0.4),hash(vec2(seed,4.0)));',
+    '    col+=warmth*brightness*0.06;',
+    '  }',
+    '  return col;',
+    '}',
+    '',
+    '// Single raindrop shape with trail',
+    'float drop(vec2 uv, vec2 pos, float size, float trail){',
+    '  // Main drop (slightly elongated vertically)',
+    '  vec2 d=uv-pos;',
+    '  d.y*=0.7;',
+    '  float main=smoothstep(size,size*0.2,length(d));',
+    '  // Trail above the drop',
+    '  float trailMask=smoothstep(0.0,trail,uv.y-pos.y)*smoothstep(trail*1.5,trail*0.3,uv.y-pos.y);',
+    '  float trailWidth=size*0.3;',
+    '  float trailShape=smoothstep(trailWidth,0.0,abs(uv.x-pos.x))*trailMask;',
+    '  // Trail wobble',
+    '  float wobble=sin((uv.y-pos.y)*60.0+pos.x*20.0)*size*0.15;',
+    '  float trailWobbled=smoothstep(trailWidth,0.0,abs(uv.x-pos.x-wobble))*trailMask;',
+    '  return max(main,trailWobbled*0.5);',
+    '}',
+    '',
+    '// Surface normal of drop for refraction',
+    'vec2 dropNormal(vec2 uv, vec2 pos, float size){',
+    '  vec2 d=uv-pos;',
+    '  d.y*=0.7;',
+    '  float l=length(d);',
+    '  if(l>size) return vec2(0.0);',
+    '  float h=sqrt(max(0.0,size*size-l*l));',
+    '  return normalize(vec3(d/max(l,0.001),h)).xy*smoothstep(size,size*0.3,l);',
+    '}',
+    '',
+    'void main(){',
+    '  vec2 uv=(gl_FragCoord.xy-u_res*0.5)/min(u_res.x,u_res.y);',
+    '  float t=u_time;',
+    '  float aspect=u_res.x/u_res.y;',
+    '',
+    '  // === GLASS SURFACE (base layer) ===',
+    '  // Condensation texture',
+    '  float condensation=snoise(uv*8.0+t*0.005)*0.5+0.5;',
+    '  condensation=pow(condensation,3.0)*0.15;',
+    '',
+    '  // Background seen through foggy glass',
+    '  vec3 bgBlurred=bokeh(uv*u_blur*0.6,t)*0.35;',
+    '  bgBlurred+=condensation*vec3(0.03,0.025,0.015);',
+    '',
+    '  // Old rain streaks on glass',
+    '  float streaks=0.0;',
+    '  for(int i=0;i<8;i++){',
+    '    float fi=float(i);',
+    '    float sx=hash(vec2(fi*3.7,0.5))*2.0-1.0;',
+    '    float streakDist=abs(uv.x-sx);',
+    '    float streakW=0.001+hash(vec2(fi,1.5))*0.002;',
+    '    streaks+=smoothstep(streakW,0.0,streakDist)*0.03;',
+    '  }',
+    '  bgBlurred+=vec3(streaks)*vec3(0.6,0.5,0.3);',
+    '',
+    '  // === RAINDROPS ===',
+    '  float totalDrop=0.0;',
+    '  vec2 totalNormal=vec2(0.0);',
+    '  float dropRate=u_dropRate;',
+    '',
+    '  // Sliding drops',
+    '  for(int i=0;i<12;i++){',
+    '    float fi=float(i);',
+    '    float seed=fi*11.31;',
+    '    float startX=(hash(vec2(seed,1.0))*2.0-1.0)*aspect*0.5;',
+    '    float speed=0.03+hash(vec2(seed,2.0))*0.05;',
+    '    speed*=dropRate/3.0;',
+    '    float size=0.015+hash(vec2(seed,3.0))*0.025;',
+    '    float startTime=hash(vec2(seed,4.0))*30.0;',
+    '    float cycleLen=8.0+hash(vec2(seed,5.0))*12.0;',
+    '    float localT=mod(t-startTime,cycleLen);',
+    '    float posY=0.6-localT*speed;',
+    '    // Horizontal wobble during descent',
+    '    float wobX=sin(localT*2.0+seed)*0.01+sin(localT*5.0+seed*3.0)*0.005;',
+    '    vec2 pos=vec2(startX+wobX,posY);',
+    '    float trail=0.02+localT*speed*0.8;',
+    '    trail=min(trail,0.2);',
+    '    float d=drop(uv,pos,size,trail);',
+    '    totalDrop=max(totalDrop,d);',
+    '    totalNormal+=dropNormal(uv,pos,size);',
+    '  }',
+    '',
+    '  // Stationary beads',
+    '  for(int i=0;i<25;i++){',
+    '    float fi=float(i);',
+    '    float seed=fi*7.77+200.0;',
+    '    vec2 pos=vec2(',
+    '      (hash(vec2(seed,1.0))*2.0-1.0)*aspect*0.55,',
+    '      (hash(vec2(seed,2.0))*2.0-1.0)*0.55',
+    '    );',
+    '    float size=0.003+hash(vec2(seed,3.0))*0.008;',
+    '    // Tiny wobble from vibration',
+    '    float wobble=sin(t*0.5+seed)*0.0005;',
+    '    pos.y+=wobble;',
+    '    float d=smoothstep(size,size*0.1,length(uv-pos));',
+    '    totalDrop=max(totalDrop,d);',
+    '    totalNormal+=dropNormal(uv,pos,size);',
+    '  }',
+    '',
+    '  // === REFRACTION & COMPOSITING ===',
+    '  vec2 refractOffset=totalNormal*0.06*u_blur;',
+    '  vec3 bgRefracted=bokeh((uv+refractOffset)*u_blur*0.6,t);',
+    '',
+    '  // Drops show bright refracted background',
+    '  vec3 dropColor=bgRefracted*1.8;',
+    '  // Specular highlight on drops',
+    '  float spec=pow(max(0.0,dot(normalize(vec3(totalNormal,1.0)),normalize(vec3(-0.3,0.5,1.0)))),16.0);',
+    '  dropColor+=vec3(0.9,0.8,0.6)*spec*totalDrop;',
+    '',
+    '  // Edge darkening on drops (meniscus)',
+    '  float edge=smoothstep(0.3,0.9,totalDrop)*smoothstep(1.0,0.85,totalDrop);',
+    '  dropColor*=1.0-edge*0.3;',
+    '',
+    '  // Composite: glass surface + drops',
+    '  vec3 col=mix(bgBlurred,dropColor,smoothstep(0.01,0.3,totalDrop));',
+    '',
+    '  // Caustic rim on drops',
+    '  float rim=smoothstep(0.5,0.9,totalDrop)*smoothstep(1.0,0.9,totalDrop);',
+    '  col+=vec3(0.3,0.22,0.1)*rim*0.3;',
+    '',
+    '  // === VIGNETTE ===',
+    '  float vig=1.0-smoothstep(0.3,1.4,length(uv*vec2(0.8,1.0)));',
+    '  col*=0.6+0.4*vig;',
+    '',
+    '  // Warm color grade',
+    '  col=pow(max(col,0.0),vec3(0.95,1.0,1.05));',
+    '',
+    '  gl_FragColor=vec4(clamp(col,0.0,1.0),1.0);',
+    '}',
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error(gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error(gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uDropRate = gl.getUniformLocation(prog, 'u_dropRate');
+  var uBlur = gl.getUniformLocation(prog, 'u_blur');
+  var dropRateVal = 3.0;
+  var blurVal = 1.0;
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+  var running = true;
+
+  function resize() {
+    var w = Math.round(canvas.clientWidth * dpr);
+    var h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  function render(now) {
+    if (!running) return;
+    resize();
+    gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uDropRate, dropRateVal);
+    gl.uniform1f(uBlur, blurVal);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  document.addEventListener('visibilitychange', function() {
+    if (document.hidden) {
+      running = false;
+    } else {
+      running = true;
+      requestAnimationFrame(render);
+    }
+  });
+
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'DROP_RATE': dropRateVal = e.data.value; break;
+        case 'BLUR_AMOUNT': blurVal = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

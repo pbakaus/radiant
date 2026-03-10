@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ink Bloom</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">25 — Ink Bloom</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// 25 · Ink Bloom — Ink diffusing in water, symmetrical and organic
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var _pad = parseFloat(new URLSearchParams(location.search).get('p')) || 1;
+
+  var gl = canvas.getContext('webgl', { alpha: true, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  // Tunable parameters
+  var BLOOM_SPEED = 0.35;
+  var INK_RICHNESS = 0.7;
+
+  var vertSrc = [
+    'attribute vec2 a_pos;',
+    'void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }'
+  ].join('\n');
+
+  var fragSrc = [
+    'precision highp float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform float u_bloomSpeed;',
+    'uniform float u_inkRichness;',
+    '',
+    '#define PI 3.14159265359',
+    '',
+    '// ── Simplex noise (compact, GPU-friendly) ──',
+    'vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }',
+    'vec2 mod289v2(vec2 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }',
+    'vec3 permute(vec3 x) { return mod289(((x * 34.0) + 1.0) * x); }',
+    '',
+    'float snoise(vec2 v) {',
+    '  const vec4 C = vec4(0.211324865405187, 0.366025403784439,',
+    '                     -0.577350269189626, 0.024390243902439);',
+    '  vec2 i = floor(v + dot(v, C.yy));',
+    '  vec2 x0 = v - i + dot(i, C.xx);',
+    '  vec2 i1 = (x0.x > x0.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);',
+    '  vec4 x12 = x0.xyxy + C.xxzz;',
+    '  x12.xy -= i1;',
+    '  i = mod289v2(i);',
+    '  vec3 p = permute(permute(i.y + vec3(0.0, i1.y, 1.0)) + i.x + vec3(0.0, i1.x, 1.0));',
+    '  vec3 m = max(0.5 - vec3(dot(x0, x0), dot(x12.xy, x12.xy), dot(x12.zw, x12.zw)), 0.0);',
+    '  m = m * m;',
+    '  m = m * m;',
+    '  vec3 x = 2.0 * fract(p * C.www) - 1.0;',
+    '  vec3 h = abs(x) - 0.5;',
+    '  vec3 ox = floor(x + 0.5);',
+    '  vec3 a0 = x - ox;',
+    '  m *= 1.79284291400159 - 0.85373472095314 * (a0 * a0 + h * h);',
+    '  vec3 g;',
+    '  g.x = a0.x * x0.x + h.x * x0.y;',
+    '  g.yz = a0.yz * x12.xz + h.yz * x12.yw;',
+    '  return 130.0 * dot(m, g);',
+    '}',
+    '',
+    '// ── FBM with 5 octaves (balanced quality/perf) ──',
+    'float fbm(vec2 p, float t) {',
+    '  float val = 0.0;',
+    '  float amp = 0.5;',
+    '  float freq = 1.0;',
+    '  mat2 rot = mat2(0.8, -0.6, 0.6, 0.8);',
+    '  for (int i = 0; i < 5; i++) {',
+    '    val += amp * snoise(p * freq + t);',
+    '    p = rot * p;',
+    '    freq *= 2.05;',
+    '    amp *= 0.5;',
+    '  }',
+    '  return val;',
+    '}',
+    '',
+    '// ── Domain-warped field: one pass, two warp layers ──',
+    '// This creates the organic ink-in-water look efficiently',
+    'float inkField(vec2 p, float t) {',
+    '  // First warp: slow, large-scale drift',
+    '  vec2 q = vec2(',
+    '    fbm(p + vec2(0.0, 0.0), t * 0.15),',
+    '    fbm(p + vec2(5.2, 1.3), t * 0.12)',
+    '  );',
+    '  // Second warp: medium currents',
+    '  vec2 r = vec2(',
+    '    fbm(p + 3.0 * q + vec2(1.7, 9.2), t * 0.2),',
+    '    fbm(p + 3.0 * q + vec2(8.3, 2.8), t * 0.18)',
+    '  );',
+    '  // Final field',
+    '  float f = fbm(p + 2.5 * r, t * 0.1);',
+    '  // Add warp magnitude for texture detail',
+    '  return f + length(q) * 0.3 + length(r) * 0.2;',
+    '}',
+    '',
+    '// ── Ink drop: radial falloff with organic noise boundary ──',
+    'float inkDrop(vec2 p, vec2 center, float radius, float spread, float t, float seed) {',
+    '  vec2 d = p - center;',
+    '  float dist = length(d);',
+    '  ',
+    '  // Organic boundary distortion using noise',
+    '  float angle = atan(d.y, d.x);',
+    '  float boundaryNoise = snoise(vec2(angle * 2.5 + seed * 7.0, dist * 3.0 + t * 0.1)) * 0.3;',
+    '  boundaryNoise += snoise(vec2(angle * 5.0 + seed * 13.0, dist * 6.0 - t * 0.08)) * 0.15;',
+    '  ',
+    '  // Animated radius: bloom outward with breathing',
+    '  float breath = sin(t * 0.5 + seed * 2.0) * 0.08 + sin(t * 0.3 + seed * 5.0) * 0.04;',
+    '  float r = radius * spread + breath;',
+    '  ',
+    '  // Soft boundary with fractal edges',
+    '  float edge = dist - r * (1.0 + boundaryNoise);',
+    '  ',
+    '  // Core ink: dense, dark',
+    '  float core = 1.0 - smoothstep(-r * 0.3, r * 0.05, edge);',
+    '  ',
+    '  // Diffusion halo: soft, wide bleed',
+    '  float halo = 1.0 - smoothstep(-r * 0.1, r * 0.4, edge);',
+    '  ',
+    '  // Outer wisp: very faint, wide',
+    '  float wisp = 1.0 - smoothstep(r * 0.0, r * 0.7, edge);',
+    '  ',
+    '  return core * 0.85 + halo * 0.35 + wisp * 0.1;',
+    '}',
+    '',
+    'void main() {',
+    '  vec2 uv = (gl_FragCoord.xy - u_res * 0.5) / min(u_res.x, u_res.y);',
+    '  float t = u_time * u_bloomSpeed;',
+    '  ',
+    '  // ── Symmetry: mirror x, blend softly ──',
+    '  // Use absolute x for the ink field, creating Rorschach symmetry',
+    '  vec2 symUV = vec2(abs(uv.x), uv.y);',
+    '  ',
+    '  // ── Domain-warped ink texture ──',
+    '  // Scale UV for good detail level',
+    '  float field = inkField(symUV * 2.5, t);',
+    '  ',
+    '  // ── Multiple ink drops blooming outward ──',
+    '  // Spread grows over time, capped at 1.0',
+    '  float globalSpread = clamp(t * 0.3, 0.0, 1.0);',
+    '  ',
+    '  // Central drop (largest, blooms first)',
+    '  float drop1 = inkDrop(symUV, vec2(0.0, 0.0), 0.45, globalSpread, t, 1.0);',
+    '  ',
+    '  // Upper drop (slightly delayed)',
+    '  float spread2 = clamp((t - 0.8) * 0.35, 0.0, 1.0);',
+    '  float drop2 = inkDrop(symUV, vec2(0.12, 0.32), 0.3, spread2, t, 3.7);',
+    '  ',
+    '  // Lower drop',
+    '  float spread3 = clamp((t - 0.5) * 0.32, 0.0, 1.0);',
+    '  float drop3 = inkDrop(symUV, vec2(0.08, -0.28), 0.32, spread3, t, 7.1);',
+    '  ',
+    '  // Side tendril (organic arm reaching out)',
+    '  float spread4 = clamp((t - 1.5) * 0.28, 0.0, 1.0);',
+    '  float drop4 = inkDrop(symUV, vec2(0.28, 0.1), 0.22, spread4, t, 11.3);',
+    '  ',
+    '  // Small accent drop',
+    '  float spread5 = clamp((t - 2.0) * 0.4, 0.0, 1.0);',
+    '  float drop5 = inkDrop(symUV, vec2(0.18, -0.12), 0.18, spread5, t, 17.9);',
+    '  ',
+    '  // ── Combine drops ──',
+    '  float totalInk = max(max(max(drop1, drop2), max(drop3, drop4)), drop5);',
+    '  ',
+    '  // ── Modulate ink with domain-warped field for organic texture ──',
+    '  float fieldMod = smoothstep(0.2, 1.5, field);',
+    '  float ink = totalInk * (0.5 + 0.5 * fieldMod);',
+    '  ink *= u_inkRichness;',
+    '  ink = clamp(ink, 0.0, 1.0);',
+    '  ',
+    '  // ── Inner texture: pools and veins within the ink ──',
+    '  float innerDetail = snoise(symUV * 8.0 + t * 0.05) * 0.5 + 0.5;',
+    '  innerDetail = smoothstep(0.3, 0.7, innerDetail);',
+    '  // Only visible inside the ink',
+    '  float pools = innerDetail * ink * 0.25;',
+    '  ',
+    '  // ── Color palette: warm amber/sepia/gold ──',
+    '  vec3 deepInk = vec3(0.22, 0.12, 0.06);      // dark sepia',
+    '  vec3 warmInk = vec3(0.55, 0.35, 0.18);       // warm brown',
+    '  vec3 amberGlow = vec3(0.78, 0.58, 0.42);     // amber highlight',
+    '  vec3 goldEdge = vec3(0.92, 0.72, 0.42);      // golden edge light',
+    '  vec3 creamWash = vec3(0.95, 0.88, 0.75);     // cream for thin washes',
+    '  ',
+    '  // ── Build ink color based on density ──',
+    '  // Dense areas are dark, thin edges are luminous',
+    '  vec3 inkColor = mix(creamWash, amberGlow, smoothstep(0.0, 0.25, ink));',
+    '  inkColor = mix(inkColor, warmInk, smoothstep(0.25, 0.55, ink));',
+    '  inkColor = mix(inkColor, deepInk, smoothstep(0.55, 0.85, ink));',
+    '  ',
+    '  // Add golden edge glow where ink is thin',
+    '  float edgeGlow = smoothstep(0.02, 0.15, ink) * (1.0 - smoothstep(0.15, 0.4, ink));',
+    '  inkColor += goldEdge * edgeGlow * 0.6;',
+    '  ',
+    '  // Inner pools create depth variation',
+    '  inkColor = mix(inkColor, deepInk * 0.7, pools);',
+    '  ',
+    '  // ── Background: dark with subtle warm tone ──',
+    '  vec3 bg = vec3(0.039, 0.032, 0.028);',
+    '  ',
+    '  // Subtle paper-like warmth in the background',
+    '  float paperNoise = snoise(uv * 4.0 + 100.0) * 0.5 + 0.5;',
+    '  bg += vec3(0.015, 0.01, 0.005) * paperNoise;',
+    '  ',
+    '  // ── Compose: ink over background ──',
+    '  float alpha = smoothstep(0.0, 0.05, ink);',
+    '  vec3 col = mix(bg, inkColor, alpha);',
+    '  ',
+    '  // ── Diffusion glow: soft warm light emanating from ink edges ──',
+    '  float glowMask = smoothstep(0.0, 0.3, ink) * (1.0 - smoothstep(0.3, 0.8, ink));',
+    '  float glowPulse = 0.7 + 0.3 * sin(t * 0.8);',
+    '  col += amberGlow * glowMask * 0.12 * glowPulse;',
+    '  ',
+    '  // ── Central warm radiance ──',
+    '  float centerDist = length(uv);',
+    '  float centerGlow = exp(-centerDist * centerDist * 3.0) * 0.04;',
+    '  col += vec3(centerGlow * 1.2, centerGlow * 0.85, centerGlow * 0.5);',
+    '  ',
+    '  // ── Vignette ──',
+    '  float vig = 1.0 - dot(uv * 0.7, uv * 0.7);',
+    '  vig = smoothstep(0.0, 0.8, vig);',
+    '  col *= 0.4 + 0.6 * vig;',
+    '  ',
+    '  // ── Subtle film grain for texture ──',
+    '  float grain = snoise(gl_FragCoord.xy * 0.8 + u_time * 80.0) * 0.012;',
+    '  col += grain;',
+    '  ',
+    '  // ── Tone mapping (gentle Reinhard) ──',
+    '  col = col / (col + vec3(0.8));',
+    '  col *= 1.3;',
+    '  ',
+    '  gl_FragColor = vec4(col, 1.0);',
+    '}'
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error('Shader compile error:', gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error('Program link error:', gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uBloomSpeed = gl.getUniformLocation(prog, 'u_bloomSpeed');
+  var uInkRichness = gl.getUniformLocation(prog, 'u_inkRichness');
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2) * _pad;
+
+  function resize() {
+    var w = Math.round(canvas.clientWidth * dpr);
+    var h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  function render(now) {
+    resize();
+    gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uBloomSpeed, BLOOM_SPEED);
+    gl.uniform1f(uInkRichness, INK_RICHNESS);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  document.addEventListener('visibilitychange', function() {
+    if (!document.hidden) render(performance.now());
+  });
+
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'BLOOM_SPEED': BLOOM_SPEED = e.data.value; break;
+        case 'INK_RICHNESS': INK_RICHNESS = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

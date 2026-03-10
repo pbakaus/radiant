@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chain Reaction</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">44 — Chain Reaction</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// 44 · Chain Reaction — Nuclear fission-inspired expanding particle cascade
+// ─────────────────────────────────────────────
+(function() {
+  var canvas = document.getElementById('canvas');
+  var ctx = canvas.getContext('2d');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var _pad = parseFloat(new URLSearchParams(location.search).get('p')) || 1;
+
+  // Tunable parameters
+  let REACTION_SPEED = 1.0;
+  let SPLIT_GENERATIONS = 7;
+
+  var width, height, dpr, cx, cy, minDim;
+
+  function resize() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    canvas.style.width = width + 'px';
+    canvas.style.height = height + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    cx = width / 2;
+    cy = height / 2;
+    minDim = Math.min(width, height);
+  }
+
+  window.addEventListener('resize', resize);
+  resize();
+
+  // ── Pre-rendered glow sprite ──
+  var glowCanvas = document.createElement('canvas');
+  var glowCtx = glowCanvas.getContext('2d');
+  var GLOW_SIZE = 128;
+
+  function buildGlowSprite() {
+    glowCanvas.width = GLOW_SIZE * 2;
+    glowCanvas.height = GLOW_SIZE * 2;
+    glowCtx.clearRect(0, 0, GLOW_SIZE * 2, GLOW_SIZE * 2);
+    var grad = glowCtx.createRadialGradient(GLOW_SIZE, GLOW_SIZE, 0, GLOW_SIZE, GLOW_SIZE, GLOW_SIZE);
+    grad.addColorStop(0, 'rgba(255, 245, 220, 1.0)');
+    grad.addColorStop(0.08, 'rgba(255, 220, 160, 0.8)');
+    grad.addColorStop(0.25, 'rgba(255, 180, 100, 0.4)');
+    grad.addColorStop(0.5, 'rgba(200, 149, 108, 0.12)');
+    grad.addColorStop(1, 'rgba(200, 149, 108, 0)');
+    glowCtx.fillStyle = grad;
+    glowCtx.beginPath();
+    glowCtx.arc(GLOW_SIZE, GLOW_SIZE, GLOW_SIZE, 0, Math.PI * 2);
+    glowCtx.fill();
+  }
+  buildGlowSprite();
+
+  // ── Flash sprite for split events ──
+  var flashCanvas = document.createElement('canvas');
+  var flashCtx = flashCanvas.getContext('2d');
+  var FLASH_SIZE = 128;
+
+  function buildFlashSprite() {
+    flashCanvas.width = FLASH_SIZE * 2;
+    flashCanvas.height = FLASH_SIZE * 2;
+    flashCtx.clearRect(0, 0, FLASH_SIZE * 2, FLASH_SIZE * 2);
+    var grad = flashCtx.createRadialGradient(FLASH_SIZE, FLASH_SIZE, 0, FLASH_SIZE, FLASH_SIZE, FLASH_SIZE);
+    grad.addColorStop(0, 'rgba(255, 255, 250, 1.0)');
+    grad.addColorStop(0.05, 'rgba(255, 245, 220, 0.9)');
+    grad.addColorStop(0.15, 'rgba(255, 220, 150, 0.6)');
+    grad.addColorStop(0.35, 'rgba(255, 180, 100, 0.2)');
+    grad.addColorStop(0.6, 'rgba(200, 149, 108, 0.05)');
+    grad.addColorStop(1, 'rgba(200, 149, 108, 0)');
+    flashCtx.fillStyle = grad;
+    flashCtx.beginPath();
+    flashCtx.arc(FLASH_SIZE, FLASH_SIZE, FLASH_SIZE, 0, Math.PI * 2);
+    flashCtx.fill();
+  }
+  buildFlashSprite();
+
+  // ── Shockwave rings ──
+  var shockwaves = [];
+
+  function spawnShockwave(x, y, maxRadius) {
+    shockwaves.push({
+      x: x,
+      y: y,
+      radius: 0,
+      maxRadius: maxRadius,
+      life: 1.0
+    });
+  }
+
+  // ── Particle system ──
+  var particles = [];
+  var flashes = [];
+  var fissionLines = [];
+  var trails = []; // persistent trail dots
+
+  // Hue shifts per generation (in degrees, applied to base amber)
+  var GEN_HUES = [
+    [255, 245, 220],  // gen 0: near white
+    [255, 220, 140],  // gen 1: bright gold
+    [255, 190, 100],  // gen 2: warm gold
+    [255, 170, 80],   // gen 3: deep gold
+    [240, 150, 70],   // gen 4: amber
+    [220, 130, 60],   // gen 5: warm amber
+    [200, 120, 80],   // gen 6: copper
+    [180, 110, 90],   // gen 7: deep copper
+  ];
+
+  // Size multiplier per generation
+  var GEN_SIZES = [18, 12, 9, 7, 5.5, 4, 3, 2.5];
+
+  // State machine
+  var STATE_SEED = 0;
+  var STATE_REACTING = 1;
+  var STATE_SATURATED = 2;
+  var STATE_FADING = 3;
+  var STATE_PAUSE = 4;
+
+  var state = STATE_SEED;
+  var stateTime = 0;
+  var globalAlpha = 1.0; // master alpha for fading
+  var reactionOriginX = 0;
+  var reactionOriginY = 0;
+
+  // Timing
+  var SEED_DURATION = 1.5;
+  var FADE_DURATION = 2.0;
+  var PAUSE_DURATION = 0.8;
+  var SPLIT_TRAVEL_DISTANCE = 120; // distance before splitting (in px at 1x)
+
+  function startNewReaction() {
+    particles = [];
+    flashes = [];
+    fissionLines = [];
+    trails = [];
+    shockwaves = [];
+    globalAlpha = 1.0;
+
+    // Pick a point near center with some variation
+    var angle = Math.random() * Math.PI * 2;
+    var dist = Math.random() * minDim * 0.05;
+    reactionOriginX = cx + Math.cos(angle) * dist;
+    reactionOriginY = cy + Math.sin(angle) * dist;
+
+    // Seed particle - big and bright
+    particles.push({
+      x: reactionOriginX,
+      y: reactionOriginY,
+      vx: 0,
+      vy: 0,
+      generation: 0,
+      age: 0,
+      splitAge: -1,
+      hasSplit: false,
+      travelDist: 0,
+      birthX: reactionOriginX,
+      birthY: reactionOriginY,
+      parentX: reactionOriginX,
+      parentY: reactionOriginY,
+      size: GEN_SIZES[0] * _pad,
+      brightness: 1.0,
+      temperature: 1.0,
+      trailTimer: 0
+    });
+
+    state = STATE_SEED;
+    stateTime = 0;
+
+    // Initial shockwave from the origin
+    spawnShockwave(reactionOriginX, reactionOriginY, minDim * 0.5);
+  }
+
+  function splitParticle(p) {
+    if (p.hasSplit) return;
+    p.hasSplit = true;
+    p.splitAge = p.age;
+
+    var gen = p.generation + 1;
+    if (gen > SPLIT_GENERATIONS) return;
+
+    // Number of children: 2-3
+    var numChildren = Math.random() < 0.4 ? 3 : 2;
+
+    // Flash at split point - bigger for earlier generations
+    var flashSize = (60 - gen * 6) * _pad;
+    flashes.push({
+      x: p.x,
+      y: p.y,
+      life: 1.0,
+      size: flashSize,
+      generation: gen
+    });
+
+    // Spawn shockwave at split point
+    if (gen <= 5) {
+      spawnShockwave(p.x, p.y, (250 - gen * 35) * _pad);
+    }
+
+    // Split angle calculation
+    var travelAngle = Math.atan2(p.vy, p.vx);
+    if (Math.abs(p.vx) < 0.01 && Math.abs(p.vy) < 0.01) {
+      travelAngle = Math.random() * Math.PI * 2;
+    }
+
+    // Speed scales with viewport and decreases per generation
+    var baseSpeed = (3.5 + Math.random() * 2.0) * REACTION_SPEED;
+    // Scale speed so particles actually reach the edges
+    baseSpeed *= (minDim / 600);
+    baseSpeed *= Math.pow(0.82, gen);
+
+    var spreadAngle = (Math.PI * 2) / numChildren;
+
+    for (var i = 0; i < numChildren; i++) {
+      var angle = travelAngle + (i - (numChildren - 1) / 2) * spreadAngle;
+      angle += (Math.random() - 0.5) * 0.6;
+
+      var speed = baseSpeed * (0.8 + Math.random() * 0.4);
+      var newSize = GEN_SIZES[Math.min(gen, GEN_SIZES.length - 1)] * _pad;
+      newSize *= (0.85 + Math.random() * 0.3);
+
+      particles.push({
+        x: p.x,
+        y: p.y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        generation: gen,
+        age: 0,
+        splitAge: -1,
+        hasSplit: false,
+        travelDist: 0,
+        birthX: p.x,
+        birthY: p.y,
+        parentX: p.x,
+        parentY: p.y,
+        size: newSize,
+        brightness: 1.0,
+        temperature: 1.0,
+        trailTimer: 0
+      });
+    }
+
+    // Bright connecting line from parent to split point
+    fissionLines.push({
+      x1: p.birthX,
+      y1: p.birthY,
+      x2: p.x,
+      y2: p.y,
+      generation: p.generation,
+      life: 1.0
+    });
+  }
+
+  function updateParticles(dt) {
+    var speedMult = REACTION_SPEED;
+    var adjustedSplitDist = SPLIT_TRAVEL_DISTANCE * _pad;
+
+    for (var i = 0; i < particles.length; i++) {
+      var p = particles[i];
+      p.age += dt * speedMult;
+
+      // Move particle
+      p.x += p.vx * dt * 60;
+      p.y += p.vy * dt * 60;
+
+      // Track travel distance from birth point
+      var dx = p.x - p.birthX;
+      var dy = p.y - p.birthY;
+      p.travelDist = Math.sqrt(dx * dx + dy * dy);
+
+      // Cool down temperature over time (slower than before)
+      p.temperature = Math.max(0, 1.0 - p.age * 0.35);
+
+      // Brightness fades after splitting or with age
+      if (p.hasSplit) {
+        p.brightness = Math.max(0.08, p.brightness - dt * speedMult * 0.3);
+      } else {
+        p.brightness = Math.max(0.3, 1.0 - p.age * 0.08);
+      }
+
+      // Gentle drag so particles coast far
+      p.vx *= (1 - dt * 0.15);
+      p.vy *= (1 - dt * 0.15);
+
+      // Emit trail dots
+      p.trailTimer += dt;
+      if (p.trailTimer > 0.02 && p.brightness > 0.1 && !p.hasSplit) {
+        p.trailTimer = 0;
+        trails.push({
+          x: p.x,
+          y: p.y,
+          life: 1.0,
+          size: p.size * 0.5,
+          generation: p.generation,
+          temperature: p.temperature
+        });
+      }
+
+      // Check if it's time to split
+      if (!p.hasSplit && p.generation < SPLIT_GENERATIONS && state === STATE_REACTING) {
+        var splitThreshold = adjustedSplitDist * (0.5 + p.generation * 0.15);
+        if (p.travelDist >= splitThreshold && p.age > 0.08 / speedMult) {
+          splitParticle(p);
+        }
+      }
+    }
+
+    // During fading, reduce all particle brightness
+    if (state === STATE_FADING) {
+      for (var i = 0; i < particles.length; i++) {
+        particles[i].brightness *= (1 - dt * 1.2);
+      }
+    }
+  }
+
+  function updateTrails(dt) {
+    var i = trails.length;
+    while (i--) {
+      trails[i].life -= dt * 1.5;
+      if (trails[i].life <= 0) {
+        trails.splice(i, 1);
+      }
+    }
+    // Cap trails to prevent perf issues
+    if (trails.length > 5000) {
+      trails.splice(0, trails.length - 5000);
+    }
+  }
+
+  function updateFlashes(dt) {
+    var i = flashes.length;
+    while (i--) {
+      flashes[i].life -= dt * REACTION_SPEED * 2.5;
+      if (flashes[i].life <= 0) {
+        flashes.splice(i, 1);
+      }
+    }
+  }
+
+  function updateFissionLines(dt) {
+    var i = fissionLines.length;
+    while (i--) {
+      fissionLines[i].life -= dt * REACTION_SPEED * 0.25;
+      if (fissionLines[i].life <= 0) {
+        fissionLines.splice(i, 1);
+      }
+    }
+  }
+
+  function updateShockwaves(dt) {
+    var i = shockwaves.length;
+    while (i--) {
+      var sw = shockwaves[i];
+      sw.radius += dt * 300 * REACTION_SPEED;
+      sw.life = Math.max(0, 1.0 - sw.radius / sw.maxRadius);
+      if (sw.life <= 0) {
+        shockwaves.splice(i, 1);
+      }
+    }
+  }
+
+  // ── Check reaction state ──
+  function checkSaturation() {
+    var maxGenCount = 0;
+    var unsplit = 0;
+    for (var i = 0; i < particles.length; i++) {
+      if (particles[i].generation >= SPLIT_GENERATIONS) maxGenCount++;
+      if (!particles[i].hasSplit && particles[i].generation > 0) unsplit++;
+    }
+    return maxGenCount > 0 && unsplit === maxGenCount;
+  }
+
+  // ── Drawing ──
+
+  function getGenColor(gen, alpha) {
+    var c = GEN_HUES[Math.min(gen, GEN_HUES.length - 1)];
+    return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + alpha + ')';
+  }
+
+  function getParticleColor(p, alpha) {
+    var t = p.temperature;
+    var gc = GEN_HUES[Math.min(p.generation, GEN_HUES.length - 1)];
+    var r, g, b;
+    if (t > 0.6) {
+      // White-hot blend
+      var s = (t - 0.6) / 0.4;
+      r = Math.round(gc[0] + (255 - gc[0]) * s);
+      g = Math.round(gc[1] + (255 - gc[1]) * s);
+      b = Math.round(gc[2] + (240 - gc[2]) * s);
+    } else {
+      var s = t / 0.6;
+      r = Math.round(gc[0] * (0.5 + s * 0.5));
+      g = Math.round(gc[1] * (0.4 + s * 0.6));
+      b = Math.round(gc[2] * (0.4 + s * 0.6));
+    }
+    return 'rgba(' + r + ',' + g + ',' + b + ',' + alpha + ')';
+  }
+
+  function drawTrails() {
+    for (var i = 0; i < trails.length; i++) {
+      var t = trails[i];
+      var alpha = t.life * t.life * 0.4;
+      if (alpha < 0.01) continue;
+      var gc = GEN_HUES[Math.min(t.generation, GEN_HUES.length - 1)];
+      var fade = 0.4 + t.temperature * 0.6;
+      ctx.fillStyle = 'rgba(' +
+        Math.round(gc[0] * fade) + ',' +
+        Math.round(gc[1] * fade) + ',' +
+        Math.round(gc[2] * fade) + ',' + alpha + ')';
+      ctx.beginPath();
+      ctx.arc(t.x, t.y, t.size * t.life, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function drawFissionLines() {
+    for (var i = 0; i < fissionLines.length; i++) {
+      var fl = fissionLines[i];
+      var alpha = fl.life * 0.7 * (1 - fl.generation / (SPLIT_GENERATIONS + 2));
+      if (alpha < 0.01) continue;
+
+      ctx.beginPath();
+      ctx.moveTo(fl.x1, fl.y1);
+      ctx.lineTo(fl.x2, fl.y2);
+      ctx.strokeStyle = getGenColor(fl.generation, alpha);
+      ctx.lineWidth = Math.max(0.8, (4 - fl.generation * 0.4) * _pad);
+      ctx.stroke();
+
+      // Bright core line
+      if (fl.life > 0.5) {
+        ctx.beginPath();
+        ctx.moveTo(fl.x1, fl.y1);
+        ctx.lineTo(fl.x2, fl.y2);
+        ctx.strokeStyle = 'rgba(255, 250, 235, ' + (fl.life - 0.5) * 0.6 + ')';
+        ctx.lineWidth = Math.max(0.5, (2 - fl.generation * 0.2) * _pad);
+        ctx.stroke();
+      }
+    }
+  }
+
+  function drawActiveConnections() {
+    for (var i = 0; i < particles.length; i++) {
+      var p = particles[i];
+      if (p.generation === 0 && p.travelDist < 3) continue;
+      if (p.hasSplit) continue; // only draw for active (unsplit) particles
+
+      var alpha = p.brightness * 0.5 * (1 - p.generation / (SPLIT_GENERATIONS + 2));
+      if (alpha < 0.01) continue;
+
+      ctx.beginPath();
+      ctx.moveTo(p.birthX, p.birthY);
+      ctx.lineTo(p.x, p.y);
+      ctx.strokeStyle = getParticleColor(p, alpha);
+      ctx.lineWidth = Math.max(0.5, (3 - p.generation * 0.3) * _pad);
+      ctx.stroke();
+
+      // Bright white core for fresh connections
+      if (p.temperature > 0.5) {
+        ctx.beginPath();
+        ctx.moveTo(p.birthX, p.birthY);
+        ctx.lineTo(p.x, p.y);
+        ctx.strokeStyle = 'rgba(255, 250, 235, ' + (p.temperature - 0.5) * p.brightness * 0.4 + ')';
+        ctx.lineWidth = Math.max(0.3, (1.5 - p.generation * 0.15) * _pad);
+        ctx.stroke();
+      }
+    }
+  }
+
+  function drawShockwaves() {
+    for (var i = 0; i < shockwaves.length; i++) {
+      var sw = shockwaves[i];
+      var alpha = sw.life * 0.5;
+
+      ctx.beginPath();
+      ctx.arc(sw.x, sw.y, sw.radius, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(255, 220, 160, ' + alpha + ')';
+      ctx.lineWidth = Math.max(1.5, 4 * sw.life) * _pad;
+      ctx.stroke();
+
+      if (sw.life > 0.4) {
+        ctx.beginPath();
+        ctx.arc(sw.x, sw.y, sw.radius * 0.9, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(255, 245, 220, ' + (alpha * 0.3) + ')';
+        ctx.lineWidth = Math.max(0.5, 2 * sw.life) * _pad;
+        ctx.stroke();
+      }
+    }
+  }
+
+  function drawFlashes() {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (var i = 0; i < flashes.length; i++) {
+      var f = flashes[i];
+      var s = f.size * (1 + (1 - f.life) * 2.0);
+      var alpha = f.life * f.life;
+      ctx.globalAlpha = alpha;
+      ctx.drawImage(flashCanvas, f.x - s, f.y - s, s * 2, s * 2);
+    }
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.restore();
+  }
+
+  function drawParticles() {
+    // Glow pass (additive blending for bloom)
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (var i = 0; i < particles.length; i++) {
+      var p = particles[i];
+      if (p.brightness < 0.05) continue;
+
+      var glowSize = p.size * (3 + p.temperature * 5) * _pad;
+      var alpha = p.brightness * (0.3 + p.temperature * 0.5);
+      ctx.globalAlpha = Math.min(alpha, 0.85);
+      ctx.drawImage(glowCanvas, p.x - glowSize, p.y - glowSize, glowSize * 2, glowSize * 2);
+    }
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.restore();
+
+    // Core pass
+    for (var i = 0; i < particles.length; i++) {
+      var p = particles[i];
+      if (p.brightness < 0.05) continue;
+
+      var coreAlpha = p.brightness * (0.8 + p.temperature * 0.2);
+
+      // Colored outer core
+      ctx.fillStyle = getParticleColor(p, coreAlpha);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Bright white center for hot particles
+      if (p.temperature > 0.3) {
+        var whiteAlpha = (p.temperature - 0.3) / 0.7 * p.brightness * 0.9;
+        ctx.fillStyle = 'rgba(255, 253, 245, ' + whiteAlpha + ')';
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size * 0.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+
+  function drawSeedGlow(time) {
+    if (state !== STATE_SEED) return;
+
+    var pulse = 0.5 + 0.5 * Math.sin(time * 8);
+    var progress = Math.min(1, stateTime / (SEED_DURATION / REACTION_SPEED));
+    var intensity = progress * (0.6 + pulse * 0.4);
+
+    var glowRadius = (40 + progress * 80) * _pad;
+
+    // Bright pulsing glow at the seed
+    var grad = ctx.createRadialGradient(
+      reactionOriginX, reactionOriginY, 0,
+      reactionOriginX, reactionOriginY, glowRadius
+    );
+    grad.addColorStop(0, 'rgba(255, 250, 235, ' + intensity + ')');
+    grad.addColorStop(0.15, 'rgba(255, 230, 170, ' + (intensity * 0.7) + ')');
+    grad.addColorStop(0.4, 'rgba(255, 200, 120, ' + (intensity * 0.3) + ')');
+    grad.addColorStop(0.7, 'rgba(200, 149, 108, ' + (intensity * 0.1) + ')');
+    grad.addColorStop(1, 'rgba(200, 149, 108, 0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(reactionOriginX, reactionOriginY, glowRadius, 0, Math.PI * 2);
+    ctx.fill();
+
+    // White hot center dot
+    ctx.fillStyle = 'rgba(255, 255, 250, ' + (intensity * 0.9) + ')';
+    ctx.beginPath();
+    ctx.arc(reactionOriginX, reactionOriginY, GEN_SIZES[0] * _pad * (0.8 + pulse * 0.2), 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function drawVignette() {
+    var maxDim = Math.max(width, height);
+    var vignette = ctx.createRadialGradient(cx, cy, maxDim * 0.25, cx, cy, maxDim * 0.85);
+    vignette.addColorStop(0, 'rgba(10, 10, 10, 0)');
+    vignette.addColorStop(1, 'rgba(10, 10, 10, 0.5)');
+    ctx.fillStyle = vignette;
+    ctx.fillRect(0, 0, width, height);
+  }
+
+  // ── State machine ──
+  function updateState(dt) {
+    stateTime += dt;
+    var speedMult = REACTION_SPEED;
+
+    if (state === STATE_SEED) {
+      if (stateTime > SEED_DURATION / speedMult) {
+        state = STATE_REACTING;
+        stateTime = 0;
+
+        // Give the seed particle a strong initial push in a random direction
+        if (particles.length > 0) {
+          var angle = Math.random() * Math.PI * 2;
+          var speed = 3.0 * speedMult * (minDim / 600);
+          particles[0].vx = Math.cos(angle) * speed;
+          particles[0].vy = Math.sin(angle) * speed;
+        }
+      }
+    } else if (state === STATE_REACTING) {
+      if (checkSaturation() || stateTime > 10.0 / speedMult) {
+        state = STATE_SATURATED;
+        stateTime = 0;
+      }
+    } else if (state === STATE_SATURATED) {
+      if (stateTime > 1.0 / speedMult) {
+        state = STATE_FADING;
+        stateTime = 0;
+      }
+    } else if (state === STATE_FADING) {
+      globalAlpha = Math.max(0, 1.0 - stateTime / (FADE_DURATION / speedMult));
+      if (stateTime > FADE_DURATION / speedMult) {
+        state = STATE_PAUSE;
+        stateTime = 0;
+      }
+    } else if (state === STATE_PAUSE) {
+      globalAlpha = 0;
+      if (stateTime > PAUSE_DURATION / speedMult) {
+        startNewReaction();
+      }
+    }
+  }
+
+  // ── Main loop ──
+  var lastTime = 0;
+
+  function render(timestamp) {
+    if (!lastTime) lastTime = timestamp;
+    var dt = Math.min((timestamp - lastTime) / 1000, 0.05);
+    lastTime = timestamp;
+
+    if (prefersReduced) dt *= 0.15;
+
+    var time = timestamp / 1000;
+
+    // Semi-transparent clear for trail persistence
+    ctx.fillStyle = 'rgba(10, 10, 10, 0.25)';
+    ctx.fillRect(0, 0, width, height);
+
+    // Update
+    updateState(dt);
+    updateParticles(dt);
+    updateTrails(dt);
+    updateFlashes(dt);
+    updateFissionLines(dt);
+    updateShockwaves(dt);
+
+    // Apply global alpha for fade out
+    if (globalAlpha < 1.0) {
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, globalAlpha);
+    }
+
+    // Draw layers
+    drawSeedGlow(time);
+    drawTrails();
+    drawShockwaves();
+    drawFissionLines();
+    drawActiveConnections();
+    drawFlashes();
+    drawParticles();
+
+    if (globalAlpha < 1.0) {
+      ctx.restore();
+    }
+
+    drawVignette();
+
+    // During full fade, draw opaque background to fully reset
+    if (state === STATE_PAUSE) {
+      ctx.fillStyle = 'rgba(10, 10, 10, 0.15)';
+      ctx.fillRect(0, 0, width, height);
+    }
+
+    requestAnimationFrame(render);
+  }
+
+  // Start the first reaction
+  startNewReaction();
+  requestAnimationFrame(render);
+
+  // ── PostMessage listener for parameter updates ──
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'REACTION_SPEED': REACTION_SPEED = e.data.value; break;
+        case 'GENERATIONS': SPLIT_GENERATIONS = Math.round(e.data.value); break;
+        case 'SPLIT_GENERATIONS': SPLIT_GENERATIONS = Math.round(e.data.value); break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Verse Particles</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">26 — Verse Particles</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// 26 · Verse Particles — Text-to-particle morphing system
+// ─────────────────────────────────────────────
+(function() {
+  var canvas = document.getElementById('canvas');
+  var ctx = canvas.getContext('2d');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var _pad = parseFloat(new URLSearchParams(location.search).get('p')) || 1;
+
+  // Tunable parameters
+  let MORPH_SPEED = 1.0;
+  let PARTICLE_COUNT = 3000;
+
+  var width, height, dpr, cx, cy;
+
+  function resize() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    canvas.style.width = width + 'px';
+    canvas.style.height = height + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    cx = width / 2;
+    cy = height / 2;
+  }
+
+  window.addEventListener('resize', function() {
+    resize();
+    buildGlowSprite();
+    if (words.length > 0 && (state === 'converge' || state === 'hold')) {
+      currentTargets = getTextTargets(words[currentWordIndex]);
+      assignTargets();
+    }
+  });
+  resize();
+
+  // ── Pre-rendered glow sprite for performance ──
+  var glowCanvas = document.createElement('canvas');
+  var glowCtx = glowCanvas.getContext('2d');
+  var GLOW_SIZE = 32;
+
+  function buildGlowSprite() {
+    glowCanvas.width = GLOW_SIZE * 2;
+    glowCanvas.height = GLOW_SIZE * 2;
+    glowCtx.clearRect(0, 0, GLOW_SIZE * 2, GLOW_SIZE * 2);
+    var grad = glowCtx.createRadialGradient(GLOW_SIZE, GLOW_SIZE, 0, GLOW_SIZE, GLOW_SIZE, GLOW_SIZE);
+    grad.addColorStop(0, 'rgba(255, 220, 160, 0.35)');
+    grad.addColorStop(0.3, 'rgba(220, 170, 110, 0.12)');
+    grad.addColorStop(0.7, 'rgba(200, 149, 108, 0.03)');
+    grad.addColorStop(1, 'rgba(200, 149, 108, 0)');
+    glowCtx.fillStyle = grad;
+    glowCtx.beginPath();
+    glowCtx.arc(GLOW_SIZE, GLOW_SIZE, GLOW_SIZE, 0, Math.PI * 2);
+    glowCtx.fill();
+  }
+  buildGlowSprite();
+
+  // ── Word list ──
+  var words = [
+    'TRUTH', 'FIRE', 'DEPTH', 'PULSE', 'CROWN',
+    'VERSE', 'LIGHT', 'SHADOW', 'RISE', 'FLOW',
+    'DREAM', 'POWER', 'SPIRIT', 'GOLD'
+  ];
+  var currentWordIndex = 0;
+
+  // ── State machine ──
+  var state = 'scatter';
+  var stateTime = 0;
+
+  // Timing (seconds)
+  var SCATTER_DURATION = 1.5;
+  var CONVERGE_DURATION = 1.8;
+  var HOLD_DURATION = 2.5;
+  var DISSOLVE_DURATION = 1.2;
+
+  // ── Offscreen canvas for text sampling ──
+  var textCanvas = document.createElement('canvas');
+  var textCtx = textCanvas.getContext('2d', { willReadFrequently: true });
+
+  function getTextTargets(word) {
+    var fontSize = Math.min(width * 0.15, height * 0.3);
+    if (word.length > 5) fontSize *= 5 / word.length;
+    fontSize = Math.max(40, fontSize);
+
+    textCanvas.width = Math.ceil(width);
+    textCanvas.height = Math.ceil(height);
+    textCtx.clearRect(0, 0, textCanvas.width, textCanvas.height);
+
+    textCtx.font = '900 ' + fontSize + 'px "SF Mono", "Fira Code", "Cascadia Code", "Arial Black", "Impact", monospace';
+    textCtx.textAlign = 'center';
+    textCtx.textBaseline = 'middle';
+    textCtx.fillStyle = '#fff';
+    textCtx.fillText(word, textCanvas.width / 2, textCanvas.height / 2);
+
+    var imageData = textCtx.getImageData(0, 0, textCanvas.width, textCanvas.height);
+    var data = imageData.data;
+    var positions = [];
+
+    var step = Math.max(2, Math.floor(Math.sqrt((textCanvas.width * textCanvas.height) / (PARTICLE_COUNT * 3))));
+
+    for (var y = 0; y < textCanvas.height; y += step) {
+      for (var x = 0; x < textCanvas.width; x += step) {
+        var idx = (y * textCanvas.width + x) * 4;
+        if (data[idx + 3] > 128) {
+          positions.push({ x: x, y: y });
+        }
+      }
+    }
+
+    return positions;
+  }
+
+  // ── Particle system ──
+  var particles = [];
+  var currentTargets = [];
+
+  function createParticles(count) {
+    particles = [];
+    for (var i = 0; i < count; i++) {
+      var angle = Math.random() * Math.PI * 2;
+      var dist = Math.random() * Math.max(width, height) * 0.6;
+      particles.push({
+        x: cx + Math.cos(angle) * dist,
+        y: cy + Math.sin(angle) * dist,
+        vx: (Math.random() - 0.5) * 2,
+        vy: (Math.random() - 0.5) * 2,
+        tx: 0,
+        ty: 0,
+        homeAngle: Math.random() * Math.PI * 2,
+        homeRadius: 50 + Math.random() * Math.min(width, height) * 0.45,
+        homeSpeed: 0.2 + Math.random() * 0.5,
+        homePhase: Math.random() * Math.PI * 2,
+        size: (0.8 + Math.random() * 1.8) * _pad,
+        brightness: 0.5 + Math.random() * 0.5,
+        hueOffset: (Math.random() - 0.5) * 30,
+        prevX: cx + Math.cos(angle) * dist,
+        prevY: cy + Math.sin(angle) * dist,
+        prevPrevX: cx + Math.cos(angle) * dist,
+        prevPrevY: cy + Math.sin(angle) * dist,
+        vibX: Math.random() * Math.PI * 2,
+        vibY: Math.random() * Math.PI * 2,
+        vibAmp: 0.5 + Math.random() * 1.0
+      });
+    }
+  }
+
+  createParticles(PARTICLE_COUNT);
+
+  function assignTargets() {
+    if (currentTargets.length === 0) return;
+
+    // Sort particles by position and targets by position for spatially-coherent mapping
+    var sortedIndices = [];
+    for (var i = 0; i < particles.length; i++) sortedIndices.push(i);
+
+    // Sort by angle from center for a nice radial-to-text sweep effect
+    sortedIndices.sort(function(a, b) {
+      var angA = Math.atan2(particles[a].y - cy, particles[a].x - cx);
+      var angB = Math.atan2(particles[b].y - cy, particles[b].x - cx);
+      return angA - angB;
+    });
+
+    var sortedTargets = currentTargets.slice().sort(function(a, b) {
+      return a.x !== b.x ? a.x - b.x : a.y - b.y;
+    });
+
+    for (var i = 0; i < sortedIndices.length; i++) {
+      var pi = sortedIndices[i];
+      var ti = Math.floor((i / sortedIndices.length) * sortedTargets.length);
+      ti = Math.min(ti, sortedTargets.length - 1);
+      particles[pi].tx = sortedTargets[ti].x;
+      particles[pi].ty = sortedTargets[ti].y;
+    }
+  }
+
+  // ── Easing functions ──
+  function easeOutExpo(t) {
+    return t >= 1 ? 1 : 1 - Math.pow(2, -10 * t);
+  }
+
+  function easeOutQuart(t) {
+    return 1 - Math.pow(1 - t, 4);
+  }
+
+  function easeInQuad(t) {
+    return t * t;
+  }
+
+  // ── Update particles based on state ──
+  function updateParticles(dt, time) {
+    var speedScale = MORPH_SPEED;
+
+    for (var i = 0; i < particles.length; i++) {
+      var p = particles[i];
+
+      // Store previous positions for trails
+      p.prevPrevX = p.prevX;
+      p.prevPrevY = p.prevY;
+      p.prevX = p.x;
+      p.prevY = p.y;
+
+      if (state === 'scatter') {
+        var angle = p.homeAngle + time * p.homeSpeed * speedScale;
+        var radius = p.homeRadius + Math.sin(time * 0.7 + p.homePhase) * 40;
+        var targetX = cx + Math.cos(angle) * radius;
+        var targetY = cy + Math.sin(angle + Math.sin(time * 0.3 + p.homePhase) * 0.5) * radius;
+
+        p.vx += (targetX - p.x) * 0.008 * speedScale;
+        p.vy += (targetY - p.y) * 0.008 * speedScale;
+        p.vx += Math.sin(time * 2.3 + p.homePhase * 3.1) * 0.15 * speedScale;
+        p.vy += Math.cos(time * 1.7 + p.homePhase * 2.7) * 0.15 * speedScale;
+
+        p.vx *= 0.96;
+        p.vy *= 0.96;
+        p.x += p.vx;
+        p.y += p.vy;
+
+      } else if (state === 'converge') {
+        var progress = Math.min(stateTime / (CONVERGE_DURATION / speedScale), 1);
+        var ease = easeOutExpo(progress);
+
+        var dx = p.tx - p.x;
+        var dy = p.ty - p.y;
+        // Lerp towards target — critically damped, no overshoot
+        var lerpFactor = 0.03 + ease * 0.15;
+        p.vx = dx * lerpFactor * speedScale;
+        p.vy = dy * lerpFactor * speedScale;
+
+        // Heavy damping to prevent any bounce
+        p.vx *= 0.72;
+        p.vy *= 0.72;
+        p.x += p.vx;
+        p.y += p.vy;
+
+      } else if (state === 'hold') {
+        var vibScale = prefersReduced ? 0.1 : 1.0;
+        var targetX = p.tx + Math.sin(time * 4 + p.vibX) * p.vibAmp * vibScale;
+        var targetY = p.ty + Math.cos(time * 3.5 + p.vibY) * p.vibAmp * vibScale;
+
+        p.vx += (targetX - p.x) * 0.15;
+        p.vy += (targetY - p.y) * 0.15;
+        p.vx *= 0.8;
+        p.vy *= 0.8;
+        p.x += p.vx;
+        p.y += p.vy;
+
+      } else if (state === 'dissolve') {
+        var progress = Math.min(stateTime / (DISSOLVE_DURATION / speedScale), 1);
+        var ease = easeInQuad(progress);
+
+        var dx = p.x - cx;
+        var dy = p.y - cy;
+        var dist = Math.sqrt(dx * dx + dy * dy) || 1;
+
+        var force = ease * 3.0 * speedScale;
+        p.vx += (dx / dist) * force + (Math.random() - 0.5) * 2.0 * ease;
+        p.vy += (dy / dist) * force + (Math.random() - 0.5) * 2.0 * ease;
+        p.vx *= 0.97;
+        p.vy *= 0.97;
+        p.x += p.vx;
+        p.y += p.vy;
+      }
+
+      // Soft boundary wrapping
+      var margin = 50;
+      if (p.x < -margin) p.x = width + margin;
+      if (p.x > width + margin) p.x = -margin;
+      if (p.y < -margin) p.y = height + margin;
+      if (p.y > height + margin) p.y = -margin;
+    }
+  }
+
+  // ── State machine update ──
+  function updateState(dt) {
+    var speedScale = MORPH_SPEED;
+    stateTime += dt;
+
+    if (state === 'scatter' && stateTime > SCATTER_DURATION / speedScale) {
+      state = 'converge';
+      stateTime = 0;
+      currentTargets = getTextTargets(words[currentWordIndex]);
+      assignTargets();
+
+    } else if (state === 'converge' && stateTime > CONVERGE_DURATION / speedScale) {
+      state = 'hold';
+      stateTime = 0;
+
+    } else if (state === 'hold' && stateTime > HOLD_DURATION / speedScale) {
+      state = 'dissolve';
+      stateTime = 0;
+
+    } else if (state === 'dissolve' && stateTime > DISSOLVE_DURATION / speedScale) {
+      state = 'scatter';
+      stateTime = 0;
+      currentWordIndex = (currentWordIndex + 1) % words.length;
+    }
+  }
+
+  // ── Drawing ──
+  function drawParticles(time) {
+    var isHold = state === 'hold';
+    var isConverge = state === 'converge';
+    var convergeProgress = 0;
+    if (isConverge) {
+      convergeProgress = Math.min(stateTime / (CONVERGE_DURATION / MORPH_SPEED), 1);
+    }
+
+    // Smooth glow ramp during hold (builds over ~1 second, no pop)
+    var holdGlowRamp = 0;
+    if (isHold) {
+      holdGlowRamp = Math.min(stateTime / 1.0, 1.0); // 0→1 over 1 second
+      holdGlowRamp = holdGlowRamp * holdGlowRamp * (3 - 2 * holdGlowRamp); // smoothstep
+    }
+
+    // Brightness multiplier for formed text — smooth transition
+    var holdBright = 1.0;
+    if (isHold) {
+      holdBright = 1.0 + holdGlowRamp * 0.3;
+    } else if (isConverge) {
+      holdBright = 1.0 + easeOutExpo(convergeProgress) * 0.15;
+    }
+
+    // ── Pass 1: Trails (normal composite) ──
+    for (var i = 0; i < particles.length; i++) {
+      var p = particles[i];
+      var dx = p.x - p.prevX;
+      var dy = p.y - p.prevY;
+      var speed = Math.sqrt(dx * dx + dy * dy);
+
+      if (speed > 1.5 && !isHold) {
+        var r = Math.min(255, (180 + p.hueOffset + p.brightness * 40) * holdBright) | 0;
+        var g = Math.min(255, (130 + p.hueOffset * 0.5 + p.brightness * 30) * holdBright) | 0;
+        var b = Math.min(255, (70 + p.hueOffset * 0.3 + p.brightness * 15) * holdBright) | 0;
+        var trailAlpha = Math.min(0.25, speed * 0.018);
+
+        ctx.strokeStyle = 'rgba(' + r + ',' + g + ',' + b + ',' + trailAlpha + ')';
+        ctx.lineWidth = p.size * 0.6;
+        ctx.beginPath();
+        ctx.moveTo(p.prevX, p.prevY);
+        ctx.lineTo(p.x, p.y);
+        ctx.stroke();
+
+        if (speed > 3) {
+          ctx.strokeStyle = 'rgba(' + r + ',' + g + ',' + b + ',' + (trailAlpha * 0.35) + ')';
+          ctx.lineWidth = p.size * 0.35;
+          ctx.beginPath();
+          ctx.moveTo(p.prevPrevX, p.prevPrevY);
+          ctx.lineTo(p.prevX, p.prevY);
+          ctx.stroke();
+        }
+      }
+    }
+
+    // ── Pass 2: Glow sprites (additive blending) ──
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    // Smooth glow scale transition: ramps up gradually during hold
+    var glowScale = 0.2;
+    if (isHold) {
+      glowScale = 0.2 + holdGlowRamp * 0.08;
+    } else if (isConverge) {
+      glowScale = 0.2 + easeOutExpo(convergeProgress) * 0.03;
+    }
+    for (var i = 0; i < particles.length; i++) {
+      var p = particles[i];
+      var s = p.size * glowScale * (GLOW_SIZE * 2);
+      var alpha = (0.15 + p.brightness * 0.1) * holdBright;
+      // Smooth glow intensity ramp during hold instead of sudden pop
+      if (isHold) alpha *= (1.0 + holdGlowRamp * 0.2);
+      ctx.globalAlpha = Math.min(alpha, 0.4);
+      ctx.drawImage(glowCanvas, p.x - s * 0.5, p.y - s * 0.5, s, s);
+    }
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.restore();
+
+    // ── Pass 3: Particle cores ──
+    for (var i = 0; i < particles.length; i++) {
+      var p = particles[i];
+
+      var r = Math.min(255, (180 + p.hueOffset + p.brightness * 40) * holdBright) | 0;
+      var g = Math.min(255, (130 + p.hueOffset * 0.5 + p.brightness * 30) * holdBright) | 0;
+      var b = Math.min(255, (70 + p.hueOffset * 0.3 + p.brightness * 15) * holdBright) | 0;
+
+      // Smooth alpha transition — ramp up during hold, no sudden jump
+      var baseAlpha = 0.6 + p.brightness * 0.25;
+      if (isHold) {
+        var targetAlpha = 0.85 + p.brightness * 0.15;
+        baseAlpha = baseAlpha + (targetAlpha - baseAlpha) * holdGlowRamp;
+      } else if (isConverge) {
+        baseAlpha = baseAlpha + easeOutExpo(convergeProgress) * 0.08;
+      }
+
+      // Particle dot
+      ctx.fillStyle = 'rgba(' + r + ',' + g + ',' + b + ',' + baseAlpha + ')';
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Bright center for larger particles
+      if (p.size > 1.2) {
+        ctx.fillStyle = 'rgba(255,248,230,' + (baseAlpha * 0.6) + ')';
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size * 0.35, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+
+  function drawVignette() {
+    var maxDim = Math.max(width, height);
+    var vignette = ctx.createRadialGradient(cx, cy, maxDim * 0.25, cx, cy, maxDim * 0.8);
+    vignette.addColorStop(0, 'rgba(10, 10, 10, 0)');
+    vignette.addColorStop(1, 'rgba(10, 10, 10, 0.5)');
+    ctx.fillStyle = vignette;
+    ctx.fillRect(0, 0, width, height);
+  }
+
+  function drawCenterGlow(time) {
+    if (state === 'hold' || state === 'converge') {
+      var intensity = 0;
+      if (state === 'converge') {
+        var progress = Math.min(stateTime / (CONVERGE_DURATION / MORPH_SPEED), 1);
+        intensity = easeOutExpo(progress) * 0.05;
+      } else {
+        // Smooth ramp from converge-end intensity to full hold intensity over ~1s
+        var holdRamp = Math.min(stateTime / 1.0, 1.0);
+        holdRamp = holdRamp * holdRamp * (3 - 2 * holdRamp); // smoothstep
+        intensity = 0.05 + holdRamp * 0.03 + Math.sin(time * 1.5) * 0.02 * holdRamp;
+      }
+      var glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.min(width, height) * 0.4);
+      glow.addColorStop(0, 'rgba(200, 149, 108, ' + intensity + ')');
+      glow.addColorStop(0.5, 'rgba(180, 120, 70, ' + (intensity * 0.3) + ')');
+      glow.addColorStop(1, 'rgba(180, 120, 70, 0)');
+      ctx.fillStyle = glow;
+      ctx.fillRect(0, 0, width, height);
+    }
+  }
+
+  // ── Main loop ──
+  var lastTime = 0;
+
+  function render(timestamp) {
+    if (!lastTime) lastTime = timestamp;
+    var dt = Math.min((timestamp - lastTime) / 1000, 0.05);
+    lastTime = timestamp;
+
+    if (prefersReduced) dt *= 0.1;
+
+    var time = timestamp / 1000;
+
+    ctx.clearRect(0, 0, width, height);
+    ctx.fillStyle = '#0a0a0a';
+    ctx.fillRect(0, 0, width, height);
+
+    updateState(dt);
+    updateParticles(dt, time);
+
+    drawCenterGlow(time);
+    drawParticles(time);
+    drawVignette();
+
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  // ── PostMessage listener for parameter updates ──
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'MORPH_SPEED':
+          MORPH_SPEED = e.data.value;
+          break;
+        case 'PARTICLE_COUNT':
+          PARTICLE_COUNT = Math.round(e.data.value);
+          createParticles(PARTICLE_COUNT);
+          if (state === 'converge' || state === 'hold') {
+            assignTargets();
+          }
+          break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

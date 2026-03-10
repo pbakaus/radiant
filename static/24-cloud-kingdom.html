@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cloud Kingdom</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">24 — Cloud Kingdom</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// 24 · Cloud Kingdom — Dramatic volumetric cumulus clouds
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var urlParams = new URLSearchParams(window.location.search);
+  var pixelScale = parseFloat(urlParams.get('p')) || 1;
+
+  var gl = canvas.getContext('webgl', { alpha: false, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  var vertSrc = 'attribute vec2 a_pos;\nvoid main(){gl_Position=vec4(a_pos,0.0,1.0);}';
+
+  var fragSrc = [
+    'precision highp float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    '',
+    '#define CLOUD_LOWER 3.0',
+    '#define CLOUD_UPPER 8.0',
+    '#define CLOUD_THICK 5.0',
+    '#define MARCH_STEPS 32',
+    '#define SHADOW_STEPS 4',
+    '#define FAR 50.0',
+    '',
+    'const vec3 SUN_DIR = normalize(vec3(0.4, 0.6, 0.3));',
+    'const vec3 SUN_COL = vec3(1.0, 0.76, 0.4);',
+    '',
+    // ── Fast integer-free hash noise ──
+    'float hash13(vec3 p) {',
+    '  p = fract(p * vec3(0.1031, 0.1030, 0.0973));',
+    '  p += dot(p, p.yxz + 33.33);',
+    '  return fract((p.x + p.y) * p.z);',
+    '}',
+    '',
+    'float noise(vec3 p) {',
+    '  vec3 i = floor(p);',
+    '  vec3 f = fract(p);',
+    '  f = f * f * (3.0 - 2.0 * f);',
+    '  float a = hash13(i);',
+    '  float b = hash13(i + vec3(1,0,0));',
+    '  float c = hash13(i + vec3(0,1,0));',
+    '  float d = hash13(i + vec3(1,1,0));',
+    '  float e = hash13(i + vec3(0,0,1));',
+    '  float g = hash13(i + vec3(1,0,1));',
+    '  float h = hash13(i + vec3(0,1,1));',
+    '  float k = hash13(i + vec3(1,1,1));',
+    '  return mix(mix(mix(a,b,f.x), mix(c,d,f.x), f.y),',
+    '             mix(mix(e,g,f.x), mix(h,k,f.x), f.y), f.z);',
+    '}',
+    '',
+    // ── FBM: 4 octaves (main), 2 octaves (shadow/cheap) ──
+    'float fbm4(vec3 p) {',
+    '  float v = 0.5 * noise(p);',
+    '  p = p * 2.02 + vec3(1.7, 9.2, 3.1);',
+    '  v += 0.25 * noise(p);',
+    '  p = p * 2.02 + vec3(1.7, 9.2, 3.1);',
+    '  v += 0.125 * noise(p);',
+    '  p = p * 2.02 + vec3(1.7, 9.2, 3.1);',
+    '  v += 0.0625 * noise(p);',
+    '  return v;',
+    '}',
+    '',
+    'float fbm2(vec3 p) {',
+    '  float v = 0.5 * noise(p);',
+    '  p = p * 2.02 + vec3(1.7, 9.2, 3.1);',
+    '  v += 0.25 * noise(p);',
+    '  return v;',
+    '}',
+    '',
+    // ── Cumulus height profile: flat base, billowy dome ──
+    'float profile(float y) {',
+    '  float h = clamp((y - CLOUD_LOWER) / CLOUD_THICK, 0.0, 1.0);',
+    '  // Very flat base, towering rounded top',
+    '  float base = smoothstep(0.0, 0.08, h);',
+    '  float top = smoothstep(1.0, 0.3, h);',
+    '  // Extra bulge in middle for billowy cumulus look',
+    '  float bulge = 1.0 + 0.3 * smoothstep(0.15, 0.4, h) * smoothstep(0.7, 0.4, h);',
+    '  return base * top * bulge;',
+    '}',
+    '',
+    // ── Full quality cloud density ──
+    'float density(vec3 p, float t) {',
+    '  float pr = profile(p.y);',
+    '  if (pr < 0.001) return 0.0;',
+    '  vec3 w = vec3(t * 0.06, t * 0.008, t * 0.03);',
+    '',
+    '  // Large-scale cloud mass placement — creates distinct towering formations',
+    '  float placement = noise(p * 0.04 + w * 0.15);',
+    '  placement = smoothstep(0.35, 0.6, placement);',
+    '  if (placement < 0.01) return 0.0;',
+    '',
+    '  // Main cloud shape — large forms + medium billowy detail',
+    '  float shape = fbm4(p * 0.18 + w) * 0.6 + fbm4(p * 0.5 + w * 1.2) * 0.4;',
+    '',
+    '  float d = (shape - 0.38) * pr * placement * 2.0;',
+    '  d = smoothstep(0.0, 0.08, d) * d;',
+    '  return clamp(d * 6.0, 0.0, 1.0);',
+    '}',
+    '',
+    // ── Cheap density for shadow marching ──
+    'float densityCheap(vec3 p, float t) {',
+    '  float pr = profile(p.y);',
+    '  if (pr < 0.001) return 0.0;',
+    '  vec3 w = vec3(t * 0.06, t * 0.008, t * 0.03);',
+    '',
+    '  float placement = noise(p * 0.04 + w * 0.15);',
+    '  placement = smoothstep(0.35, 0.6, placement);',
+    '  if (placement < 0.01) return 0.0;',
+    '',
+    '  float shape = fbm2(p * 0.18 + w) * 0.6 + fbm2(p * 0.5 + w * 1.2) * 0.4;',
+    '',
+    '  float d = (shape - 0.38) * pr * placement * 2.0;',
+    '  d = smoothstep(0.0, 0.08, d) * d;',
+    '  return clamp(d * 6.0, 0.0, 1.0);',
+    '}',
+    '',
+    // ── Light march: how much sun reaches this point ──
+    'float lightMarch(vec3 p, float t) {',
+    '  float acc = 0.0;',
+    '  float dist = 0.0;',
+    '  for (int i = 0; i < SHADOW_STEPS; i++) {',
+    '    float step = 0.5 + float(i) * 0.7;',
+    '    dist += step;',
+    '    acc += densityCheap(p + SUN_DIR * dist, t) * step;',
+    '  }',
+    '  return exp(-acc * 2.5);',
+    '}',
+    '',
+    // ── Sky gradient ──
+    'vec3 sky(vec3 rd) {',
+    '  vec3 top = vec3(0.008, 0.01, 0.022);',
+    '  vec3 mid = vec3(0.05, 0.035, 0.025);',
+    '  vec3 horizon = vec3(0.14, 0.08, 0.035);',
+    '  vec3 ground = vec3(0.02, 0.015, 0.01);',
+    '  vec3 col = mix(horizon, top, smoothstep(0.0, 0.65, rd.y));',
+    '  col = mix(ground, col, smoothstep(-0.15, 0.05, rd.y));',
+    '  float sun = max(dot(rd, SUN_DIR), 0.0);',
+    '  col += SUN_COL * 0.12 * pow(sun, 3.0);',
+    '  col += SUN_COL * 0.5 * pow(sun, 48.0);',
+    '  col += vec3(1.0, 0.92, 0.7) * 0.4 * pow(sun, 256.0);',
+    '  return col;',
+    '}',
+    '',
+    'void main() {',
+    '  vec2 uv = gl_FragCoord.xy / u_res;',
+    '  vec2 ndc = (gl_FragCoord.xy - u_res * 0.5) / min(u_res.x, u_res.y);',
+    '  float t = u_time;',
+    '',
+    '  // Camera on ground, gazing up at towering clouds',
+    '  vec3 ro = vec3(0.0, 0.2, t * 0.12);',
+    '  vec3 rd = normalize(vec3(ndc.x * 1.1, ndc.y * 0.6 + 0.5, 1.0));',
+    '',
+    '  vec3 skyCol = sky(rd);',
+    '  vec3 col = skyCol;',
+    '',
+    '  // Ray-slab intersection',
+    '  float tEnter, tExit;',
+    '  if (rd.y > 0.001) {',
+    '    tEnter = (CLOUD_LOWER - ro.y) / rd.y;',
+    '    tExit  = (CLOUD_UPPER - ro.y) / rd.y;',
+    '  } else {',
+    '    tEnter = FAR;',
+    '    tExit = 0.0;',
+    '  }',
+    '  tEnter = max(tEnter, 0.1);',
+    '  // Clamp march length to avoid huge step sizes on near-horizontal rays',
+    '  tExit = min(tExit, min(FAR, tEnter + 22.0));',
+    '',
+    '  if (tEnter < tExit) {',
+    '    // Cap step size to avoid banding; use smaller steps near camera',
+    '    float totalDist = tExit - tEnter;',
+    '    float stepLen = min(totalDist / float(MARCH_STEPS), 0.45);',
+    '    float marchT = tEnter + stepLen * 0.3;',
+    '    float transmittance = 1.0;',
+    '    vec3 light = vec3(0.0);',
+    '',
+    '    for (int i = 0; i < MARCH_STEPS; i++) {',
+    '      if (transmittance < 0.015 || marchT > tExit) break;',
+    '      vec3 p = ro + rd * marchT;',
+    '      float d = density(p, t);',
+    '',
+    '      if (d > 0.004) {',
+    '        float hNorm = clamp((p.y - CLOUD_LOWER) / CLOUD_THICK, 0.0, 1.0);',
+    '        float shadow = lightMarch(p, t);',
+    '',
+    '        // Color: dark undersides to bright golden tops',
+    '        vec3 darkBase = vec3(0.035, 0.025, 0.022);',
+    '        vec3 midTone  = vec3(0.4, 0.25, 0.1);',
+    '        vec3 bright   = SUN_COL * 1.15;',
+    '',
+    '        vec3 sc = mix(darkBase, midTone, smoothstep(0.0, 0.4, hNorm));',
+    '        sc = mix(sc, bright, smoothstep(0.3, 0.85, hNorm));',
+    '',
+    '        // Shadow modulation',
+    '        sc = mix(darkBase * 0.4, sc, shadow * 0.75 + 0.25);',
+    '',
+    '        // Bright rim on sunlit cloud tops',
+    '        float rim = smoothstep(0.5, 0.95, hNorm) * shadow;',
+    '        sc += SUN_COL * 1.4 * rim * 0.35;',
+    '',
+    '        // Powder / silver lining',
+    '        float powder = (1.0 - exp(-d * 6.0)) * shadow;',
+    '        sc += vec3(1.0, 0.85, 0.5) * powder * 0.12;',
+    '',
+    '        // Ambient on undersides',
+    '        sc += vec3(0.12, 0.08, 0.06) * (1.0 - hNorm) * 0.25;',
+    '',
+    '        // Distance fade — aggressive to hide banding at horizon',
+    '        float marchLen = marchT - tEnter;',
+    '        float fade = 1.0 - smoothstep(10.0, 22.0, marchLen);',
+    '        sc *= 0.5 + 0.5 * fade;',
+    '',
+    '        // Beer-Lambert accumulation',
+    '        float alpha = 1.0 - exp(-d * stepLen * 6.0);',
+    '        light += sc * alpha * transmittance;',
+    '        transmittance *= 1.0 - alpha;',
+    '      }',
+    '      // Gradually increase step size with distance for efficiency',
+    '      marchT += stepLen;',
+    '      stepLen *= 1.02;',
+    '    }',
+    '',
+    '    col = skyCol * transmittance + light;',
+    '',
+    '    // ── God rays — cheap analytical approach ──',
+    '    // Uses transmittance variation to fake crepuscular rays',
+    '    float sunDot = max(dot(rd, SUN_DIR), 0.0);',
+    '    float rayStrength = pow(sunDot, 4.0) * transmittance * (1.0 - transmittance * 0.5);',
+    '    // Add subtle variation based on screen position for ray-like streaks',
+    '    float rayNoise = noise(vec3(ndc * 8.0, t * 0.1));',
+    '    float rays = rayStrength * (0.5 + rayNoise * 0.5);',
+    '    col += SUN_COL * rays * 0.18;',
+    '  }',
+    '',
+    '  // Horizon haze — stronger to mask distant banding',
+    '  float haze = exp(-abs(rd.y) * 5.0);',
+    '  col = mix(col, vec3(0.09, 0.055, 0.028), haze * 0.5);',
+    '',
+    '  // Vignette',
+    '  float vig = 1.0 - dot(ndc * 0.7, ndc * 0.7);',
+    '  col *= smoothstep(0.0, 0.5, vig);',
+    '',
+    '  // ACES tone mapping',
+    '  col = col * (2.51 * col + 0.03) / (col * (2.43 * col + 0.59) + 0.14);',
+    '',
+    '  // Warm gamma',
+    '  col = pow(max(col, 0.0), vec3(0.92, 0.96, 1.04));',
+    '',
+    '  gl_FragColor = vec4(col, 1.0);',
+    '}'
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error('Shader compile error:', gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error('Program link error:', gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2) * pixelScale;
+
+  function resize() {
+    var w = Math.round(canvas.clientWidth * dpr);
+    var h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  var running = true;
+  var rafId;
+
+  function render(now) {
+    if (!running) return;
+    resize();
+    gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    rafId = requestAnimationFrame(render);
+  }
+
+  rafId = requestAnimationFrame(render);
+
+  // ── Visibility-based pause ──
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) {
+      running = false;
+      if (rafId) cancelAnimationFrame(rafId);
+    } else {
+      running = true;
+      rafId = requestAnimationFrame(render);
+    }
+  });
+
+  // ── Message listener for parameter updates ──
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'param') {
+      // Reserved for future parameter control
+    }
+  });
+})();
+</script>
+</body>
+</html>

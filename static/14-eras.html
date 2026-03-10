@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Eras</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">14 — Eras</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// 14 · Eras — Prismatic crystalline fractals blending multiple palettes
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var urlParams = new URLSearchParams(window.location.search);
+  var pixelScale = parseFloat(urlParams.get('p')) || 1;
+
+  var gl = canvas.getContext('webgl', { alpha: true, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  var vertSrc = [
+    'attribute vec2 a_pos;',
+    'void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }'
+  ].join('\n');
+
+  var fragSrc = [
+    'precision highp float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform float u_complexity;',
+    'uniform float u_colorShift;',
+    '',
+    '#define PI 3.14159265359',
+    '#define TAU 6.28318530718',
+    '',
+    '// ── Rotation ──',
+    'mat2 rot(float a) {',
+    '  float c = cos(a), s = sin(a);',
+    '  return mat2(c, -s, s, c);',
+    '}',
+    '',
+    '// ── Hash ──',
+    'float hash(vec2 p) {',
+    '  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);',
+    '}',
+    '',
+    '// ── Value noise ──',
+    'float noise(vec2 p) {',
+    '  vec2 i = floor(p);',
+    '  vec2 f = fract(p);',
+    '  f = f * f * (3.0 - 2.0 * f);',
+    '  float a = hash(i);',
+    '  float b = hash(i + vec2(1.0, 0.0));',
+    '  float c = hash(i + vec2(0.0, 1.0));',
+    '  float d = hash(i + vec2(1.0, 1.0));',
+    '  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);',
+    '}',
+    '',
+    '// ── FBM ──',
+    'float fbm(vec2 p, int oct) {',
+    '  float v = 0.0, a = 0.5;',
+    '  mat2 r = rot(0.37);',
+    '  for (int i = 0; i < 7; i++) {',
+    '    if (i >= oct) break;',
+    '    v += a * noise(p);',
+    '    p = r * p * 2.03 + vec2(1.7, 9.2);',
+    '    a *= 0.49;',
+    '  }',
+    '  return v;',
+    '}',
+    '',
+    '// ── Kaleidoscope fold ──',
+    'vec2 kaleido(vec2 uv, float seg) {',
+    '  float angle = atan(uv.y, uv.x);',
+    '  float r = length(uv);',
+    '  float sa = TAU / seg;',
+    '  angle = mod(angle, sa);',
+    '  angle = abs(angle - sa * 0.5);',
+    '  return vec2(cos(angle), sin(angle)) * r;',
+    '}',
+    '',
+    '// ── Era palettes ── (reputation dark base, with all eras layered)',
+    '',
+    '// Reputation: blacks, grays, toxic green accents',
+    'vec3 eraReputation(float t) {',
+    '  vec3 a = vec3(0.04, 0.04, 0.04);',
+    '  vec3 b = vec3(0.15, 0.15, 0.15);',
+    '  vec3 c = vec3(0.47, 1.0, 0.31);',
+    '  return mix(a, mix(b, c, smoothstep(0.6, 0.9, t)), t);',
+    '}',
+    '',
+    '// Fearless/Debut: warm golds, sunrise amber',
+    'vec3 eraGold(float t) {',
+    '  vec3 a = vec3(0.35, 0.22, 0.05);',
+    '  vec3 b = vec3(0.94, 0.75, 0.25);',
+    '  vec3 c = vec3(1.0, 0.92, 0.55);',
+    '  return mix(a, mix(b, c, t), t);',
+    '}',
+    '',
+    '// Red: deep crimson, passionate scarlet',
+    'vec3 eraRed(float t) {',
+    '  vec3 a = vec3(0.25, 0.02, 0.02);',
+    '  vec3 b = vec3(0.82, 0.12, 0.12);',
+    '  vec3 c = vec3(1.0, 0.3, 0.18);',
+    '  return mix(a, mix(b, c, t), t);',
+    '}',
+    '',
+    '// 1989: pastel pinks, synth blues',
+    'vec3 era1989(float t) {',
+    '  vec3 a = vec3(0.18, 0.08, 0.28);',
+    '  vec3 b = vec3(1.0, 0.55, 0.75);',
+    '  vec3 c = vec3(0.4, 0.78, 1.0);',
+    '  return mix(a, mix(b, c, t * 0.8 + 0.1), t);',
+    '}',
+    '',
+    '// Folklore/Evermore: misty forest greens, earthy browns',
+    'vec3 eraFolklore(float t) {',
+    '  vec3 a = vec3(0.08, 0.10, 0.06);',
+    '  vec3 b = vec3(0.35, 0.42, 0.28);',
+    '  vec3 c = vec3(0.72, 0.68, 0.55);',
+    '  return mix(a, mix(b, c, t), t);',
+    '}',
+    '',
+    '// Midnights: deep blues, midnight purple, silver',
+    'vec3 eraMidnights(float t) {',
+    '  vec3 a = vec3(0.02, 0.02, 0.08);',
+    '  vec3 b = vec3(0.15, 0.10, 0.35);',
+    '  vec3 c = vec3(0.55, 0.50, 0.85);',
+    '  return mix(a, mix(b, c, t), t);',
+    '}',
+    '',
+    '// ── Diamond / snake-scale SDF for reputation base ──',
+    'float diamondGrid(vec2 p, float t) {',
+    '  vec2 q = rot(PI * 0.25) * p;',
+    '  vec2 id = floor(q);',
+    '  vec2 f = fract(q) - 0.5;',
+    '  float d = abs(f.x) + abs(f.y);',
+    '  // Travelling wave reveal',
+    '  float wave = sin(length(id) * 0.4 - t * 1.2) * 0.5 + 0.5;',
+    '  float edge = smoothstep(0.48, 0.44, d);',
+    '  return edge * wave;',
+    '}',
+    '',
+    '// ── Prismatic fractal field ──',
+    '// Domain-warped kaleidoscopic pattern',
+    'float prismField(vec2 uv, float t) {',
+    '  // Domain warp with fbm',
+    '  vec2 q = vec2(',
+    '    fbm(uv * 2.5 + vec2(0.0, 0.0) + t * 0.12, 5),',
+    '    fbm(uv * 2.5 + vec2(5.2, 1.3) - t * 0.09, 5)',
+    '  );',
+    '  vec2 r = vec2(',
+    '    fbm(uv * 2.5 + 3.0 * q + vec2(1.7, 9.2) + t * 0.08, 6),',
+    '    fbm(uv * 2.5 + 3.0 * q + vec2(8.3, 2.8) - t * 0.06, 6)',
+    '  );',
+    '  return fbm(uv + 2.0 * r, 7);',
+    '}',
+    '',
+    '// ── Geometric facet pattern ──',
+    'float facetPattern(vec2 p, float t) {',
+    '  // Hexagonal tiling',
+    '  vec2 q = p * 4.0;',
+    '  vec2 s = vec2(1.0, 1.732);',
+    '  vec2 a2 = mod(q, s) - s * 0.5;',
+    '  vec2 b2 = mod(q + s * 0.5, s) - s * 0.5;',
+    '  vec2 g = length(a2) < length(b2) ? a2 : b2;',
+    '  float d = length(g);',
+    '  float cell = smoothstep(0.45, 0.35, d);',
+    '  // Animate brightness per cell',
+    '  float id2 = hash(floor(q / s));',
+    '  float pulse = sin(t * 0.8 + id2 * TAU) * 0.5 + 0.5;',
+    '  return cell * (0.3 + pulse * 0.7);',
+    '}',
+    '',
+    '// ── Sparkle / shimmer dots ──',
+    'float sparkle(vec2 uv, float t) {',
+    '  float s = 0.0;',
+    '  for (int i = 0; i < 20; i++) {',
+    '    float fi = float(i);',
+    '    vec2 pos = vec2(',
+    '      sin(fi * 7.31 + t * 0.3) * 0.7 + cos(fi * 3.17 + t * 0.17) * 0.3,',
+    '      cos(fi * 5.43 + t * 0.25) * 0.7 + sin(fi * 4.71 + t * 0.13) * 0.3',
+    '    );',
+    '    float d = length(uv - pos);',
+    '    float twinkle = pow(max(sin(t * (2.0 + fi * 0.5) + fi * 1.7), 0.0), 12.0);',
+    '    s += smoothstep(0.025, 0.0, d) * twinkle;',
+    '    // Wide shimmer halo',
+    '    s += exp(-d * d * 80.0) * twinkle * 0.3;',
+    '  }',
+    '  return s;',
+    '}',
+    '',
+    'void main() {',
+    '  vec2 uv = (gl_FragCoord.xy - u_res * 0.5) / min(u_res.x, u_res.y);',
+    '  float t = u_time;',
+    '  float r = length(uv);',
+    '',
+    '  // ── Base: dark background (reputation era) ──',
+    '  vec3 col = vec3(0.015, 0.012, 0.018);',
+    '',
+    '  // ── Layer 0: Reputation dark geometric base ──',
+    '  // Snake-scale diamond grid as foundational pattern',
+    '  vec2 scaleUV = uv * (5.0 + sin(t * 0.15) * 0.5);',
+    '  scaleUV = rot(t * 0.03) * scaleUV;',
+    '  float scales = diamondGrid(scaleUV, t);',
+    '  // Add traveling waves through the scales',
+    '  float scaleWave = sin(r * 8.0 - t * 1.8) * 0.5 + 0.5;',
+    '  scales *= 0.5 + scaleWave * 0.5;',
+    '  vec3 repColor = eraReputation(scales);',
+    '  col += repColor * scales * 0.4;',
+    '',
+    '  // Reputation accent: occasional green flash along scale edges',
+    '  float greenFlash = diamondGrid(scaleUV * 1.01 + 0.02, t) - scales;',
+    '  greenFlash = max(greenFlash, 0.0);',
+    '  col += vec3(0.3, 0.8, 0.2) * greenFlash * 1.5 * smoothstep(0.8, 0.4, r);',
+    '',
+    '  // ── Layer 1: Prismatic kaleidoscope ──',
+    '  // Slow-rotating multi-fold kaleidoscope',
+    '  float segments = 8.0 + sin(t * 0.07) * 2.0;',
+    '  vec2 kuv = kaleido(rot(t * 0.05) * uv, segments);',
+    '',
+    '  // Zoom breathe',
+    '  float zoom = 1.0 + sin(t * 0.2) * 0.15 + sin(t * 0.13) * 0.08;',
+    '  kuv *= zoom * u_complexity;',
+    '  kuv += vec2(t * 0.04, t * 0.025);',
+    '',
+    '  // Prismatic fractal field through kaleidoscope',
+    '  float prism = prismField(kuv, t * 0.3);',
+    '',
+    '  // ── Color the prism with blended era palettes ──',
+    '  // Each era palette occupies a region of the prism field',
+    '  // They overlap and blend through the prism value',
+    '  float colorCycle = t * 0.06 * u_colorShift + r * 0.3;',
+    '',
+    '  // Compute blend weights — smooth waves that overlap',
+    '  float w0 = pow(max(sin(colorCycle * TAU + 0.0), 0.0), 1.5);  // gold',
+    '  float w1 = pow(max(sin(colorCycle * TAU + 1.05), 0.0), 1.5); // red',
+    '  float w2 = pow(max(sin(colorCycle * TAU + 2.09), 0.0), 1.5); // 1989',
+    '  float w3 = pow(max(sin(colorCycle * TAU + 3.14), 0.0), 1.5); // folklore',
+    '  float w4 = pow(max(sin(colorCycle * TAU + 4.19), 0.0), 1.5); // midnights',
+    '  float wTotal = w0 + w1 + w2 + w3 + w4 + 0.001;',
+    '',
+    '  // Spatial variation: different areas favor different eras',
+    '  float spatialAngle = atan(uv.y, uv.x);',
+    '  float spatialVar = noise(uv * 3.0 + t * 0.05);',
+    '  w0 *= 1.0 + 0.5 * sin(spatialAngle * 2.0 + t * 0.1);',
+    '  w1 *= 1.0 + 0.5 * sin(spatialAngle * 3.0 + t * 0.15 + 1.0);',
+    '  w2 *= 1.0 + 0.5 * cos(spatialAngle * 2.5 + t * 0.12);',
+    '  w3 *= 1.0 + 0.5 * sin(spatialAngle * 1.5 + t * 0.08 + 2.0);',
+    '  w4 *= 1.0 + 0.5 * cos(spatialAngle * 3.5 + t * 0.18 + 3.0);',
+    '  wTotal = w0 + w1 + w2 + w3 + w4 + 0.001;',
+    '',
+    '  // Sample each era palette at the prism value',
+    '  vec3 prismColor = (',
+    '    eraGold(prism) * w0 +',
+    '    eraRed(prism) * w1 +',
+    '    era1989(prism) * w2 +',
+    '    eraFolklore(prism) * w3 +',
+    '    eraMidnights(prism) * w4',
+    '  ) / wTotal;',
+    '',
+    '  // Apply prism color with smooth intensity',
+    '  float prismIntensity = smoothstep(0.2, 0.7, prism) * 0.85;',
+    '  prismIntensity *= smoothstep(1.1, 0.3, r); // fade at edges',
+    '  col += prismColor * prismIntensity;',
+    '',
+    '  // ── Layer 2: Second kaleidoscope at different fold count for depth ──',
+    '  vec2 kuv2 = kaleido(rot(-t * 0.035 + 0.5) * uv, segments + 4.0);',
+    '  kuv2 *= zoom * 1.4;',
+    '  kuv2 += vec2(-t * 0.03, t * 0.05);',
+    '  float prism2 = prismField(kuv2, t * 0.25 + 5.0);',
+    '',
+    '  // Color with offset palette blend',
+    '  float colorCycle2 = t * 0.05 * u_colorShift + r * 0.5 + 0.5;',
+    '  float w0b = pow(max(sin(colorCycle2 * TAU + 0.5), 0.0), 2.0);',
+    '  float w1b = pow(max(sin(colorCycle2 * TAU + 1.5), 0.0), 2.0);',
+    '  float w2b = pow(max(sin(colorCycle2 * TAU + 2.5), 0.0), 2.0);',
+    '  float w3b = pow(max(sin(colorCycle2 * TAU + 3.5), 0.0), 2.0);',
+    '  float w4b = pow(max(sin(colorCycle2 * TAU + 4.5), 0.0), 2.0);',
+    '  float wTotalB = w0b + w1b + w2b + w3b + w4b + 0.001;',
+    '',
+    '  vec3 prismColor2 = (',
+    '    eraGold(prism2) * w0b +',
+    '    eraRed(prism2) * w1b +',
+    '    era1989(prism2) * w2b +',
+    '    eraFolklore(prism2) * w3b +',
+    '    eraMidnights(prism2) * w4b',
+    '  ) / wTotalB;',
+    '',
+    '  float prism2Intensity = smoothstep(0.25, 0.65, prism2) * 0.45;',
+    '  prism2Intensity *= smoothstep(1.0, 0.2, r);',
+    '  col += prismColor2 * prism2Intensity;',
+    '',
+    '  // ── Layer 3: Geometric facets overlay ──',
+    '  vec2 facetUV = kaleido(rot(t * 0.04 + 1.0) * uv, segments);',
+    '  facetUV *= 1.8 * u_complexity;',
+    '  facetUV += vec2(t * 0.06, -t * 0.03);',
+    '  float facets = facetPattern(facetUV, t);',
+    '',
+    '  // Color facets with a bright gold/amber blend',
+    '  vec3 facetColor = mix(',
+    '    eraGold(0.7 + sin(t * 0.3) * 0.2),',
+    '    eraMidnights(0.6 + cos(t * 0.2) * 0.3),',
+    '    sin(t * 0.15 + r * 2.0) * 0.5 + 0.5',
+    '  );',
+    '  col += facetColor * facets * 0.2 * smoothstep(0.9, 0.3, r);',
+    '',
+    '  // ── Layer 4: Fold-line highlights (crystalline edges) ──',
+    '  float foldAngle = atan(uv.y, uv.x);',
+    '  float foldDist = abs(sin(foldAngle * segments * 0.5));',
+    '  float foldLine = smoothstep(0.015, 0.0, 1.0 - foldDist);',
+    '  // Animate with pulsing brightness and color shifts',
+    '  float foldPulse = 0.4 + 0.6 * sin(t * 0.5 + r * 5.0);',
+    '  foldLine *= foldPulse;',
+    '  // Color fold lines prismatically',
+    '  vec3 foldColor = mix(',
+    '    vec3(1.0, 0.85, 0.45),',
+    '    mix(era1989(0.8), eraRed(0.7), sin(t * 0.4 + foldAngle) * 0.5 + 0.5),',
+    '    sin(t * 0.2 + foldAngle * 2.0) * 0.5 + 0.5',
+    '  );',
+    '  col += foldColor * foldLine * 0.5 * (1.0 - r * 0.3);',
+    '',
+    '  // ── Layer 5: Radial shimmer rings ──',
+    '  float rings = sin(r * 18.0 - t * 2.0) * 0.5 + 0.5;',
+    '  rings = pow(rings, 4.0) * 0.2;',
+    '  vec3 ringColor = mix(',
+    '    eraGold(0.8),',
+    '    era1989(0.6),',
+    '    sin(t * 0.25 + r * 3.0) * 0.5 + 0.5',
+    '  );',
+    '  col += ringColor * rings * smoothstep(1.0, 0.1, r);',
+    '',
+    '  // ── Layer 6: Center focal glow ──',
+    '  float centerGlow = exp(-r * r * 6.0);',
+    '  vec3 centerColor = mix(',
+    '    vec3(1.0, 0.88, 0.5),',
+    '    mix(vec3(1.0, 0.5, 0.6), vec3(0.6, 0.5, 1.0), sin(t * 0.18) * 0.5 + 0.5),',
+    '    sin(t * 0.25) * 0.5 + 0.5',
+    '  );',
+    '  col += centerColor * centerGlow * 0.55;',
+    '',
+    '  // ── Layer 7: Mandala star at center ──',
+    '  float starAngle = atan(uv.y, uv.x);',
+    '  float star = abs(sin(starAngle * segments * 0.5 + t * 0.4));',
+    '  star = pow(star, 12.0) * exp(-r * 4.0);',
+    '  vec3 starColor = mix(vec3(1.0, 0.92, 0.65), vec3(0.9, 0.6, 0.9), sin(t * 0.3) * 0.5 + 0.5);',
+    '  col += starColor * star * 0.5;',
+    '',
+    '  // ── Layer 8: Sparkle shimmer ──',
+    '  float sp = sparkle(uv, t);',
+    '  vec3 sparkleColor = mix(',
+    '    vec3(1.0, 0.95, 0.8),',
+    '    vec3(1.0, 0.7, 0.85),',
+    '    sin(t * 0.5) * 0.5 + 0.5',
+    '  );',
+    '  col += sparkleColor * sp * 0.7;',
+    '',
+    '  // ── Color saturation boost for richness ──',
+    '  float lum = dot(col, vec3(0.299, 0.587, 0.114));',
+    '  col = mix(vec3(lum), col, 1.25);',
+    '',
+    '  // ── Tone mapping ──',
+    '  col = col / (1.0 + col * 0.35);',
+    '',
+    '  // ── Warm push — slightly favor warm tones ──',
+    '  col = pow(max(col, vec3(0.0)), vec3(0.93, 0.97, 1.05));',
+    '',
+    '  // ── Subtle noise texture ──',
+    '  float tex = noise(gl_FragCoord.xy * 0.5) * 0.03 - 0.015;',
+    '  col += tex;',
+    '',
+    '  // ── Vignette ──',
+    '  float vig = 1.0 - dot(uv, uv) * 0.45;',
+    '  col *= max(vig, 0.0);',
+    '',
+    '  col = max(col, vec3(0.0));',
+    '',
+    '  gl_FragColor = vec4(col, 1.0);',
+    '}'
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error('Shader compile error:', gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error('Program link error:', gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uComplexity = gl.getUniformLocation(prog, 'u_complexity');
+  var uColorShift = gl.getUniformLocation(prog, 'u_colorShift');
+
+  var complexityVal = 1.0;
+  var colorShiftVal = 1.0;
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2) * pixelScale;
+
+  function resize() {
+    var w = Math.round(canvas.clientWidth * dpr);
+    var h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  function render(now) {
+    resize();
+    gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uComplexity, complexityVal);
+    gl.uniform1f(uColorShift, colorShiftVal);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'COMPLEXITY': complexityVal = e.data.value; break;
+        case 'COLOR_SHIFT': colorShiftVal = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

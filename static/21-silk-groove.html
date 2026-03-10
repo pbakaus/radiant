@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Silk Groove</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">21 — Silk Groove</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// 21 · Silk Groove — Luxurious flowing silk fabric with shimmering folds
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var _pad = parseFloat(new URLSearchParams(location.search).get('p')) || 1;
+
+  var gl = canvas.getContext('webgl', { alpha: true, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  var vertSrc = [
+    'attribute vec2 a_pos;',
+    'void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }'
+  ].join('\n');
+
+  var fragSrc = [
+    'precision highp float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform float u_flowSpeed;',
+    'uniform float u_foldDepth;',
+    '',
+    '// --- Simplex noise ---',
+    'vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }',
+    'vec2 mod289v2(vec2 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }',
+    'vec3 permute(vec3 x) { return mod289(((x * 34.0) + 1.0) * x); }',
+    '',
+    'float snoise(vec2 v) {',
+    '  const vec4 C = vec4(0.211324865405187, 0.366025403784439,',
+    '                     -0.577350269189626, 0.024390243902439);',
+    '  vec2 i = floor(v + dot(v, C.yy));',
+    '  vec2 x0 = v - i + dot(i, C.xx);',
+    '  vec2 i1 = (x0.x > x0.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);',
+    '  vec4 x12 = x0.xyxy + C.xxzz;',
+    '  x12.xy -= i1;',
+    '  i = mod289v2(i);',
+    '  vec3 p = permute(permute(i.y + vec3(0.0, i1.y, 1.0)) + i.x + vec3(0.0, i1.x, 1.0));',
+    '  vec3 m = max(0.5 - vec3(dot(x0, x0), dot(x12.xy, x12.xy), dot(x12.zw, x12.zw)), 0.0);',
+    '  m = m * m;',
+    '  m = m * m;',
+    '  vec3 x = 2.0 * fract(p * C.www) - 1.0;',
+    '  vec3 h = abs(x) - 0.5;',
+    '  vec3 ox = floor(x + 0.5);',
+    '  vec3 a0 = x - ox;',
+    '  m *= 1.79284291400159 - 0.85373472095314 * (a0 * a0 + h * h);',
+    '  vec3 g;',
+    '  g.x = a0.x * x0.x + h.x * x0.y;',
+    '  g.yz = a0.yz * x12.xz + h.yz * x12.yw;',
+    '  return 130.0 * dot(m, g);',
+    '}',
+    '',
+    '// Smooth FBM — 3 octaves for organic warping',
+    'float smoothFbm(vec2 p, float t) {',
+    '  float val = 0.0;',
+    '  float amp = 0.55;',
+    '  mat2 rot = mat2(0.8, 0.6, -0.6, 0.8);',
+    '  for (int i = 0; i < 3; i++) {',
+    '    val += amp * snoise(p + t * 0.1);',
+    '    p = rot * p * 1.9;',
+    '    amp *= 0.42;',
+    '  }',
+    '  return val;',
+    '}',
+    '',
+    '// Silk fabric height field',
+    '// Folds run predominantly along one direction (like draped fabric)',
+    '// with gentle cross-folds and organic variation',
+    'float silkHeight(vec2 uv, float t) {',
+    '  // Rotate into fabric-aligned coordinates — folds run diagonally',
+    '  float angle = 0.45;',
+    '  float ca = cos(angle); float sa = sin(angle);',
+    '  vec2 fuv = vec2(ca * uv.x + sa * uv.y, -sa * uv.x + ca * uv.y);',
+    '',
+    '  // Primary folds — long parallel ridges across the fabric',
+    '  // These are the dominant feature of draped silk',
+    '  float folds = sin(fuv.y * 4.0 + t * 0.3) * 0.30;',
+    '  folds += sin(fuv.y * 6.5 + t * 0.45 + 1.0) * 0.16;',
+    '  folds += sin(fuv.y * 10.0 + t * 0.55 + 2.5) * 0.07;',
+    '  folds += sin(fuv.y * 14.0 + t * 0.7 + 4.0) * 0.03;',
+    '',
+    '  // Slow modulation along the fold direction — folds gather and spread',
+    '  float gather = sin(fuv.x * 0.8 + t * 0.15) * 0.4 + 0.6;',
+    '  folds *= gather;',
+    '',
+    '  // Gentle cross-folds (much weaker than main folds)',
+    '  float cross = sin(fuv.x * 2.0 + fuv.y * 0.5 + t * 0.25 + 3.0) * 0.06;',
+    '  cross += sin(fuv.x * 3.5 - fuv.y * 0.8 + t * 0.35 + 5.0) * 0.04;',
+    '',
+    '  // Large billowing motion — the whole fabric breathes',
+    '  float billow = sin(uv.x * 0.9 + uv.y * 0.6 + t * 0.2) * 0.15;',
+    '  billow += sin(uv.x * 0.5 - uv.y * 1.1 + t * 0.18 + 2.0) * 0.12;',
+    '',
+    '  // Organic noise — very low frequency for natural drape variation',
+    '  float organic = smoothFbm(uv * 0.3, t * 0.4) * 0.1;',
+    '',
+    '  return folds + cross + billow + organic;',
+    '}',
+    '',
+    '// Surface normal via central differences',
+    'vec3 silkNormal(vec2 uv, float t) {',
+    '  float eps = 0.003;',
+    '  float hC = silkHeight(uv, t);',
+    '  float hR = silkHeight(uv + vec2(eps, 0.0), t);',
+    '  float hU = silkHeight(uv + vec2(0.0, eps), t);',
+    '  // The z-component controls how steep the normals feel',
+    '  // Lower = sharper highlights, higher = softer',
+    '  return normalize(vec3(hC - hR, hC - hU, eps * 1.0));',
+    '}',
+    '',
+    'void main() {',
+    '  vec2 uv = gl_FragCoord.xy / u_res;',
+    '  float aspect = u_res.x / u_res.y;',
+    '  vec2 p = vec2((uv.x - 0.5) * aspect, uv.y - 0.5) * 3.2;',
+    '',
+    '  float t = u_time * u_flowSpeed;',
+    '',
+    '  // Gentle domain warp for organic movement',
+    '  vec2 warp = vec2(',
+    '    snoise(p * 0.18 + t * 0.05 + vec2(0.0, 4.7)),',
+    '    snoise(p * 0.18 + t * 0.04 + vec2(8.3, 0.0))',
+    '  ) * 0.25;',
+    '  vec2 sp = p + warp;',
+    '',
+    '  // Height and normal of the silk surface',
+    '  float h = silkHeight(sp, t) * u_foldDepth;',
+    '  vec3 N = silkNormal(sp, t);',
+    '',
+    '  // ── Lighting — warm two-point setup ──',
+    '  vec3 L1 = normalize(vec3(0.3, 0.5, 0.75));',
+    '  vec3 L2 = normalize(vec3(-0.5, -0.3, 0.65));',
+    '  vec3 V = vec3(0.0, 0.0, 1.0);',
+    '',
+    '  // Diffuse',
+    '  float d1 = max(dot(N, L1), 0.0);',
+    '  float d2 = max(dot(N, L2), 0.0);',
+    '',
+    '  // Wrapped diffuse for softer fill',
+    '  float wd1 = max(0.0, (dot(N, L1) + 0.3) / 1.3);',
+    '',
+    '  // Specular lobes — silk has broad sheen + sharp glint',
+    '  vec3 H1 = normalize(L1 + V);',
+    '  vec3 H2 = normalize(L2 + V);',
+    '',
+    '  // Broad silk sheen',
+    '  float sheen1 = pow(max(dot(N, H1), 0.0), 3.0) * 0.4;',
+    '  float sheen2 = pow(max(dot(N, H2), 0.0), 4.0) * 0.2;',
+    '',
+    '  // Medium specular',
+    '  float spec1 = pow(max(dot(N, H1), 0.0), 18.0);',
+    '  float spec2 = pow(max(dot(N, H2), 0.0), 22.0);',
+    '',
+    '  // Sharp glint on fold peaks',
+    '  float spark = pow(max(dot(N, H1), 0.0), 90.0);',
+    '',
+    '  // Fresnel rim',
+    '  float fresnel = pow(1.0 - max(dot(N, V), 0.0), 3.0);',
+    '',
+    '  // ── Color palette — luxurious warm silk ──',
+    '  vec3 deepAmber    = vec3(0.45, 0.22, 0.08);',
+    '  vec3 richGold     = vec3(0.70, 0.50, 0.16);',
+    '  vec3 warmBurgundy = vec3(0.32, 0.07, 0.09);',
+    '  vec3 deepRose     = vec3(0.48, 0.16, 0.14);',
+    '  vec3 lightSilk    = vec3(1.0, 0.88, 0.55);',
+    '  vec3 pearlHL      = vec3(1.0, 0.94, 0.75);',
+    '',
+    '  // Smoothly varying base color across fabric',
+    '  float cm1 = smoothstep(-0.3, 0.4, h);',
+    '  float cm2 = snoise(sp * 0.25 + t * 0.02 + vec2(13.0, 7.0)) * 0.5 + 0.5;',
+    '  float cm3 = snoise(sp * 0.15 + vec2(3.0, 11.0)) * 0.5 + 0.5;',
+    '',
+    '  vec3 baseColor = mix(warmBurgundy, deepAmber, cm1);',
+    '  baseColor = mix(baseColor, richGold, cm2 * 0.5);',
+    '  baseColor = mix(baseColor, deepRose, cm3 * 0.2);',
+    '',
+    '  // ── Compose final color ──',
+    '  vec3 col = baseColor * 0.15; // ambient',
+    '',
+    '  // Primary warm key light',
+    '  vec3 lc1 = vec3(1.0, 0.87, 0.58);',
+    '  col += baseColor * wd1 * 0.5 * lc1;',
+    '  col += baseColor * sheen1 * lc1;',
+    '  col += lightSilk * spec1 * 0.6;',
+    '  col += pearlHL * spark * 0.5;',
+    '',
+    '  // Secondary cooler fill',
+    '  vec3 lc2 = vec3(0.6, 0.5, 0.72);',
+    '  col += baseColor * d2 * 0.18 * lc2;',
+    '  col += baseColor * sheen2 * lc2;',
+    '  col += vec3(0.75, 0.65, 0.85) * spec2 * 0.2;',
+    '',
+    '  // Fresnel edge glow',
+    '  col += pearlHL * fresnel * 0.1;',
+    '',
+    '  // ── Traveling shimmer along fold ridges ──',
+    '  float angle2 = 0.45;',
+    '  float ca2 = cos(angle2); float sa2 = sin(angle2);',
+    '  float foldDir = ca2 * sp.x + sa2 * sp.y;',
+    '  float shim = sin(foldDir * 4.0 - t * 1.5) * 0.5 + 0.5;',
+    '  shim = pow(shim, 18.0);',
+    '  col += pearlHL * shim * (spec1 + sheen1 * 0.3) * 0.5;',
+    '',
+    '  // ── Fold shadows — darken valleys ──',
+    '  float valley = smoothstep(0.05, -0.25, h);',
+    '  col *= 1.0 - valley * 0.5;',
+    '',
+    '  // Deep shadow in lowest folds',
+    '  float deepSh = smoothstep(-0.1, -0.45, h);',
+    '  col = mix(col, vec3(0.05, 0.02, 0.025), deepSh * 0.45);',
+    '',
+    '  // ── Subtle iridescence ──',
+    '  col.r += fresnel * 0.06;',
+    '  col.b += fresnel * 0.03;',
+    '',
+    '  // ── Vignette ──',
+    '  vec2 vc = uv - 0.5;',
+    '  float vig = 1.0 - dot(vc, vc) * 1.4;',
+    '  vig = smoothstep(0.0, 1.0, vig);',
+    '  col *= vig;',
+    '',
+    '  // Tone mapping + gamma',
+    '  col = col / (col + vec3(0.6));',
+    '  col = pow(col, vec3(0.9));',
+    '',
+    '  // Floor to near-black',
+    '  col = max(col, vec3(0.018, 0.015, 0.013));',
+    '',
+    '  gl_FragColor = vec4(col, 1.0);',
+    '}',
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error(gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uFlowSpeed = gl.getUniformLocation(prog, 'u_flowSpeed');
+  var uFoldDepth = gl.getUniformLocation(prog, 'u_foldDepth');
+  var flowSpeedVal = 0.8;
+  var foldDepthVal = 1.0;
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  function resize() {
+    var w = Math.round(canvas.clientWidth * dpr);
+    var h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  function render(now) {
+    resize();
+    gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uFlowSpeed, flowSpeedVal);
+    gl.uniform1f(uFoldDepth, foldDepthVal);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'FLOW_SPEED': flowSpeedVal = e.data.value; break;
+        case 'FOLD_DEPTH': foldDepthVal = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

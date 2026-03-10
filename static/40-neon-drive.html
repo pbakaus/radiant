@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Neon Drive</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">40 — Neon Drive</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// 40 · Neon Drive — Synthwave outrun horizon shader
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var _pad = parseFloat(new URLSearchParams(location.search).get('p')) || 1;
+
+  var gl = canvas.getContext('webgl', { alpha: false, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  var vertSrc = [
+    'attribute vec2 a_pos;',
+    'void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }'
+  ].join('\n');
+
+  var fragSrc = [
+    'precision highp float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform float u_speed;',
+    'uniform float u_glow;',
+    '',
+    '// ── Horizon position ──',
+    'const float HORIZON = 0.38;',
+    '',
+    '// ── Hash / noise helpers ──',
+    'float hash(vec2 p) {',
+    '  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);',
+    '}',
+    '',
+    'float noise(vec2 p) {',
+    '  vec2 i = floor(p);',
+    '  vec2 f = fract(p);',
+    '  f = f * f * (3.0 - 2.0 * f);',
+    '  float a = hash(i);',
+    '  float b = hash(i + vec2(1.0, 0.0));',
+    '  float c = hash(i + vec2(0.0, 1.0));',
+    '  float d = hash(i + vec2(1.0, 1.0));',
+    '  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);',
+    '}',
+    '',
+    '// ── Sun shape with layered glow ──',
+    'vec3 sun(vec2 uv, float t) {',
+    '  vec2 sunPos = vec2(0.0, HORIZON + 0.18);',
+    '  float sunRadius = 0.12;',
+    '  float d = length(uv - sunPos);',
+    '',
+    '  // Horizontal scanlines through the sun',
+    '  float scanline = 0.0;',
+    '  if (uv.y < sunPos.y && uv.y > sunPos.y - sunRadius) {',
+    '    float band = (sunPos.y - uv.y) / sunRadius;',
+    '    float lineSpacing = 0.028 + band * 0.06;',
+    '    float lineY = mod(uv.y + 0.001, lineSpacing);',
+    '    scanline = smoothstep(0.0, 0.003, lineY) * smoothstep(lineSpacing, lineSpacing - 0.003, lineY);',
+    '    scanline *= smoothstep(0.0, 0.4, band);',
+    '  }',
+    '',
+    '  // Sun disc with gradient',
+    '  float sunMask = smoothstep(sunRadius + 0.003, sunRadius - 0.003, d);',
+    '  vec3 sunColorTop = vec3(1.0, 0.85, 0.1);',
+    '  vec3 sunColorBot = vec3(1.0, 0.15, 0.4);',
+    '  float sunGradient = smoothstep(sunPos.y + sunRadius, sunPos.y - sunRadius, uv.y);',
+    '  vec3 sunCol = mix(sunColorTop, sunColorBot, sunGradient);',
+    '  sunCol *= sunMask;',
+    '',
+    '  // Cut out scanline bands from lower half of sun',
+    '  sunCol *= mix(1.0, scanline, smoothstep(sunPos.y, sunPos.y - sunRadius, uv.y) * 0.85);',
+    '',
+    '  // Multi-layered glow around the sun',
+    '  float glow1 = exp(-d * 4.0) * 0.5;',
+    '  float glow2 = exp(-d * 10.0) * 0.3;',
+    '  float glow3 = exp(-d * 25.0) * 0.2;',
+    '  vec3 glowCol = vec3(1.0, 0.3, 0.5) * glow1 +',
+    '                 vec3(1.0, 0.6, 0.2) * glow2 +',
+    '                 vec3(1.0, 0.9, 0.5) * glow3;',
+    '',
+    '  return sunCol + glowCol;',
+    '}',
+    '',
+    '// ── Sky gradient with stars ──',
+    'vec3 sky(vec2 uv, float t) {',
+    '  // Deep purple to hot pink to orange gradient',
+    '  float skyY = (uv.y - HORIZON) / (1.0 - HORIZON);',
+    '  skyY = clamp(skyY, 0.0, 1.0);',
+    '',
+    '  vec3 colBot = vec3(0.6, 0.05, 0.3);   // hot pink at horizon',
+    '  vec3 colMid = vec3(0.25, 0.02, 0.35);  // deep purple',
+    '  vec3 colTop = vec3(0.02, 0.01, 0.08);  // near black',
+    '',
+    '  vec3 col = mix(colBot, colMid, smoothstep(0.0, 0.35, skyY));',
+    '  col = mix(col, colTop, smoothstep(0.25, 0.85, skyY));',
+    '',
+    '  // Horizon haze — warm orange glow right at the horizon',
+    '  float hazeStrength = exp(-skyY * 8.0) * 0.7;',
+    '  col += vec3(1.0, 0.4, 0.1) * hazeStrength;',
+    '',
+    '  // Stars',
+    '  float starField = hash(floor(uv * 200.0));',
+    '  float starMask = smoothstep(0.3, 0.9, skyY);',
+    '  float twinkle = sin(t * 2.0 + starField * 50.0) * 0.5 + 0.5;',
+    '  float star = smoothstep(0.992, 0.999, starField) * starMask * (0.5 + 0.5 * twinkle);',
+    '  col += vec3(0.8, 0.7, 1.0) * star;',
+    '',
+    '  // Add sun',
+    '  col += sun(uv, t);',
+    '',
+    '  return col;',
+    '}',
+    '',
+    '// ── Perspective grid road ──',
+    'vec3 grid(vec2 uv, float t) {',
+    '  // Road below horizon',
+    '  float roadY = HORIZON - uv.y;',
+    '  if (roadY <= 0.0) return vec3(0.0);',
+    '',
+    '  // Perspective projection: map screen Y to world Z',
+    '  // Higher constant = more grid cells visible = denser grid',
+    '  float perspective = 1.5 / roadY;',
+    '  float worldX = uv.x * perspective;',
+    '  float worldZ = perspective;',
+    '',
+    '  // Forward motion',
+    '  float speed = t * u_speed * 3.0;',
+    '  worldZ += speed;',
+    '',
+    '  // ── Grid lines ──',
+    '',
+    '  // Z lines (horizontal in perspective, running left-right)',
+    '  float zLine = abs(fract(worldZ * 0.5) - 0.5);',
+    '  float zLineWidth = clamp(perspective * 0.001, 0.01, 0.12);',
+    '  float zGrid = smoothstep(zLineWidth, 0.0, zLine);',
+    '',
+    '  // X lines (vertical in perspective, running into distance)',
+    '  float xLine = abs(fract(worldX * 0.25) - 0.5);',
+    '  float xLineWidth = clamp(perspective * 0.0005, 0.006, 0.08);',
+    '  float xGrid = smoothstep(xLineWidth, 0.0, xLine);',
+    '',
+    '  float gridVal = max(zGrid, xGrid);',
+    '',
+    '  // Distance fade — fade in from horizon, stay visible to camera',
+    '  float fadeIn = smoothstep(0.0, 0.05, roadY);',
+    '',
+    '  // Brightness increases slightly near camera for depth cue',
+    '  float proxBright = 0.5 + 0.5 * smoothstep(0.0, 0.4, roadY);',
+    '',
+    '  // Grid colors: main neon pink/magenta, with cyan accents',
+    '  vec3 gridColor = vec3(0.9, 0.1, 0.6);',
+    '',
+    '  // Accent every 4th line with cyan',
+    '  float zMajor = abs(fract(worldZ * 0.125) - 0.5);',
+    '  float zMajorLine = smoothstep(zLineWidth * 0.5, 0.0, zMajor);',
+    '  float xMajor = abs(fract(worldX * 0.0625) - 0.5);',
+    '  float xMajorLine = smoothstep(xLineWidth * 0.5, 0.0, xMajor);',
+    '  float majorGrid = max(zMajorLine, xMajorLine);',
+    '',
+    '  vec3 accentColor = vec3(0.1, 0.6, 1.0);',
+    '  gridColor = mix(gridColor, accentColor, majorGrid * 0.4);',
+    '',
+    '  // Grid glow — soft bloom around grid lines',
+    '  float zGlow = exp(-zLine * 20.0) * 0.25;',
+    '  float xGlow = exp(-xLine * 20.0) * 0.2;',
+    '  float gridGlow = max(zGlow, xGlow);',
+    '',
+    '  vec3 col = gridColor * gridVal * proxBright * fadeIn;',
+    '  col += gridColor * gridGlow * fadeIn * 0.7;',
+    '',
+    '  // Ground base color — very dark with slight purple tint',
+    '  vec3 groundColor = vec3(0.02, 0.01, 0.04);',
+    '  col += groundColor;',
+    '',
+    '  // Horizon fog glow — warm/pink mist at the horizon',
+    '  float fogBand = exp(-roadY * 10.0);',
+    '  col += vec3(0.5, 0.1, 0.35) * fogBand * 0.5;',
+    '',
+    '  return col;',
+    '}',
+    '',
+    '// ── Side terrain / mountains ──',
+    'vec3 mountains(vec2 uv, float t) {',
+    '  if (uv.y < HORIZON) return vec3(0.0);',
+    '',
+    '  float mountainY = HORIZON;',
+    '  float au = abs(uv.x);',
+    '',
+    '  // Mountain silhouette using layered noise',
+    '  float m1 = noise(vec2(au * 3.0, 0.0)) * 0.08;',
+    '  float m2 = noise(vec2(au * 8.0, 1.0)) * 0.03;',
+    '  float m3 = noise(vec2(au * 20.0, 2.0)) * 0.01;',
+    '  float mountainHeight = m1 + m2 + m3;',
+    '',
+    '  // Only show mountains on the sides',
+    '  float sideMask = smoothstep(0.15, 0.5, au);',
+    '  mountainHeight *= sideMask;',
+    '',
+    '  float mountainTop = HORIZON + mountainHeight;',
+    '  float mountainMask = smoothstep(mountainTop + 0.005, mountainTop - 0.002, uv.y);',
+    '',
+    '  // Dark silhouette with subtle purple edge light',
+    '  vec3 col = vec3(0.015, 0.005, 0.03) * mountainMask;',
+    '',
+    '  // Edge glow along the mountain ridge',
+    '  float edgeDist = abs(uv.y - mountainTop);',
+    '  float edgeGlow = exp(-edgeDist * 200.0) * sideMask;',
+    '  col += vec3(0.6, 0.1, 0.5) * edgeGlow * 0.3;',
+    '',
+    '  return col;',
+    '}',
+    '',
+    '// ── Side grid (ground extending beyond the road) ──',
+    'vec3 sideGrid(vec2 uv, float t) {',
+    '  float roadY = HORIZON - uv.y;',
+    '  if (roadY <= 0.0) return vec3(0.0);',
+    '',
+    '  float perspective = 1.5 / roadY;',
+    '  float worldX = uv.x * perspective;',
+    '  float worldZ = perspective + t * u_speed * 3.0;',
+    '',
+    '  // Same grid density as the road',
+    '  float zLine = abs(fract(worldZ * 0.5) - 0.5);',
+    '  float xLine = abs(fract(worldX * 0.25) - 0.5);',
+    '',
+    '  float zLineWidth = clamp(perspective * 0.0008, 0.008, 0.08);',
+    '  float xLineWidth = clamp(perspective * 0.0004, 0.004, 0.06);',
+    '',
+    '  float zGrid = smoothstep(zLineWidth, 0.0, zLine);',
+    '  float xGrid = smoothstep(xLineWidth, 0.0, xLine);',
+    '  float gridVal = max(zGrid, xGrid);',
+    '',
+    '  float fadeIn = smoothstep(0.0, 0.05, roadY);',
+    '',
+    '  // Slightly different color for side terrain grid — purple',
+    '  vec3 sideColor = vec3(0.4, 0.05, 0.6);',
+    '  return sideColor * gridVal * fadeIn * 0.35;',
+    '}',
+    '',
+    '// ── Sun reflection on road ──',
+    'vec3 sunReflection(vec2 uv, float t) {',
+    '  float roadY = HORIZON - uv.y;',
+    '  if (roadY <= 0.0) return vec3(0.0);',
+    '',
+    '  // Reflection of the sun centered on the road',
+    '  float reflectWidth = 0.15 / (roadY * 3.0 + 0.3);',
+    '  float xDist = abs(uv.x);',
+    '  float reflStrength = exp(-xDist * xDist / (reflectWidth * reflectWidth * 0.02));',
+    '',
+    '  // Shimmer effect',
+    '  float perspective = 1.5 / roadY;',
+    '  float worldZ = perspective + t * u_speed * 3.0;',
+    '  float shimmer = noise(vec2(uv.x * 30.0, worldZ * 2.0)) * 0.5 + 0.5;',
+    '',
+    '  // Color gradient from warm to pink',
+    '  float gradT = smoothstep(0.0, 0.25, roadY);',
+    '  vec3 reflColor = mix(vec3(1.0, 0.5, 0.2), vec3(1.0, 0.15, 0.4), gradT);',
+    '',
+    '  float fadeNear = smoothstep(0.35, 0.05, roadY);',
+    '  float fadeFar = smoothstep(0.0, 0.01, roadY);',
+    '',
+    '  return reflColor * reflStrength * shimmer * fadeNear * fadeFar * 0.15;',
+    '}',
+    '',
+    '// ── Center road line ──',
+    'vec3 centerLine(vec2 uv, float t) {',
+    '  float roadY = HORIZON - uv.y;',
+    '  if (roadY <= 0.0) return vec3(0.0);',
+    '',
+    '  float perspective = 1.5 / roadY;',
+    '  float worldZ = perspective + t * u_speed * 3.0;',
+    '',
+    '  // Dashed center line',
+    '  float dashPattern = step(0.5, fract(worldZ * 0.12));',
+    '',
+    '  // Line width in screen space narrows toward horizon',
+    '  float lineWidth = 0.003 / (perspective * 0.05 + 0.1);',
+    '  lineWidth = clamp(lineWidth, 0.0005, 0.01);',
+    '',
+    '  float lineMask = smoothstep(lineWidth, 0.0, abs(uv.x));',
+    '  float distFade = smoothstep(0.0, 0.02, roadY) * smoothstep(0.35, 0.05, roadY);',
+    '',
+    '  return vec3(0.9, 0.8, 0.6) * lineMask * dashPattern * distFade * 0.5;',
+    '}',
+    '',
+    '// ── Road edge glow lines ──',
+    'vec3 roadEdges(vec2 uv, float t) {',
+    '  float roadY = HORIZON - uv.y;',
+    '  if (roadY <= 0.0) return vec3(0.0);',
+    '',
+    '  // Road edges converge toward center at horizon',
+    '  float roadHalfWidth = roadY * 0.8 + 0.001;',
+    '',
+    '  float leftEdge = abs(uv.x + roadHalfWidth);',
+    '  float rightEdge = abs(uv.x - roadHalfWidth);',
+    '  float edgeDist = min(leftEdge, rightEdge);',
+    '',
+    '  float lineWidth = 0.002;',
+    '  float edgeLine = smoothstep(lineWidth, 0.0, edgeDist);',
+    '  float edgeGlow = exp(-edgeDist * 300.0) * 0.4;',
+    '',
+    '  float distFade = smoothstep(0.0, 0.015, roadY) * smoothstep(0.35, 0.02, roadY);',
+    '',
+    '  vec3 edgeColor = vec3(0.1, 0.7, 1.0);',
+    '  return edgeColor * (edgeLine + edgeGlow) * distFade;',
+    '}',
+    '',
+    '// ── Atmospheric haze particles ──',
+    'float haze(vec2 uv, float t) {',
+    '  float n1 = noise(uv * 3.0 + vec2(t * 0.1, 0.0));',
+    '  float n2 = noise(uv * 7.0 + vec2(0.0, t * 0.15));',
+    '  float n3 = noise(uv * 15.0 + vec2(t * 0.05, t * 0.08));',
+    '  return (n1 * 0.5 + n2 * 0.3 + n3 * 0.2);',
+    '}',
+    '',
+    '// ── Vignette ──',
+    'float vignette(vec2 uv) {',
+    '  float d = length(uv * vec2(0.8, 1.0));',
+    '  return smoothstep(1.2, 0.4, d);',
+    '}',
+    '',
+    '// ── CRT scanline effect (subtle) ──',
+    'float scanlines(vec2 fragCoord) {',
+    '  return 0.95 + 0.05 * sin(fragCoord.y * 3.14159 * 1.5);',
+    '}',
+    '',
+    'void main() {',
+    '  vec2 uv = (gl_FragCoord.xy - u_res * 0.5) / u_res.y;',
+    '  vec2 screenUV = gl_FragCoord.xy / u_res;',
+    '  float t = u_time;',
+    '',
+    '  vec3 col = vec3(0.0);',
+    '',
+    '  // Sky above horizon',
+    '  if (uv.y >= HORIZON) {',
+    '    col = sky(uv, t);',
+    '',
+    '    // Mountain silhouettes',
+    '    vec3 mtn = mountains(uv, t);',
+    '    // Mountains are dark, so they replace sky where present',
+    '    float mtnMask = step(0.001, mtn.r + mtn.g + mtn.b);',
+    '    col = mix(col, mtn, mtnMask * 0.7);',
+    '    // Add mountain edge glow on top',
+    '    col += mtn * 2.0 * (1.0 - mtnMask);',
+    '  }',
+    '',
+    '  // Grid road below horizon',
+    '  col += grid(uv, t);',
+    '',
+    '  // Side grid',
+    '  col += sideGrid(uv, t);',
+    '',
+    '  // Sun reflection on road surface',
+    '  col += sunReflection(uv, t);',
+    '',
+    '  // Road edge glow',
+    '  col += roadEdges(uv, t);',
+    '',
+    '  // Center dashed line',
+    '  col += centerLine(uv, t);',
+    '',
+    '  // Atmospheric haze near horizon',
+    '  float horizonDist = abs(uv.y - HORIZON);',
+    '  float hazeMask = exp(-horizonDist * 15.0);',
+    '  float hazeVal = haze(uv, t);',
+    '  col += vec3(0.5, 0.15, 0.4) * hazeVal * hazeMask * 0.15;',
+    '',
+    '  // Global glow control',
+    '  col *= u_glow;',
+    '',
+    '  // Vignette',
+    '  col *= vignette(uv);',
+    '',
+    '  // Subtle scanlines for CRT feel',
+    '  col *= scanlines(gl_FragCoord.xy);',
+    '',
+    '  // Tone mapping — slight S-curve for richer darks',
+    '  col = col / (col + vec3(0.8));',
+    '  col = pow(col, vec3(0.95));',
+    '',
+    '  // Very slight chromatic shift at edges',
+    '  float chromDist = length(uv * vec2(0.5, 0.7));',
+    '  float chromShift = chromDist * 0.003;',
+    '  vec3 finalCol;',
+    '  vec2 uvR = (gl_FragCoord.xy + vec2(chromShift * u_res.y, 0.0) - u_res * 0.5) / u_res.y;',
+    '  vec2 uvB = (gl_FragCoord.xy - vec2(chromShift * u_res.y, 0.0) - u_res * 0.5) / u_res.y;',
+    '',
+    '  // Only apply chroma to the final composite for performance',
+    '  finalCol.r = col.r * (1.0 + chromShift * 2.0);',
+    '  finalCol.g = col.g;',
+    '  finalCol.b = col.b * (1.0 + chromShift * 2.0);',
+    '',
+    '  gl_FragColor = vec4(finalCol, 1.0);',
+    '}',
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error('Shader compile error:', gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error('Program link error:', gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uSpeed = gl.getUniformLocation(prog, 'u_speed');
+  var uGlow = gl.getUniformLocation(prog, 'u_glow');
+
+  var speedVal = 1.0;
+  var glowVal = 1.0;
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  function resize() {
+    var w = Math.round(canvas.clientWidth * dpr);
+    var h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  function render(now) {
+    resize();
+    gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uSpeed, speedVal);
+    gl.uniform1f(uGlow, glowVal);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'speed': speedVal = e.data.value; break;
+        case 'glow': glowVal = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>
