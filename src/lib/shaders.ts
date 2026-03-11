@@ -121,6 +121,30 @@ export const shaders: Shader[] = [
 		]
 	},
 	{
+		id: 'satin-ripple',
+		file: 'proposal-sabrina-satin-a.html',
+		title: 'Satin Ripple',
+		desc: 'Flowing rose-gold satin fabric with sweeping folds and anisotropic specular sheen.',
+		inspiration: 'Sabrina Carpenter',
+		tags: ['fill', 'organic'],
+		params: [
+			{ name: 'RIPPLE_SPEED', label: 'Ripple Speed', min: 0.1, max: 2.0, step: 0.05, default: 0.6 },
+			{ name: 'SHEEN_INTENSITY', label: 'Sheen Intensity', min: 0.3, max: 2.0, step: 0.1, default: 1.0 }
+		]
+	},
+	{
+		id: 'sugar-glass',
+		file: 'proposal-sabrina-5.html',
+		title: 'Sugar Glass',
+		desc: 'Caramelized sugar glass with Voronoi fracture patterns and golden light bleeding through cracks.',
+		inspiration: 'Sabrina Carpenter',
+		tags: ['fill', 'geometric'],
+		params: [
+			{ name: 'CRACK_SPEED', label: 'Crack Speed', min: 0.1, max: 2.0, step: 0.05, default: 0.5 },
+			{ name: 'LIGHT_BLEED', label: 'Light Bleed', min: 0.3, max: 2.0, step: 0.1, default: 1.0 }
+		]
+	},
+	{
 		id: 'resonant-strings',
 		file: 'proposal-laufey-1.html',
 		title: 'Resonant Strings',
@@ -157,39 +181,87 @@ export const shaders: Shader[] = [
 		]
 	},
 	{
-		id: 'disco-refraction',
-		file: '12-disco-refraction.html',
-		title: 'Disco Refraction',
-		desc: 'Prismatic ring interference patterns with spectral color splitting and rhythmic pulsation.',
+		id: 'mirror-ball',
+		file: 'proposal-dua-1.html',
+		title: 'Mirror Ball',
+		desc: 'Raytraced spinning disco ball with chrome facets casting scattered light reflections.',
+		inspiration: 'Dua Lipa',
+		tags: ['object', 'geometric'],
+		params: [
+			{ name: 'ROTATION_SPEED', label: 'Spin Speed', min: 0.1, max: 2.0, step: 0.05, default: 0.5 },
+			{ name: 'BALL_SIZE', label: 'Ball Size', min: 0.08, max: 0.5, step: 0.01, default: 0.22 }
+		]
+	},
+	{
+		id: 'laser-labyrinth',
+		file: 'proposal-dua-2.html',
+		title: 'Laser Labyrinth',
+		desc: 'Volumetric laser beams crossing in a dark void with prismatic colors and intersection flares.',
 		inspiration: 'Dua Lipa',
 		tags: ['fill', 'geometric'],
 		params: [
-			{ name: 'PULSE_SPEED', label: 'Pulse Speed', min: 0.2, max: 3.0, step: 0.1, default: 1.0 },
-			{ name: 'RING_COUNT', label: 'Ring Sources', min: 1, max: 6, step: 1, default: 3 }
+			{ name: 'SWEEP_SPEED', label: 'Sweep Speed', min: 0.1, max: 2.0, step: 0.05, default: 0.5 },
+			{ name: 'BEAM_INTENSITY', label: 'Beam Intensity', min: 0.3, max: 2.0, step: 0.1, default: 1.0 }
 		]
 	},
 	{
-		id: 'ethereal-submersion',
-		file: '13-spider-silk.html',
-		title: 'Ethereal Submersion',
-		desc: 'Dark underwater dreamscape with floating tendrils, bioluminescent accents, and caustic light.',
+		id: 'light-corridor',
+		file: 'proposal-dua-4.html',
+		title: 'Light Corridor',
+		desc: 'Infinite neon tunnel with alternating magenta and cyan rings receding to a vanishing point.',
+		inspiration: 'Dua Lipa',
+		tags: ['fill', 'geometric'],
+		params: [
+			{ name: 'TUNNEL_SPEED', label: 'Tunnel Speed', min: 0.1, max: 2.0, step: 0.05, default: 0.5 },
+			{ name: 'COLOR_CYCLE', label: 'Color Cycle', min: 0.1, max: 2.0, step: 0.05, default: 0.5 }
+		]
+	},
+	{
+		id: 'bass-ripple',
+		file: 'proposal-dua-5.html',
+		title: 'Bass Ripple',
+		desc: 'Vibrating speaker mesh with beat-synced wave displacement and metallic specular sheen.',
+		inspiration: 'Dua Lipa',
+		tags: ['fill', 'physics'],
+		params: [
+			{ name: 'BASS_FREQ', label: 'Beat Speed', min: 0.1, max: 2.0, step: 0.1, default: 0.4 },
+			{ name: 'BASS_INTENSITY', label: 'Bass Intensity', min: 0.3, max: 2.0, step: 0.1, default: 1.0 }
+		]
+	},
+	{
+		id: 'sleep-paralysis',
+		file: 'proposal-billie-1.html',
+		title: 'Sleep Paralysis',
+		desc: 'Shadow figures materializing and dissolving in layered fog with domain-warped noise.',
+		inspiration: 'Billie Eilish',
+		tags: ['fill', 'noise'],
+		params: [
+			{ name: 'DRIFT_SPEED', label: 'Drift Speed', min: 0.05, max: 1.0, step: 0.05, default: 0.3 },
+			{ name: 'SHADOW_DENSITY', label: 'Shadow Density', min: 0.2, max: 1.0, step: 0.05, default: 0.7 }
+		]
+	},
+	{
+		id: 'ink-dissolve',
+		file: 'proposal-billie-2.html',
+		title: 'Ink Dissolve',
+		desc: 'Dense ink tendrils spreading through amber liquid with reaction-diffusion branching patterns.',
 		inspiration: 'Billie Eilish',
 		tags: ['fill', 'noise', 'organic'],
 		params: [
-			{ name: 'DEPTH', label: 'Depth', min: 0.3, max: 2.0, step: 0.1, default: 1.0 },
-			{ name: 'GLOW_INTENSITY', label: 'Glow Intensity', min: 0.2, max: 1.5, step: 0.05, default: 0.8 }
+			{ name: 'SPREAD_SPEED', label: 'Spread Speed', min: 0.1, max: 1.5, step: 0.05, default: 0.4 },
+			{ name: 'TENDRIL_DETAIL', label: 'Tendril Detail', min: 0.3, max: 2.0, step: 0.1, default: 1.0 }
 		]
 	},
 	{
-		id: 'eras',
-		file: '14-eras.html',
-		title: 'Eras',
-		desc: 'Prismatic crystalline fractals blending multiple color palettes through a kaleidoscopic prism.',
+		id: 'sequin-wave',
+		file: 'proposal-taylor-1.html',
+		title: 'Sequin Wave',
+		desc: 'Grid of metallic sequin discs catching sweeping light with specular reflections and warm shimmer.',
 		inspiration: 'Taylor Swift',
 		tags: ['fill', 'geometric'],
 		params: [
-			{ name: 'COMPLEXITY', label: 'Complexity', min: 0.5, max: 2.0, step: 0.1, default: 1.0 },
-			{ name: 'COLOR_SHIFT', label: 'Color Shift', min: 0.2, max: 3.0, step: 0.1, default: 1.0 }
+			{ name: 'WAVE_SPEED', label: 'Wave Speed', min: 0.1, max: 2.0, step: 0.05, default: 0.8 },
+			{ name: 'SPARKLE_INTENSITY', label: 'Sparkle', min: 0.3, max: 2.0, step: 0.1, default: 1.0 }
 		]
 	},
 	{
@@ -205,15 +277,75 @@ export const shaders: Shader[] = [
 		]
 	},
 	{
-		id: 'tidal-resonance',
-		file: '16-tidal-resonance.html',
-		title: 'Tidal Resonance',
-		desc: 'Wave interference patterns building to crescendos with height-mapped amber rendering.',
-		inspiration: 'Adele',
-		tags: ['fill', 'physics'],
+		id: 'honeycomb-pulse',
+		file: 'proposal-beyonce-1.html',
+		title: 'Honeycomb Pulse',
+		desc: 'Hexagonal grid with cascading golden light waves creating interference patterns across cells.',
+		inspiration: 'Beyoncé',
+		tags: ['fill', 'geometric'],
 		params: [
-			{ name: 'WAVE_SPEED', label: 'Wave Speed', min: 0.2, max: 3.0, step: 0.1, default: 1.0 },
-			{ name: 'WAVE_SOURCES', label: 'Wave Sources', min: 2, max: 7, step: 1, default: 4 }
+			{ name: 'WAVE_SPEED', label: 'Wave Speed', min: 0.1, max: 2.0, step: 0.05, default: 0.5 },
+			{ name: 'CELL_SIZE', label: 'Cell Size', min: 0.3, max: 2.0, step: 0.1, default: 1.0 }
+		]
+	},
+	{
+		id: 'gilt-mosaic',
+		file: 'proposal-beyonce-2.html',
+		title: 'Gilt Mosaic',
+		desc: 'Byzantine golden mosaic wall with individually shimmering tiles catching candlelight.',
+		inspiration: 'Beyoncé',
+		tags: ['fill', 'geometric'],
+		params: [
+			{ name: 'LIGHT_SPEED', label: 'Light Speed', min: 0.1, max: 1.5, step: 0.05, default: 0.4 },
+			{ name: 'TILE_SCALE', label: 'Tile Scale', min: 0.3, max: 2.0, step: 0.1, default: 1.0 }
+		]
+	},
+	{
+		id: 'gilded-fracture',
+		file: 'proposal-beyonce-3.html',
+		title: 'Gilded Fracture',
+		desc: 'Kintsugi-inspired golden cracks spreading across dark surface with molten gold light bleeding through.',
+		inspiration: 'Beyoncé',
+		tags: ['fill', 'noise', 'organic'],
+		params: [
+			{ name: 'CRACK_SPEED', label: 'Crack Speed', min: 0.05, max: 1.0, step: 0.05, default: 0.3 },
+			{ name: 'GLOW_INTENSITY', label: 'Glow Intensity', min: 0.3, max: 2.0, step: 0.1, default: 1.0 }
+		]
+	},
+	{
+		id: 'radiant-geometry',
+		file: 'proposal-beyonce-4.html',
+		title: 'Radiant Geometry',
+		desc: 'Animated Islamic geometric art with layered golden star patterns and counter-rotating tracery.',
+		inspiration: 'Beyoncé',
+		tags: ['fill', 'geometric'],
+		params: [
+			{ name: 'ROTATION_SPEED', label: 'Rotation Speed', min: 0.05, max: 1.0, step: 0.05, default: 0.3 },
+			{ name: 'PATTERN_COMPLEXITY', label: 'Complexity', min: 0.3, max: 2.0, step: 0.1, default: 1.0 }
+		]
+	},
+	{
+		id: 'velvet-cascade',
+		file: 'proposal-adele-1.html',
+		title: 'Velvet Cascade',
+		desc: 'Flowing dark velvet fabric with golden candlelight sheen and undulating folds.',
+		inspiration: 'Adele',
+		tags: ['fill', 'noise', 'organic'],
+		params: [
+			{ name: 'FLOW_SPEED', label: 'Flow Speed', min: 0.05, max: 1.0, step: 0.05, default: 0.3 },
+			{ name: 'SHEEN_INTENSITY', label: 'Sheen Intensity', min: 0.3, max: 2.0, step: 0.1, default: 1.0 }
+		]
+	},
+	{
+		id: 'smoke-and-gold',
+		file: 'proposal-adele-3.html',
+		title: 'Smoke & Gold',
+		desc: 'Volumetric smoke tendrils with golden light beams cutting through darkness.',
+		inspiration: 'Adele',
+		tags: ['fill', 'noise'],
+		params: [
+			{ name: 'SMOKE_SPEED', label: 'Smoke Speed', min: 0.05, max: 1.0, step: 0.05, default: 0.3 },
+			{ name: 'BEAM_INTENSITY', label: 'Beam Intensity', min: 0.3, max: 2.0, step: 0.1, default: 1.0 }
 		]
 	},
 	{
@@ -229,6 +361,42 @@ export const shaders: Shader[] = [
 		]
 	},
 	{
+		id: 'neon-drip',
+		file: 'proposal-badbunny-1.html',
+		title: 'Neon Drip',
+		desc: 'Metaball blobs dripping upward with surface tension physics and trailing tendrils.',
+		inspiration: 'Bad Bunny',
+		tags: ['fill', 'organic'],
+		params: [
+			{ name: 'DRIP_SPEED', label: 'Drip Speed', min: 0.1, max: 1.5, step: 0.05, default: 0.5 },
+			{ name: 'BLOB_COUNT', label: 'Blob Count', min: 0.3, max: 2.0, step: 0.1, default: 1.0 }
+		]
+	},
+	{
+		id: 'chrome-drip',
+		file: 'proposal-badbunny-2.html',
+		title: 'Chrome Drip',
+		desc: 'Liquid chrome surface with metallic specular highlights and organic pooling flow.',
+		inspiration: 'Bad Bunny',
+		tags: ['fill', 'noise'],
+		params: [
+			{ name: 'FLOW_SPEED', label: 'Flow Speed', min: 0.05, max: 1.0, step: 0.05, default: 0.3 },
+			{ name: 'REFLECTIVITY', label: 'Reflectivity', min: 0.3, max: 2.0, step: 0.1, default: 1.0 }
+		]
+	},
+	{
+		id: 'voltage-arc',
+		file: 'proposal-badbunny-5.html',
+		title: 'Voltage Arc',
+		desc: 'Electric plasma arcs crackling between floating conductor points with warm glow.',
+		inspiration: 'Bad Bunny',
+		tags: ['object', 'physics'],
+		params: [
+			{ name: 'ARC_INTENSITY', label: 'Arc Intensity', min: 0.3, max: 2.0, step: 0.1, default: 1.0 },
+			{ name: 'CRACKLE_SPEED', label: 'Crackle Speed', min: 0.1, max: 1.5, step: 0.05, default: 0.5 }
+		]
+	},
+	{
 		id: 'celestial-drift',
 		file: '18-celestial-drift.html',
 		title: 'Celestial Drift',
@@ -241,6 +409,42 @@ export const shaders: Shader[] = [
 		]
 	},
 	{
+		id: 'moonlit-ripple',
+		file: 'proposal-sza-1.html',
+		title: 'Moonlit Ripple',
+		desc: 'Moon reflection on dark water with concentric ripple interference and specular wave crests.',
+		inspiration: 'SZA',
+		tags: ['fill', 'noise'],
+		params: [
+			{ name: 'RIPPLE_SPEED', label: 'Ripple Speed', min: 0.1, max: 1.5, step: 0.05, default: 0.5 },
+			{ name: 'MOON_GLOW', label: 'Moon Glow', min: 0.3, max: 2.0, step: 0.1, default: 1.0 }
+		]
+	},
+	{
+		id: 'eclipse-glow',
+		file: 'proposal-sza-3.html',
+		title: 'Eclipse Glow',
+		desc: 'Solar eclipse corona with radial noise rays, diamond ring effect, and streaming solar wind.',
+		inspiration: 'SZA',
+		tags: ['object', 'noise'],
+		params: [
+			{ name: 'CORONA_SIZE', label: 'Corona Size', min: 0.3, max: 2.0, step: 0.1, default: 1.0 },
+			{ name: 'RAY_INTENSITY', label: 'Ray Intensity', min: 0.3, max: 2.0, step: 0.1, default: 1.0 }
+		]
+	},
+	{
+		id: 'canopy-light',
+		file: 'proposal-sza-5.html',
+		title: 'Canopy Light',
+		desc: 'Dappled golden sunlight filtering through layered forest canopy with wind-driven sway.',
+		inspiration: 'SZA',
+		tags: ['fill', 'noise', 'organic'],
+		params: [
+			{ name: 'WIND_SPEED', label: 'Wind Speed', min: 0.1, max: 1.5, step: 0.05, default: 0.5 },
+			{ name: 'LIGHT_DENSITY', label: 'Light Density', min: 0.3, max: 2.0, step: 0.1, default: 1.0 }
+		]
+	},
+	{
 		id: 'diamond-caustics',
 		file: '19-diamond-caustics.html',
 		title: 'Diamond Caustics',
@@ -250,6 +454,42 @@ export const shaders: Shader[] = [
 		params: [
 			{ name: 'ROTATION_SPEED', label: 'Rotation Speed', min: 0.1, max: 2.0, step: 0.05, default: 0.5 },
 			{ name: 'BRILLIANCE', label: 'Brilliance', min: 0.3, max: 2.0, step: 0.1, default: 1.0 }
+		]
+	},
+	{
+		id: 'rain-curtain',
+		file: 'proposal-rihanna-1.html',
+		title: 'Rain Curtain',
+		desc: 'Parallax rain layers with wind-sheared diagonal streaks, ground splashes, and warm amber reflections.',
+		inspiration: 'Rihanna',
+		tags: ['fill', 'particles'],
+		params: [
+			{ name: 'RAIN_INTENSITY', label: 'Rain Intensity', min: 0.2, max: 2.0, step: 0.1, default: 1.0 },
+			{ name: 'WIND_ANGLE', label: 'Wind Angle', min: 0.0, max: 1.0, step: 0.05, default: 0.5 }
+		]
+	},
+	{
+		id: 'obsidian-flow',
+		file: 'proposal-rihanna-5.html',
+		title: 'Obsidian Flow',
+		desc: 'Volcanic glass surface with domain-warped ridges and razor-sharp golden specular catches.',
+		inspiration: 'Rihanna',
+		tags: ['fill', 'noise', 'organic'],
+		params: [
+			{ name: 'FLOW_SPEED', label: 'Flow Speed', min: 0.05, max: 1.0, step: 0.05, default: 0.3 },
+			{ name: 'GLINT_SHARPNESS', label: 'Glint Sharpness', min: 0.3, max: 2.0, step: 0.1, default: 1.0 }
+		]
+	},
+	{
+		id: 'rain-on-glass',
+		file: 'proposal-rihanna-11.html',
+		title: 'Rain on Glass',
+		desc: 'Ultra-realistic water droplets on a window, refracting a blurred city night with realistic trail physics.',
+		inspiration: 'Rihanna',
+		tags: ['fill', 'physics', 'noise'],
+		params: [
+			{ name: 'RAIN_AMOUNT', label: 'Rain Amount', min: 0.1, max: 2.0, step: 0.1, default: 1.0 },
+			{ name: 'REFRACTION', label: 'Refraction Strength', min: 0.1, max: 3.0, step: 0.1, default: 1.2 }
 		]
 	},
 	{

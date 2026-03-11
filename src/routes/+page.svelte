@@ -1,8 +1,12 @@
 <script lang="ts">
 	import { shaders, tagLabels, type ShaderTag } from '$lib/shaders';
 	import ShaderCard from '$lib/components/ShaderCard.svelte';
+	import { onMount } from 'svelte';
 
 	let activeTags: Set<ShaderTag> = $state(new Set());
+	let activeRow = $state(0);
+	let numColumns = $state(3);
+	let gridEl: HTMLElement | undefined = $state(undefined);
 
 	const allTags = $derived(
 		Object.keys(tagLabels) as ShaderTag[]
@@ -23,6 +27,49 @@
 		}
 		activeTags = next;
 	}
+
+	function updateActiveRow() {
+		if (!gridEl) return;
+
+		// Determine number of columns from the computed grid style
+		var style = getComputedStyle(gridEl);
+		var cols = style.gridTemplateColumns.split(' ').length;
+		numColumns = cols;
+
+		var viewportCenter = window.innerHeight / 2;
+		var cards = gridEl.children;
+		var bestRow = 0;
+		var bestDist = Infinity;
+
+		// Check the first card of each row to find the most centered row
+		for (var i = 0; i < cards.length; i += cols) {
+			var rect = cards[i].getBoundingClientRect();
+			var cardCenter = rect.top + rect.height / 2;
+			var dist = Math.abs(cardCenter - viewportCenter);
+			var row = Math.floor(i / cols);
+			if (dist < bestDist) {
+				bestDist = dist;
+				bestRow = row;
+			}
+		}
+
+		activeRow = bestRow;
+	}
+
+	onMount(() => {
+		updateActiveRow();
+
+		var onScroll = () => requestAnimationFrame(updateActiveRow);
+		window.addEventListener('scroll', onScroll, { passive: true });
+
+		var ro = new ResizeObserver(updateActiveRow);
+		if (gridEl) ro.observe(gridEl);
+
+		return () => {
+			window.removeEventListener('scroll', onScroll);
+			ro.disconnect();
+		};
+	});
 </script>
 
 <svelte:head>
@@ -52,9 +99,9 @@
 	</div>
 </header>
 
-<div class="grid">
-	{#each filteredShaders as shader (shader.id)}
-		<ShaderCard {shader} />
+<div class="grid" bind:this={gridEl}>
+	{#each filteredShaders as shader, i (shader.id)}
+		<ShaderCard {shader} active={Math.floor(i / numColumns) === activeRow} />
 	{/each}
 </div>
 
