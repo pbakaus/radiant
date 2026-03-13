@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fluid Amber</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Fluid Amber</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// 09 · Fluid Amber — Domain-warped simplex noise with warm palette
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var gl = canvas.getContext('webgl', { alpha: true, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  var vertSrc = [
+    'attribute vec2 a_pos;',
+    'void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }'
+  ].join('\n');
+
+  var fragSrc = [
+    'precision mediump float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform float u_timeScale;',
+    'uniform float u_ampDecay;',
+    '',
+    'vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }',
+    'vec2 mod289v2(vec2 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }',
+    'vec3 permute(vec3 x) { return mod289(((x * 34.0) + 1.0) * x); }',
+    '',
+    'float snoise(vec2 v) {',
+    '  const vec4 C = vec4(0.211324865405187, 0.366025403784439,',
+    '                     -0.577350269189626, 0.024390243902439);',
+    '  vec2 i = floor(v + dot(v, C.yy));',
+    '  vec2 x0 = v - i + dot(i, C.xx);',
+    '  vec2 i1;',
+    '  i1 = (x0.x > x0.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);',
+    '  vec4 x12 = x0.xyxy + C.xxzz;',
+    '  x12.xy -= i1;',
+    '  i = mod289v2(i);',
+    '  vec3 p = permute(permute(i.y + vec3(0.0, i1.y, 1.0)) + i.x + vec3(0.0, i1.x, 1.0));',
+    '  vec3 m = max(0.5 - vec3(dot(x0, x0), dot(x12.xy, x12.xy), dot(x12.zw, x12.zw)), 0.0);',
+    '  m = m * m;',
+    '  m = m * m;',
+    '  vec3 x = 2.0 * fract(p * C.www) - 1.0;',
+    '  vec3 h = abs(x) - 0.5;',
+    '  vec3 ox = floor(x + 0.5);',
+    '  vec3 a0 = x - ox;',
+    '  m *= 1.79284291400159 - 0.85373472095314 * (a0 * a0 + h * h);',
+    '  vec3 g;',
+    '  g.x = a0.x * x0.x + h.x * x0.y;',
+    '  g.yz = a0.yz * x12.xz + h.yz * x12.yw;',
+    '  return 130.0 * dot(m, g);',
+    '}',
+    '',
+    'float fbm(vec2 p, float t) {',
+    '  float val = 0.0;',
+    '  float amp = 0.5;',
+    '  float freq = 1.0;',
+    '  for (int i = 0; i < 5; i++) {',
+    '    val += amp * snoise(p * freq + t * 0.3);',
+    '    freq *= 2.1;',
+    '    amp *= u_ampDecay;',
+    '    p += vec2(1.7, 9.2);',
+    '  }',
+    '  return val;',
+    '}',
+    '',
+    'void main() {',
+    '  vec2 uv = gl_FragCoord.xy / u_res;',
+    '  vec2 p = (gl_FragCoord.xy - u_res * 0.5) / min(u_res.x, u_res.y);',
+    '',
+    '  float t = u_time * u_timeScale;',
+    '',
+    '  vec2 q = vec2(fbm(p + vec2(0.0, 0.0), t),',
+    '               fbm(p + vec2(5.2, 1.3), t));',
+    '',
+    '  vec2 r = vec2(fbm(p + 4.0 * q + vec2(1.7, 9.2), t * 1.2),',
+    '               fbm(p + 4.0 * q + vec2(8.3, 2.8), t * 1.2));',
+    '',
+    '  float f = fbm(p + 3.5 * r, t * 0.8);',
+    '',
+    '  vec3 col = mix(vec3(0.075, 0.065, 0.055), vec3(0.20, 0.14, 0.07), clamp(f * f * 2.0, 0.0, 1.0));',
+    '  col = mix(col, vec3(0.78, 0.58, 0.24), clamp(length(q) * 0.5, 0.0, 1.0));',
+    '  col = mix(col, vec3(0.95, 0.75, 0.35), clamp(length(r.x) * 0.6, 0.0, 1.0));',
+    '',
+    '  float highlight = smoothstep(0.5, 1.2, f * f * 3.0 + length(r) * 0.5);',
+    '  col += vec3(0.18, 0.12, 0.04) * highlight;',
+    '',
+    '  col = pow(col, vec3(1.1));',
+    '',
+    '  gl_FragColor = vec4(col, 1.0);',
+    '}',
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uTimeScale = gl.getUniformLocation(prog, 'u_timeScale');
+  var uAmpDecay = gl.getUniformLocation(prog, 'u_ampDecay');
+  var timeScaleVal = 0.15;
+  var ampDecayVal = 0.48;
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  function resize() {
+    var w = Math.round(canvas.clientWidth * dpr);
+    var h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  function render(now) {
+    resize();
+    gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uTimeScale, timeScaleVal);
+    gl.uniform1f(uAmpDecay, ampDecayVal);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'timeScale': timeScaleVal = e.data.value; break;
+        case 'ampDecay': ampDecayVal = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

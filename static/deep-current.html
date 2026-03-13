@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Deep Current</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Deep Current</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// 49 · Deep Current — Deep ocean currents with bioluminescence, kelp, and caustics
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var _pad = parseFloat(new URLSearchParams(location.search).get('p')) || 1;
+
+  var gl = canvas.getContext('webgl', { alpha: false, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  var vertSrc = 'attribute vec2 a_pos; void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }';
+
+  var fragSrc = [
+    'precision highp float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform float u_timeScale;',
+    'uniform float u_currentStrength;',
+    '',
+    '// ── Hash & noise foundations ──',
+    'vec2 hash22(vec2 p) {',
+    '  p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));',
+    '  return -1.0 + 2.0 * fract(sin(p) * 43758.5453123);',
+    '}',
+    '',
+    'float hash21(vec2 p) {',
+    '  return fract(sin(dot(p, vec2(41.1, 289.7))) * 45758.5453);',
+    '}',
+    '',
+    '// Gradient noise',
+    'float gnoise(vec2 p) {',
+    '  vec2 i = floor(p);',
+    '  vec2 f = fract(p);',
+    '  vec2 u = f * f * (3.0 - 2.0 * f);',
+    '  return mix(mix(dot(hash22(i + vec2(0.0, 0.0)), f - vec2(0.0, 0.0)),',
+    '                 dot(hash22(i + vec2(1.0, 0.0)), f - vec2(1.0, 0.0)), u.x),',
+    '             mix(dot(hash22(i + vec2(0.0, 1.0)), f - vec2(0.0, 1.0)),',
+    '                 dot(hash22(i + vec2(1.0, 1.0)), f - vec2(1.0, 1.0)), u.x), u.y);',
+    '}',
+    '',
+    '// FBM with rotation per octave to break axis alignment',
+    'float fbm(vec2 p) {',
+    '  float val = 0.0;',
+    '  float amp = 0.5;',
+    '  float freq = 1.0;',
+    '  mat2 rot = mat2(0.8, 0.6, -0.6, 0.8);',
+    '  for (int i = 0; i < 6; i++) {',
+    '    val += amp * gnoise(p * freq);',
+    '    p = rot * p;',
+    '    freq *= 2.02;',
+    '    amp *= 0.49;',
+    '  }',
+    '  return val;',
+    '}',
+    '',
+    '// FBM variant with fewer octaves for flow field',
+    'float fbm3(vec2 p) {',
+    '  float val = 0.0;',
+    '  float amp = 0.5;',
+    '  float freq = 1.0;',
+    '  mat2 rot = mat2(0.8, 0.6, -0.6, 0.8);',
+    '  for (int i = 0; i < 3; i++) {',
+    '    val += amp * gnoise(p * freq);',
+    '    p = rot * p;',
+    '    freq *= 2.1;',
+    '    amp *= 0.5;',
+    '  }',
+    '  return val;',
+    '}',
+    '',
+    '// ── Domain warping for organic current flow ──',
+    'vec2 currentFlow(vec2 p, float t) {',
+    '  float s = t * u_timeScale;',
+    '  vec2 q = vec2(',
+    '    fbm(p + vec2(0.0, 0.0) + s * 0.15),',
+    '    fbm(p + vec2(5.2, 1.3) + s * 0.12)',
+    '  );',
+    '  vec2 r = vec2(',
+    '    fbm(p + 4.0 * q + vec2(1.7, 9.2) + s * 0.1),',
+    '    fbm(p + 4.0 * q + vec2(8.3, 2.8) + s * 0.08)',
+    '  );',
+    '  return r;',
+    '}',
+    '',
+    '// ── Voronoi for caustic light patterns ──',
+    'float voronoi(vec2 p) {',
+    '  vec2 n = floor(p);',
+    '  vec2 f = fract(p);',
+    '  float md = 8.0;',
+    '  float md2 = 8.0;',
+    '  for (int j = -1; j <= 1; j++) {',
+    '    for (int i = -1; i <= 1; i++) {',
+    '      vec2 g = vec2(float(i), float(j));',
+    '      vec2 o = hash22(n + g);',
+    '      o = 0.5 + 0.5 * sin(u_time * u_timeScale * 0.6 + 6.2831 * o);',
+    '      vec2 r = g + o - f;',
+    '      float d = dot(r, r);',
+    '      if (d < md) {',
+    '        md2 = md;',
+    '        md = d;',
+    '      } else if (d < md2) {',
+    '        md2 = d;',
+    '      }',
+    '    }',
+    '  }',
+    '  return md2 - md;',
+    '}',
+    '',
+    '// ── Kelp strand rendering ──',
+    'float kelpStrand(vec2 uv, float baseX, float t, float seed) {',
+    '  // Kelp grows upward from bottom',
+    '  float kelpHeight = 0.55 + 0.15 * sin(seed * 17.3);',
+    '  float yBase = 1.0;',
+    '  float yTop = yBase - kelpHeight;',
+    '  ',
+    '  if (uv.y < yTop - 0.05 || uv.y > yBase + 0.01) return 0.0;',
+    '  ',
+    '  float frac = (yBase - uv.y) / kelpHeight;',
+    '  frac = clamp(frac, 0.0, 1.0);',
+    '  ',
+    '  // Sway in current: more at top, anchored at base',
+    '  float sway = sin(t * 0.4 * u_timeScale + seed * 5.0 + frac * 2.5) * 0.04 * frac * frac * u_currentStrength;',
+    '  sway += sin(t * 0.25 * u_timeScale + seed * 3.1 + frac * 4.0) * 0.02 * frac * frac * frac;',
+    '  // Current pushes rightward',
+    '  float push = frac * frac * 0.035 * u_currentStrength;',
+    '  ',
+    '  float strandX = baseX + sway + push;',
+    '  float dx = uv.x - strandX;',
+    '  ',
+    '  // Width varies along strand: wider at base, thin at tip',
+    '  float w = mix(0.004, 0.001, frac * frac);',
+    '  // Add bulges for leaves',
+    '  float leafBulge = sin(frac * 25.0 + seed * 10.0) * 0.002 * (1.0 - frac);',
+    '  w += max(0.0, leafBulge);',
+    '  ',
+    '  float d = abs(dx) / w;',
+    '  float strand = smoothstep(1.0, 0.0, d);',
+    '  ',
+    '  // Leaf blades branching off',
+    '  float leaves = 0.0;',
+    '  for (int i = 0; i < 4; i++) {',
+    '    float lf = 0.2 + float(i) * 0.18 + 0.05 * sin(seed * float(i + 1) * 7.7);',
+    '    if (frac > lf - 0.02 && frac < lf + 0.15) {',
+    '      float localF = (frac - lf) / 0.15;',
+    '      float side = mod(float(i) + seed * 3.0, 2.0) > 1.0 ? 1.0 : -1.0;',
+    '      float leafSway = sin(t * 0.5 * u_timeScale + seed * 2.0 + float(i) * 1.5) * 0.02 * u_currentStrength;',
+    '      float leafX = strandX + side * localF * 0.02 + leafSway * localF;',
+    '      float leafY = uv.y;',
+    '      float ldx = uv.x - leafX;',
+    '      float leafW = 0.003 * (1.0 - localF) * (1.0 - frac * 0.5);',
+    '      float ld = abs(ldx) / max(leafW, 0.0005);',
+    '      leaves += smoothstep(1.0, 0.3, ld) * (1.0 - localF) * 0.5;',
+    '    }',
+    '  }',
+    '  ',
+    '  return clamp(strand + leaves, 0.0, 1.0) * smoothstep(0.0, 0.08, frac) * smoothstep(1.0, 0.85, frac);',
+    '}',
+    '',
+    '// ── Bioluminescent particle field ──',
+    'float biolumParticles(vec2 uv, float t) {',
+    '  float glow = 0.0;',
+    '  for (int i = 0; i < 30; i++) {',
+    '    float fi = float(i);',
+    '    vec2 seed = vec2(fi * 0.373, fi * 0.619);',
+    '    vec2 pos = vec2(',
+    '      fract(hash21(seed) + t * (0.01 + 0.02 * hash21(seed + 1.0)) * u_timeScale * u_currentStrength),',
+    '      hash21(seed + 2.0) + sin(t * u_timeScale * (0.2 + 0.3 * hash21(seed + 3.0)) + fi * 1.7) * 0.05',
+    '    );',
+    '    pos.y = fract(pos.y);',
+    '    ',
+    '    // Depth variation',
+    '    float depth = hash21(seed + 4.0);',
+    '    float brightness = (0.5 + 0.5 * depth);',
+    '    ',
+    '    // Pulsing glow',
+    '    float pulse = 0.5 + 0.5 * sin(t * u_timeScale * (1.0 + hash21(seed + 5.0) * 2.0) + fi * 2.3);',
+    '    pulse = pulse * pulse;',
+    '    ',
+    '    float d = length(uv - pos);',
+    '    float size = (0.003 + 0.008 * depth) * brightness;',
+    '    float g = size / (d * d + size * 0.08);',
+    '    g *= pulse * brightness * 0.005;',
+    '    ',
+    '    glow += g;',
+    '  }',
+    '  return glow;',
+    '}',
+    '',
+    '// ── Larger drifting bioluminescent jellyfish-like particles ──',
+    'float driftingOrganisms(vec2 uv, float t) {',
+    '  float glow = 0.0;',
+    '  for (int i = 0; i < 8; i++) {',
+    '    float fi = float(i);',
+    '    vec2 seed = vec2(fi * 1.17, fi * 0.83);',
+    '    float drift = t * u_timeScale * (0.015 + 0.01 * hash21(seed));',
+    '    vec2 pos = vec2(',
+    '      fract(hash21(seed) + drift * u_currentStrength),',
+    '      hash21(seed + 10.0) + sin(t * u_timeScale * 0.15 + fi * 3.0) * 0.08',
+    '    );',
+    '    pos.y = fract(pos.y * 0.7 + 0.15);',
+    '    ',
+    '    float d = length(uv - pos);',
+    '    float pulse = 0.3 + 0.7 * pow(0.5 + 0.5 * sin(t * u_timeScale * 0.8 + fi * 4.1), 3.0);',
+    '    ',
+    '    // Organic radial shape',
+    '    float angle = atan(uv.y - pos.y, uv.x - pos.x);',
+    '    float shape = 1.0 + 0.3 * sin(angle * 3.0 + t * u_timeScale * 0.3 + fi) + 0.15 * sin(angle * 5.0 - t * u_timeScale * 0.2);',
+    '    d *= shape;',
+    '    ',
+    '    float size = 0.015 + 0.01 * hash21(seed + 20.0);',
+    '    float g = smoothstep(size, size * 0.2, d) * pulse * 0.25;',
+    '    float outerGlow = size * 3.0 / (d + size) * pulse * 0.015;',
+    '    ',
+    '    glow += g + outerGlow;',
+    '  }',
+    '  return glow;',
+    '}',
+    '',
+    '// ── Flow lines (visible current streaks) ──',
+    'float flowLines(vec2 uv, float t) {',
+    '  float lines = 0.0;',
+    '  float s = t * u_timeScale;',
+    '  ',
+    '  for (int i = 0; i < 12; i++) {',
+    '    float fi = float(i);',
+    '    float yPos = 0.08 + fi * 0.078;',
+    '    float speed = (0.5 + 0.5 * hash21(vec2(fi, 0.0))) * u_currentStrength;',
+    '    ',
+    '    // Wavy line path',
+    '    float wave = sin(uv.x * (3.0 + fi * 0.5) - s * speed * 0.8 + fi * 2.0) * 0.02;',
+    '    wave += sin(uv.x * (7.0 + fi * 0.3) - s * speed * 1.2 + fi * 1.3) * 0.008;',
+    '    float yDist = abs(uv.y - yPos - wave);',
+    '    ',
+    '    // Flow line thickness varies along length',
+    '    float thickness = 0.002 + 0.001 * sin(uv.x * 20.0 + fi * 5.0 - s * speed);',
+    '    float line = smoothstep(thickness, 0.0, yDist);',
+    '    ',
+    '    // Alpha varies for streaming effect',
+    '    float alpha = 0.5 + 0.5 * sin(uv.x * 15.0 - s * speed * 2.0 + fi * 3.7);',
+    '    alpha *= 0.5 + 0.5 * sin(uv.x * 4.0 - s * speed * 0.5 + fi);',
+    '    alpha = alpha * alpha;',
+    '    ',
+    '    // Depth fade: deeper lines are dimmer',
+    '    float depthFade = 1.0 - yPos * 0.5;',
+    '    ',
+    '    lines += line * alpha * depthFade * 0.07;',
+    '  }',
+    '  return lines;',
+    '}',
+    '',
+    '// ── Debris / organic matter in current ──',
+    'float debris(vec2 uv, float t) {',
+    '  float d = 0.0;',
+    '  float s = t * u_timeScale;',
+    '  for (int i = 0; i < 15; i++) {',
+    '    float fi = float(i);',
+    '    vec2 seed = vec2(fi * 0.47, fi * 1.31);',
+    '    ',
+    '    // Debris drifts with current',
+    '    vec2 pos = vec2(',
+    '      fract(hash21(seed) + s * (0.02 + 0.03 * hash21(seed + 1.0)) * u_currentStrength),',
+    '      hash21(seed + 2.0) + sin(s * 0.3 + fi * 2.1) * 0.03',
+    '    );',
+    '    pos.y = fract(pos.y);',
+    '    ',
+    '    // Tumbling rotation',
+    '    float angle = s * (0.5 + hash21(seed + 3.0)) + fi;',
+    '    vec2 diff = uv - pos;',
+    '    vec2 rotDiff = vec2(',
+    '      diff.x * cos(angle) - diff.y * sin(angle),',
+    '      diff.x * sin(angle) + diff.y * cos(angle)',
+    '    );',
+    '    ',
+    '    // Elongated shape',
+    '    float size = 0.002 + 0.003 * hash21(seed + 4.0);',
+    '    float elongation = 2.0 + 2.0 * hash21(seed + 5.0);',
+    '    rotDiff.x *= elongation;',
+    '    float dist = length(rotDiff);',
+    '    ',
+    '    d += smoothstep(size, size * 0.3, dist) * 0.15;',
+    '  }',
+    '  return d;',
+    '}',
+    '',
+    'void main() {',
+    '  vec2 uv = gl_FragCoord.xy / u_res;',
+    '  float aspect = u_res.x / u_res.y;',
+    '  vec2 p = (gl_FragCoord.xy - u_res * 0.5) / min(u_res.x, u_res.y);',
+    '  float t = u_time;',
+    '  float s = t * u_timeScale;',
+    '  ',
+    '  // ── Deep ocean background gradient ──',
+    '  vec3 deepColor = vec3(0.005, 0.012, 0.035);',    // Abyss black-blue
+    '  vec3 midColor = vec3(0.015, 0.045, 0.09);',     // Deep blue
+    '  vec3 upperColor = vec3(0.025, 0.08, 0.14);',    // Twilight zone blue
+    '  vec3 surfaceColor = vec3(0.035, 0.12, 0.19);',  // Near-surface teal
+    '  ',
+    '  float depth = uv.y;',
+    '  vec3 bgColor = mix(surfaceColor, upperColor, smoothstep(0.0, 0.3, depth));',
+    '  bgColor = mix(bgColor, midColor, smoothstep(0.3, 0.6, depth));',
+    '  bgColor = mix(bgColor, deepColor, smoothstep(0.6, 1.0, depth));',
+    '  ',
+    '  // ── Domain-warped current flow ──',
+    '  vec2 flowUV = uv * vec2(aspect, 1.0) * 2.0;',
+    '  vec2 warp = currentFlow(flowUV, t);',
+    '  float flowVal = fbm(flowUV + warp * 2.5 + s * 0.05);',
+    '  ',
+    '  // Current adds subtle color variation',
+    '  vec3 currentColor = mix(',
+    '    vec3(0.02, 0.08, 0.15),',
+    '    vec3(0.04, 0.15, 0.25),',
+    '    flowVal * 0.5 + 0.5',
+    '  );',
+    '  bgColor += currentColor * 0.3;',
+    '  ',
+    '  // ── Volumetric light shafts from above ──',
+    '  float lightShafts = 0.0;',
+    '  for (int i = 0; i < 5; i++) {',
+    '    float fi = float(i);',
+    '    float xPos = -0.3 + fi * 0.2 + sin(s * 0.08 + fi * 2.1) * 0.08;',
+    '    float shaftX = p.x - xPos;',
+    '    // Shafts widen as they go deeper',
+    '    float width = 0.03 + 0.04 * (0.5 + p.y);',
+    '    // Shaft tilts slightly with current',
+    '    shaftX -= p.y * 0.06 * sin(s * 0.1 + fi * 1.7);',
+    '    float shaft = exp(-shaftX * shaftX / (width * width));',
+    '    // Fade with depth',
+    '    shaft *= exp(-max(0.0, p.y + 0.5) * 1.8);',
+    '    // Caustic modulation on the shaft',
+    '    float causticMod = 0.7 + 0.3 * sin(uv.y * 30.0 + s * 0.5 + fi * 3.0);',
+    '    causticMod *= 0.8 + 0.2 * sin(uv.y * 50.0 - s * 0.3 + fi * 5.0);',
+    '    shaft *= causticMod;',
+    '    // Shimmer',
+    '    shaft *= 0.7 + 0.3 * sin(s * 0.4 + fi * 1.3);',
+    '    lightShafts += shaft;',
+    '  }',
+    '  vec3 shaftColor = mix(vec3(0.12, 0.30, 0.40), vec3(0.08, 0.45, 0.50), uv.y);',
+    '  bgColor += shaftColor * lightShafts * 0.2;',
+    '  ',
+    '  // ── Caustic light pattern (Voronoi-based) ──',
+    '  vec2 causticUV = uv * vec2(aspect, 1.0) * 5.0;',
+    '  float caustic1 = voronoi(causticUV + s * 0.1);',
+    '  float caustic2 = voronoi(causticUV * 1.3 + vec2(3.7, 1.2) - s * 0.08);',
+    '  float causticPattern = caustic1 * caustic2;',
+    '  causticPattern = pow(causticPattern, 0.8);',
+    '  // Caustics stronger near top, fade with depth',
+    '  float causticIntensity = exp(-(uv.y) * 3.5) * 0.35;',
+    '  // Caustics also appear on "floor"',
+    '  causticIntensity += smoothstep(0.75, 0.95, uv.y) * 0.2;',
+    '  vec3 causticColor = mix(vec3(0.15, 0.5, 0.6), vec3(0.08, 0.7, 0.8), causticPattern);',
+    '  bgColor += causticColor * causticPattern * causticIntensity;',
+    '  ',
+    '  // ── Flow lines showing current direction ──',
+    '  float fLines = flowLines(uv, t);',
+    '  vec3 flowLineColor = vec3(0.15, 0.55, 0.65);',
+    '  bgColor += flowLineColor * fLines;',
+    '  ',
+    '  // ── Kelp strands ──',
+    '  float kelpMask = 0.0;',
+    '  vec3 kelpColor = vec3(0.0);',
+    '  for (int i = 0; i < 7; i++) {',
+    '    float fi = float(i);',
+    '    float baseX = 0.08 + fi * 0.13 + sin(fi * 7.3) * 0.03;',
+    '    // Adjust for aspect ratio',
+    '    float adjustedX = baseX;',
+    '    float k = kelpStrand(vec2(uv.x / aspect * 1.0, uv.y), adjustedX / aspect * 1.0, t, fi * 3.7 + 1.0);',
+    '    if (k > 0.0) {',
+    '      // Color varies per strand',
+    '      vec3 strandColor = mix(',
+    '        vec3(0.03, 0.12, 0.05),',
+    '        vec3(0.05, 0.18, 0.08),',
+    '        hash21(vec2(fi, 0.5))',
+    '      );',
+    '      // Bioluminescent edges',
+    '      strandColor += vec3(0.0, 0.15, 0.1) * (1.0 - k) * 0.5;',
+    '      // Light hitting kelp from above',
+    '      float kelpLight = exp(-uv.y * 2.0) * 0.3;',
+    '      strandColor += vec3(0.05, 0.15, 0.1) * kelpLight;',
+    '      ',
+    '      kelpColor = mix(kelpColor, strandColor, k);',
+    '      kelpMask = max(kelpMask, k);',
+    '    }',
+    '  }',
+    '  bgColor = mix(bgColor, kelpColor, kelpMask * 0.8);',
+    '  ',
+    '  // ── Debris in current ──',
+    '  float debrisMask = debris(uv, t);',
+    '  vec3 debrisColor = mix(vec3(0.06, 0.1, 0.08), vec3(0.08, 0.14, 0.1), fbm3(uv * 10.0));',
+    '  bgColor = mix(bgColor, debrisColor, debrisMask * 0.4);',
+    '  ',
+    '  // ── Bioluminescent particles (small plankton) ──',
+    '  float bioGlow = biolumParticles(uv, t);',
+    '  vec3 bioColor = mix(vec3(0.1, 0.8, 1.0), vec3(0.0, 1.0, 0.8), uv.y);',
+    '  bgColor += bioColor * bioGlow;',
+    '  ',
+    '  // ── Larger drifting organisms ──',
+    '  float organisms = driftingOrganisms(uv, t);',
+    '  vec3 orgColor = vec3(0.05, 0.6, 0.8);',
+    '  bgColor += orgColor * organisms;',
+    '  ',
+    '  // ── Marine snow (tiny suspended particles) ──',
+    '  float snow = 0.0;',
+    '  for (int i = 0; i < 40; i++) {',
+    '    float fi = float(i);',
+    '    vec2 seed = vec2(fi * 0.29, fi * 0.77);',
+    '    vec2 pos = vec2(',
+    '      fract(hash21(seed) + s * 0.005 * u_currentStrength + sin(fi * 0.7) * 0.01),',
+    '      fract(hash21(seed + 7.0) + s * 0.008)',
+    '    );',
+    '    float d = length(uv - pos);',
+    '    float size = 0.001 + 0.001 * hash21(seed + 10.0);',
+    '    snow += smoothstep(size, 0.0, d) * 0.15 * (0.3 + 0.7 * hash21(seed + 12.0));',
+    '  }',
+    '  bgColor += vec3(0.3, 0.5, 0.6) * snow;',
+    '  ',
+    '  // ── Bubbles ──',
+    '  for (int i = 0; i < 12; i++) {',
+    '    float fi = float(i);',
+    '    vec2 seed = vec2(fi * 0.53, fi * 1.07);',
+    '    float riseSpeed = 0.02 + 0.015 * hash21(seed);',
+    '    vec2 pos = vec2(',
+    '      hash21(seed) + sin(s * (0.3 + hash21(seed + 1.0) * 0.3) + fi * 2.0) * 0.02,',
+    '      fract(hash21(seed + 2.0) - s * riseSpeed)',
+    '    );',
+    '    // Drift with current',
+    '    pos.x = fract(pos.x + s * 0.005 * u_currentStrength);',
+    '    ',
+    '    float d = length((uv - pos) * vec2(aspect, 1.0));',
+    '    float radius = 0.003 + 0.005 * hash21(seed + 3.0);',
+    '    ',
+    '    // Bubble ring',
+    '    float ring = smoothstep(radius + 0.001, radius, d) - smoothstep(radius, radius - 0.001, d);',
+    '    // Specular highlight',
+    '    float highlight = smoothstep(radius * 0.7, radius * 0.3, length((uv - pos + vec2(-0.001, -0.001)) * vec2(aspect, 1.0)));',
+    '    // Interior refraction tint',
+    '    float interior = smoothstep(radius, 0.0, d) * 0.03;',
+    '    ',
+    '    vec3 bubbleColor = vec3(0.4, 0.7, 0.8) * ring * 0.3',
+    '                     + vec3(0.7, 0.9, 1.0) * highlight * 0.15',
+    '                     + vec3(0.1, 0.3, 0.4) * interior;',
+    '    bgColor += bubbleColor;',
+    '  }',
+    '  ',
+    '  // ── Depth fog / atmospheric perspective ──',
+    '  float fog = smoothstep(0.3, 1.0, uv.y) * 0.15;',
+    '  bgColor = mix(bgColor, deepColor, fog);',
+    '  ',
+    '  // ── Vignette ──',
+    '  vec2 vigUV = uv * 2.0 - 1.0;',
+    '  float vig = 1.0 - dot(vigUV * 0.5, vigUV * 0.5);',
+    '  vig = smoothstep(0.0, 0.7, vig);',
+    '  bgColor *= vig;',
+    '  ',
+    '  // ── Color grading ──',
+    '  // Boost deep ocean teal/cyan',
+    '  bgColor = pow(bgColor, vec3(0.95, 0.9, 0.88));',
+    '  // Subtle saturation boost',
+    '  float lum = dot(bgColor, vec3(0.299, 0.587, 0.114));',
+    '  bgColor = mix(vec3(lum), bgColor, 1.2);',
+    '  ',
+    '  // Clamp and tonemap',
+    '  bgColor = bgColor / (bgColor + 0.8) * 1.3;',
+    '  bgColor = clamp(bgColor, 0.0, 1.0);',
+    '  ',
+    '  gl_FragColor = vec4(bgColor, 1.0);',
+    '}',
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error('Shader compile error:', gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error('Program link error:', gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uTimeScale = gl.getUniformLocation(prog, 'u_timeScale');
+  var uCurrentStrength = gl.getUniformLocation(prog, 'u_currentStrength');
+
+  var timeScaleVal = 1.0;
+  var currentStrengthVal = 1.0;
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  function resize() {
+    var w = Math.round(canvas.clientWidth * dpr);
+    var h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  var running = true;
+
+  function render(now) {
+    if (!running) return;
+    resize();
+    gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uTimeScale, timeScaleVal);
+    gl.uniform1f(uCurrentStrength, currentStrengthVal);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  // Pause when not visible
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) {
+      running = false;
+    } else {
+      running = true;
+      requestAnimationFrame(render);
+    }
+  });
+
+  requestAnimationFrame(render);
+
+  // ── PostMessage API for parameter updates ──
+  window.addEventListener('message', function (e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'timeScale': timeScaleVal = e.data.value; break;
+        case 'currentStrength': currentStrengthVal = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

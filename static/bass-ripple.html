@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bass Ripple</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Bass Ripple</div>
+<canvas id="canvas"></canvas>
+<script>
+(function() {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var gl = canvas.getContext('webgl', { alpha: false, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  var BASS_FREQ = 0.4;
+  var BASS_INTENSITY = 1.0;
+  var running = true;
+
+  var vertSrc = 'attribute vec2 a_pos; void main(){gl_Position=vec4(a_pos,0,1);}';
+
+  var fragSrc = [
+    'precision highp float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform float u_bassFreq;',
+    'uniform float u_bassIntensity;',
+    '',
+    '#define PI 3.14159265359',
+    '#define TAU 6.28318530718',
+    '',
+    '// ── Hash / noise ──',
+    'float hash(vec2 p) {',
+    '  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);',
+    '}',
+    '',
+    'float hash3(vec3 p) {',
+    '  return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453);',
+    '}',
+    '',
+    'float noise(vec2 p) {',
+    '  vec2 i = floor(p);',
+    '  vec2 f = fract(p);',
+    '  f = f * f * (3.0 - 2.0 * f);',
+    '  return mix(mix(hash(i), hash(i + vec2(1,0)), f.x),',
+    '             mix(hash(i + vec2(0,1)), hash(i + vec2(1,1)), f.x), f.y);',
+    '}',
+    '',
+    '// ── Rotation ──',
+    'mat2 rot2(float a) {',
+    '  float c = cos(a), s = sin(a);',
+    '  return mat2(c, -s, s, c);',
+    '}',
+    '',
+    '// ── Beat-synced displacement ──',
+    '// Returns height displacement at a mesh point, combining multiple wave modes',
+    'float displacement(vec2 p, float t, float bassFreq, float intensity) {',
+    '  float period = 1.0 / max(bassFreq, 0.01);',
+    '  float phase = t / period;',
+    '  float beatFrac = fract(phase);',
+    '',
+    '  // Sharp attack, exponential decay per beat',
+    '  float envelope = exp(-beatFrac * 3.5);',
+    '',
+    '  // Previous beat residue for overlapping waves',
+    '  float prevEnv = exp(-(beatFrac + 1.0) * 3.5);',
+    '  float prevEnv2 = exp(-(beatFrac + 2.0) * 3.5);',
+    '',
+    '  float dist = length(p);',
+    '  float angle = atan(p.y, p.x);',
+    '',
+    '  // Wave mode 1: concentric ripples from center — primary bass hit',
+    '  float wave1 = sin(dist * 14.0 - beatFrac * 22.0) * envelope;',
+    '',
+    '  // Wave mode 2: slower, wider concentric from center (prev beat residue)',
+    '  float wave2 = sin(dist * 9.0 - (beatFrac + 1.0) * 16.0) * prevEnv * 0.6;',
+    '',
+    '  // Wave mode 3: second prev beat — even wider, fainter',
+    '  float wave3 = sin(dist * 6.0 - (beatFrac + 2.0) * 12.0) * prevEnv2 * 0.3;',
+    '',
+    '  // Wave mode 4: standing wave pattern (cross-hatch)',
+    '  float standing = (sin(p.x * 18.0) * sin(p.y * 18.0)) * envelope * 0.3;',
+    '',
+    '  // Wave mode 5: radial drumhead modes (angular patterns)',
+    '  float radialMode = sin(dist * 22.0) * cos(angle * 3.0) * envelope * 0.2;',
+    '  radialMode += sin(dist * 16.0) * cos(angle * 5.0 + 1.0) * prevEnv * 0.1;',
+    '',
+    '  // Wave mode 6: off-center ripple source (drifts slowly)',
+    '  vec2 offCenter = vec2(0.3 * sin(t * 0.2), 0.25 * cos(t * 0.25));',
+    '  float dist2 = length(p - offCenter);',
+    '  float wave6 = sin(dist2 * 12.0 - beatFrac * 18.0) * envelope * 0.35;',
+    '',
+    '  // Low-frequency dome push — the whole mesh pushes out on beat',
+    '  float dome = (1.0 - smoothstep(0.0, 1.0, dist)) * envelope * 0.8;',
+    '',
+    '  float h = (wave1 + wave2 + wave3 + standing + radialMode + wave6 + dome) * intensity;',
+    '',
+    '  // Subtle idle vibration when between beats',
+    '  float idle = sin(dist * 8.0 + t * 3.0) * 0.03 * (1.0 - envelope);',
+    '  idle += sin(dist * 5.0 - t * 1.5) * 0.015 * (1.0 - envelope);',
+    '  h += idle * intensity;',
+    '',
+    '  return h;',
+    '}',
+    '',
+    '// ── Compute normal from displacement via central differences ──',
+    'vec3 calcNormal(vec2 p, float t, float bassFreq, float intensity) {',
+    '  float eps = 0.002;',
+    '  float hc = displacement(p, t, bassFreq, intensity);',
+    '  float hx = displacement(p + vec2(eps, 0.0), t, bassFreq, intensity);',
+    '  float hy = displacement(p + vec2(0.0, eps), t, bassFreq, intensity);',
+    '  // Strong normal perturbation for dramatic specular shifts',
+    '  vec3 n = normalize(vec3(-(hx - hc) / eps * 0.35, -(hy - hc) / eps * 0.35, 1.0));',
+    '  return n;',
+    '}',
+    '',
+    '// ── Hexagonal grid distance ──',
+    '// Returns: x = distance to nearest hex edge, y,z = hex cell ID',
+    'vec3 hexGrid(vec2 p, float scale) {',
+    '  p *= scale;',
+    '  vec2 r = vec2(1.0, 1.732);',
+    '  vec2 h = r * 0.5;',
+    '  vec2 a = mod(p, r) - h;',
+    '  vec2 b = mod(p - h, r) - h;',
+    '  vec2 g;',
+    '  if (dot(a, a) < dot(b, b)) {',
+    '    g = a;',
+    '  } else {',
+    '    g = b;',
+    '  }',
+    '  float edgeDist = 0.5 - max(abs(g.x) * 1.0 + abs(g.y) * 0.577, abs(g.y) * 1.155);',
+    '  vec2 cellId = p - g;',
+    '  return vec3(edgeDist, cellId);',
+    '}',
+    '',
+    '// ── Fresnel approximation ──',
+    'float fresnel(float cosTheta, float f0) {',
+    '  return f0 + (1.0 - f0) * pow(1.0 - cosTheta, 5.0);',
+    '}',
+    '',
+    'void main() {',
+    '  vec2 uv = gl_FragCoord.xy / u_res;',
+    '  float aspect = u_res.x / u_res.y;',
+    '  float t = u_time;',
+    '',
+    '  // Centered UV with aspect correction',
+    '  vec2 cuv = vec2((uv.x - 0.5) * aspect, uv.y - 0.5);',
+    '',
+    '  // ═══════════════════════════════════════════',
+    '  // Camera / view setup — slightly off-axis',
+    '  // ═══════════════════════════════════════════',
+    '  // Subtle camera drift for life',
+    '  float camDriftX = sin(t * 0.15) * 0.03;',
+    '  float camDriftY = cos(t * 0.12) * 0.02;',
+    '',
+    '  // Off-axis tilt: rotate the UV plane to simulate angled view',
+    '  // Perspective foreshortening — compress vertical axis',
+    '  float tiltAngle = 0.35 + camDriftY;',
+    '  float foreshorten = 0.7 + camDriftY * 0.5;',
+    '',
+    '  vec2 meshUV = cuv;',
+    '  meshUV.x += camDriftX;',
+    '  meshUV.y = meshUV.y / foreshorten;',
+    '  meshUV.y += 0.08;',
+    '',
+    '  // Slight rotation for off-axis look',
+    '  meshUV = rot2(0.06 + sin(t * 0.08) * 0.02) * meshUV;',
+    '',
+    '  // ═══════════════════════════════════════════',
+    '  // Displacement — beat-synced wave patterns',
+    '  // ═══════════════════════════════════════════',
+    '  float h = displacement(meshUV, t, u_bassFreq, u_bassIntensity);',
+    '  vec3 N = calcNormal(meshUV, t, u_bassFreq, u_bassIntensity);',
+    '',
+    '  // ═══════════════════════════════════════════',
+    '  // Hexagonal mesh pattern',
+    '  // ═══════════════════════════════════════════',
+    '  float meshScale = 45.0;',
+    '  vec3 hex = hexGrid(meshUV + N.xy * 0.003, meshScale);',
+    '  float hexEdge = hex.x;',
+    '',
+    '  // Wire thickness — the metallic wires of the grille',
+    '  float wireWidth = 0.06;',
+    '  float wire = 1.0 - smoothstep(0.0, wireWidth, hexEdge);',
+    '',
+    '  // Inner hole mask — what you see through the grille',
+    '  float hole = smoothstep(wireWidth, wireWidth + 0.02, hexEdge);',
+    '',
+    '  // Fine secondary grid overlaid (cross-hatch detail at micro level)',
+    '  vec2 microGrid = fract(meshUV * meshScale * 3.0 + N.xy * 0.01);',
+    '  float microWire = smoothstep(0.04, 0.0, min(microGrid.x, microGrid.y));',
+    '  microWire += smoothstep(0.04, 0.0, min(1.0 - microGrid.x, 1.0 - microGrid.y));',
+    '  microWire *= 0.15;',
+    '',
+    '  // ═══════════════════════════════════════════',
+    '  // Lighting setup',
+    '  // ═══════════════════════════════════════════',
+    '  // View direction (from camera)',
+    '  vec3 V = normalize(vec3(-cuv.x * 0.3, -cuv.y * 0.3 + 0.2, 1.0));',
+    '',
+    '  // Beat envelope for light modulation',
+    '  float period = 1.0 / max(u_bassFreq, 0.01);',
+    '  float bFrac = fract(t / period);',
+    '  float bEnv = exp(-bFrac * 3.5);',
+    '',
+    '  // Key light — warm amber, sweeps slowly across surface',
+    '  vec3 L1 = normalize(vec3(0.4 + sin(t * 0.25) * 0.4, 0.6 + cos(t * 0.18) * 0.3, 1.0));',
+    '  float NdL1 = max(dot(N, L1), 0.0);',
+    '  vec3 H1 = normalize(L1 + V);',
+    '  float NdH1 = max(dot(N, H1), 0.0);',
+    '  float spec1 = pow(NdH1, 180.0);',
+    '  float spec1med = pow(NdH1, 50.0);',
+    '  float spec1soft = pow(NdH1, 12.0);',
+    '  vec3 lightCol1 = vec3(1.0, 0.82, 0.55);',
+    '',
+    '  // Fill light — deeper copper/bronze, from the left',
+    '  vec3 L2 = normalize(vec3(-0.8 + sin(t * 0.15) * 0.2, 0.4, 0.8));',
+    '  float NdL2 = max(dot(N, L2), 0.0);',
+    '  vec3 H2 = normalize(L2 + V);',
+    '  float NdH2 = max(dot(N, H2), 0.0);',
+    '  float spec2 = pow(NdH2, 120.0);',
+    '  float spec2soft = pow(NdH2, 25.0);',
+    '  vec3 lightCol2 = vec3(0.85, 0.55, 0.3);',
+    '',
+    '  // Accent light — bright gold, moves with beat',
+    '  vec3 L3 = normalize(vec3(0.3 + bEnv * 0.3, -0.6, 0.6));',
+    '  float NdL3 = max(dot(N, L3), 0.0);',
+    '  vec3 H3 = normalize(L3 + V);',
+    '  float NdH3 = max(dot(N, H3), 0.0);',
+    '  float spec3 = pow(NdH3, 90.0);',
+    '  float spec3soft = pow(NdH3, 18.0);',
+    '  vec3 lightCol3 = vec3(1.0, 0.7, 0.25);',
+    '',
+    '  // Top-down fill for overall brightness',
+    '  vec3 L4 = normalize(vec3(0.0, 0.1, 1.0));',
+    '  float NdL4 = max(dot(N, L4), 0.0);',
+    '',
+    '  // Rim/backlight — warm amber edge light',
+    '  float NdV = max(dot(N, V), 0.0);',
+    '  float rim = pow(1.0 - NdV, 4.0);',
+    '  vec3 rimCol = vec3(0.9, 0.55, 0.2);',
+    '',
+    '  // ═══════════════════════════════════════════',
+    '  // Material: metallic gunmetal / brushed chrome',
+    '  // ═══════════════════════════════════════════',
+    '  vec3 baseColor = vec3(0.38, 0.32, 0.25);',
+    '  baseColor += vec3(0.035, 0.025, 0.015) * noise(meshUV * 30.0);',
+    '  baseColor += vec3(0.02, 0.015, 0.01) * noise(meshUV * 80.0 + 5.0);',
+    '',
+    '  // Strong metallic fresnel',
+    '  float f0 = 0.75;',
+    '  float fres = fresnel(NdV, f0);',
+    '',
+    '  // ═══════════════════════════════════════════',
+    '  // Compose wire material',
+    '  // ═══════════════════════════════════════════',
+    '  // Diffuse — generous for visible wire brightness',
+    '  vec3 diffuse = baseColor * (NdL1 * lightCol1 * 1.0 + NdL2 * lightCol2 * 0.5 + NdL3 * lightCol3 * 0.25 + NdL4 * 0.4);',
+    '  // Strong ambient — ensures wires are always clearly visible as metal',
+    '  diffuse += baseColor * 0.18;',
+    '  // Hemisphere ambient — warm amber above, darker below',
+    '  vec3 hemiAmb = mix(vec3(0.04, 0.03, 0.02), vec3(0.08, 0.06, 0.04), N.y * 0.5 + 0.5);',
+    '  diffuse += hemiAmb;',
+    '',
+    '  // Specular — the star of the show',
+    '  vec3 specular = vec3(0.0);',
+    '  // Key: sharp peak + broad medium + very wide bloom',
+    '  specular += spec1 * lightCol1 * 3.5;',
+    '  specular += spec1med * lightCol1 * 1.2;',
+    '  specular += spec1soft * lightCol1 * 0.25;',
+    '  // Fill: sharp + broad',
+    '  specular += spec2 * lightCol2 * 2.5;',
+    '  specular += spec2soft * lightCol2 * 0.5;',
+    '  // Accent: magenta — sharp + broad',
+    '  specular += spec3 * lightCol3 * 3.0;',
+    '  specular += spec3soft * lightCol3 * 0.4;',
+    '  specular *= fres;',
+    '',
+    '  // Beat flare on specular',
+    '  specular *= 1.0 + bEnv * 1.0 * u_bassIntensity;',
+    '',
+    '  // Anisotropic edge highlight on the wire ridge',
+    '  float wireCenter = abs(hexEdge - wireWidth * 0.5) / max(wireWidth, 0.001);',
+    '  float aniso = pow(max(1.0 - wireCenter, 0.0), 3.0);',
+    '  specular += aniso * wire * vec3(0.55, 0.4, 0.2) * fres * 0.5;',
+    '',
+    '  // Wire color composition',
+    '  vec3 wireCol = diffuse + specular;',
+    '  wireCol += rim * rimCol * 0.5;',
+    '',
+    '  // Micro scratches catching light',
+    '  wireCol += microWire * vec3(0.15, 0.1, 0.06) * fres;',
+    '',
+    '  // ═══════════════════════════════════════════',
+    '  // Hole interior — dark void with depth',
+    '  // ═══════════════════════════════════════════',
+    '  vec3 holeCol = vec3(0.015, 0.01, 0.006);',
+    '  // Speaker cone behind the mesh — subtle presence',
+    '  float coneRefl = max(dot(N, vec3(0.0, 0.0, 1.0)), 0.0);',
+    '  holeCol += vec3(0.03, 0.02, 0.01) * coneRefl;',
+    '',
+    '  // Beat pulse visible in holes — cone movement + light leak',
+    '  float conePush = max(h * 0.4, 0.0);',
+    '  holeCol += vec3(0.06, 0.04, 0.02) * conePush;',
+    '  // Warm amber light leaking through grille on beat',
+    '  holeCol += vec3(0.2, 0.12, 0.04) * bEnv * 0.35 * u_bassIntensity;',
+    '  // Copper accent leak',
+    '  holeCol += vec3(0.12, 0.06, 0.02) * bEnv * 0.15 * u_bassIntensity;',
+    '',
+    '  // ═══════════════════════════════════════════',
+    '  // Combine wire + hole',
+    '  // ═══════════════════════════════════════════',
+    '  vec3 col = mix(holeCol, wireCol, wire);',
+    '',
+    '  // Add micro-wire overlay even on holes (very fine secondary mesh)',
+    '  col += microWire * vec3(0.02, 0.018, 0.025) * (1.0 - hole * 0.7);',
+    '',
+    '  // ═══════════════════════════════════════════',
+    '  // Beat-synced global effects',
+    '  // ═══════════════════════════════════════════',
+    '  // Color wash on beat — alternates amber and copper',
+    '  vec3 beatColor = mix(vec3(0.5, 0.3, 0.1), vec3(0.4, 0.2, 0.08), sin(t * 0.4) * 0.5 + 0.5);',
+    '  col += beatColor * bEnv * 0.03 * u_bassIntensity;',
+    '',
+    '  // ═══════════════════════════════════════════',
+    '  // Environment reflection on wire surface',
+    '  // ═══════════════════════════════════════════',
+    '  // Rich fake environment map — studio HDRI-like',
+    '  vec3 refl = reflect(-V, N);',
+    '  vec3 envCol = vec3(0.03, 0.03, 0.06);',
+    '  // Warm overhead gradient',
+    '  envCol += vec3(0.12, 0.08, 0.06) * pow(max(refl.y, 0.0), 2.0);',
+    '  // Warm side gradient',
+    '  envCol += vec3(0.15, 0.08, 0.03) * pow(max(-refl.x, 0.0), 2.0);',
+    '  // Copper accent below',
+    '  envCol += vec3(0.2, 0.1, 0.04) * pow(max(-refl.y, 0.0), 3.0);',
+    '  // Bright studio softbox reflection',
+    '  float softbox = pow(max(dot(refl, normalize(vec3(0.2, 0.8, 0.5))), 0.0), 8.0);',
+    '  envCol += vec3(0.3, 0.28, 0.25) * softbox;',
+    '  // Beat-pulsed environment brightness',
+    '  envCol *= 1.0 + bEnv * 0.5 * u_bassIntensity;',
+    '  col += envCol * fres * wire * 0.5;',
+    '',
+    '  // ═══════════════════════════════════════════',
+    '  // Post processing',
+    '  // ═══════════════════════════════════════════',
+    '  // Vignette — macro lens effect',
+    '  vec2 vc = uv - 0.5;',
+    '  float vig = 1.0 - dot(vc, vc) * 2.0;',
+    '  vig = smoothstep(0.0, 1.0, vig);',
+    '  col *= vig;',
+    '',
+    '  // Subtle depth-of-field blur at edges (darken + desaturate)',
+    '  float dofDist = length(cuv);',
+    '  float dof = smoothstep(0.3, 0.8, dofDist);',
+    '  col = mix(col, col * vec3(0.7, 0.65, 0.75), dof * 0.3);',
+    '',
+    '  // Film grain — macro photography feel',
+    '  float grain = hash(gl_FragCoord.xy + fract(t * 7.3) * 100.0);',
+    '  col += (grain - 0.5) * 0.018;',
+    '',
+    '  // Subtle chromatic aberration at vignette edges',
+    '  float ca = dofDist * 0.003;',
+    '  col.r += (hash(gl_FragCoord.xy * 0.5 + 1.0) - 0.5) * ca;',
+    '  col.b += (hash(gl_FragCoord.xy * 0.5 + 2.0) - 0.5) * ca;',
+    '',
+    '  // Tone mapping — Reinhard with high white point + gentle gamma lift',
+    '  col = col / (col + vec3(1.5));',
+    '  col = pow(max(col, vec3(0.0)), vec3(0.88));',
+    '',
+    '  gl_FragColor = vec4(col, 1.0);',
+    '}',
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error(gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error(gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uBassFreq = gl.getUniformLocation(prog, 'u_bassFreq');
+  var uBassIntensity = gl.getUniformLocation(prog, 'u_bassIntensity');
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  function resize() {
+    var w = Math.round(canvas.clientWidth * dpr);
+    var h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  function render(now) {
+    if (!running) return;
+    resize();
+    gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uBassFreq, BASS_FREQ);
+    gl.uniform1f(uBassIntensity, BASS_INTENSITY);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  document.addEventListener('visibilitychange', function() {
+    if (document.hidden) {
+      running = false;
+    } else {
+      running = true;
+      requestAnimationFrame(render);
+    }
+  });
+
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'BASS_FREQ': BASS_FREQ = e.data.value; break;
+        case 'BASS_INTENSITY': BASS_INTENSITY = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

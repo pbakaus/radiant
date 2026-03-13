@@ -27,12 +27,14 @@ export interface Shader {
 	tags: ShaderTag[];
 	params?: ShaderParam[];
 	inspiration?: string;
+	credit?: string;
+	creditUrl?: string;
 }
 
 export const shaders: Shader[] = [
 	{
 		id: 'flow-field',
-		file: '01-flow-field.html',
+		file: 'flow-field.html',
 		title: 'Flow Field with Particle Trails',
 		desc: 'Particles following Perlin noise currents with warm amber trails.',
 		tags: ['fill', 'particles', 'noise'],
@@ -43,7 +45,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'topographic',
-		file: '02-topographic.html',
+		file: 'topographic.html',
 		title: 'Topographic Contour Map',
 		desc: 'Living terrain map with marching squares isolines and elevation labels.',
 		tags: ['fill', 'noise', 'geometric'],
@@ -54,7 +56,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'generative-tree',
-		file: '04-generative-tree.html',
+		file: 'generative-tree.html',
 		title: 'Generative Branching Tree',
 		desc: 'L-system inspired tree with continuous growth and regrowth cycles.',
 		tags: ['object', 'organic'],
@@ -65,7 +67,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'strange-attractor',
-		file: '05-strange-attractor.html',
+		file: 'strange-attractor.html',
 		title: 'Strange Attractor (Lorenz)',
 		desc: 'Lorenz system with 3D projection, rotation, and glowing particle trails.',
 		tags: ['object', 'particles', 'physics'],
@@ -77,7 +79,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'pendulum-wave',
-		file: '06-pendulum-wave.html',
+		file: 'pendulum-wave.html',
 		title: 'Pendulum Wave',
 		desc: 'Physics-based pendulum wave creating emergent interference patterns.',
 		tags: ['object', 'physics'],
@@ -88,7 +90,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'phyllotaxis',
-		file: '07-phyllotaxis.html',
+		file: 'phyllotaxis.html',
 		title: 'Phyllotaxis Spiral',
 		desc: "Golden angle spiral with Fibonacci lattice connections.",
 		tags: ['object', 'geometric', 'organic'],
@@ -99,7 +101,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'fluid-amber',
-		file: '09-fluid-amber.html',
+		file: 'fluid-amber.html',
 		title: 'Fluid Amber',
 		desc: 'Domain-warped simplex noise with layered organic flow and warm palette.',
 		tags: ['fill', 'noise', 'organic'],
@@ -110,7 +112,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'champagne-fizz',
-		file: '10-champagne-fizz.html',
+		file: 'champagne-fizz.html',
 		title: 'Champagne Fizz',
 		desc: 'Effervescent bubbles rising with wobble physics, refractive highlights, and sparkle bursts.',
 		inspiration: 'Sabrina Carpenter',
@@ -122,7 +124,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'satin-ripple',
-		file: 'proposal-sabrina-satin-a.html',
+		file: 'satin-ripple.html',
 		title: 'Satin Ripple',
 		desc: 'Flowing rose-gold satin fabric with sweeping folds and anisotropic specular sheen.',
 		inspiration: 'Sabrina Carpenter',
@@ -134,7 +136,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'sugar-glass',
-		file: 'proposal-sabrina-5.html',
+		file: 'sugar-glass.html',
 		title: 'Sugar Glass',
 		desc: 'Caramelized sugar glass with Voronoi fracture patterns and golden light bleeding through cracks.',
 		inspiration: 'Sabrina Carpenter',
@@ -146,7 +148,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'resonant-strings',
-		file: 'proposal-laufey-1.html',
+		file: 'resonant-strings.html',
 		title: 'Resonant Strings',
 		desc: 'Vibrating cello strings with standing wave harmonics, overtone interference, and rosin dust particles.',
 		inspiration: 'Laufey',
@@ -158,7 +160,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'chladni-resonance',
-		file: 'proposal-laufey-3.html',
+		file: 'chladni-resonance.html',
 		title: 'Chladni Resonance',
 		desc: 'Sand patterns forming on a vibrating plate, morphing between harmonic modes with golden glow.',
 		inspiration: 'Laufey',
@@ -170,7 +172,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'bossa-nova-drift',
-		file: 'proposal-laufey-5.html',
+		file: 'bossa-nova-drift.html',
 		title: 'Bossa Nova Drift',
 		desc: 'Syncopated sine wave interference creating drifting moiré patterns with polyrhythmic timing.',
 		inspiration: 'Laufey',
@@ -182,7 +184,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'mirror-ball',
-		file: 'proposal-dua-1.html',
+		file: 'mirror-ball.html',
 		title: 'Mirror Ball',
 		desc: 'Raytraced spinning disco ball with chrome facets casting scattered light reflections.',
 		inspiration: 'Dua Lipa',
@@ -194,7 +196,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'laser-labyrinth',
-		file: 'proposal-dua-2.html',
+		file: 'laser-labyrinth.html',
 		title: 'Laser Labyrinth',
 		desc: 'Volumetric laser beams crossing in a dark void with prismatic colors and intersection flares.',
 		inspiration: 'Dua Lipa',
@@ -206,7 +208,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'light-corridor',
-		file: 'proposal-dua-4.html',
+		file: 'light-corridor.html',
 		title: 'Light Corridor',
 		desc: 'Infinite neon tunnel with alternating magenta and cyan rings receding to a vanishing point.',
 		inspiration: 'Dua Lipa',
@@ -218,7 +220,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'bass-ripple',
-		file: 'proposal-dua-5.html',
+		file: 'bass-ripple.html',
 		title: 'Bass Ripple',
 		desc: 'Vibrating speaker mesh with beat-synced wave displacement and metallic specular sheen.',
 		inspiration: 'Dua Lipa',
@@ -230,7 +232,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'sleep-paralysis',
-		file: 'proposal-billie-1.html',
+		file: 'sleep-paralysis.html',
 		title: 'Sleep Paralysis',
 		desc: 'Shadow figures materializing and dissolving in layered fog with domain-warped noise.',
 		inspiration: 'Billie Eilish',
@@ -242,7 +244,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'ink-dissolve',
-		file: 'proposal-billie-2.html',
+		file: 'ink-dissolve.html',
 		title: 'Ink Dissolve',
 		desc: 'Dense ink tendrils spreading through amber liquid with reaction-diffusion branching patterns.',
 		inspiration: 'Billie Eilish',
@@ -254,7 +256,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'sequin-wave',
-		file: 'proposal-taylor-1.html',
+		file: 'sequin-wave.html',
 		title: 'Sequin Wave',
 		desc: 'Grid of metallic sequin discs catching sweeping light with specular reflections and warm shimmer.',
 		inspiration: 'Taylor Swift',
@@ -266,7 +268,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'golden-throne',
-		file: '15-golden-throne.html',
+		file: 'golden-throne.html',
 		title: 'Golden Throne',
 		desc: 'Sacred geometry mandala with golden ratio spirals and counter-rotating layers.',
 		inspiration: 'Beyoncé',
@@ -278,7 +280,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'honeycomb-pulse',
-		file: 'proposal-beyonce-1.html',
+		file: 'honeycomb-pulse.html',
 		title: 'Honeycomb Pulse',
 		desc: 'Hexagonal grid with cascading golden light waves creating interference patterns across cells.',
 		inspiration: 'Beyoncé',
@@ -290,7 +292,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'gilt-mosaic',
-		file: 'proposal-beyonce-2.html',
+		file: 'gilt-mosaic.html',
 		title: 'Gilt Mosaic',
 		desc: 'Byzantine golden mosaic wall with individually shimmering tiles catching candlelight.',
 		inspiration: 'Beyoncé',
@@ -302,7 +304,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'gilded-fracture',
-		file: 'proposal-beyonce-3.html',
+		file: 'gilded-fracture.html',
 		title: 'Gilded Fracture',
 		desc: 'Kintsugi-inspired golden cracks spreading across dark surface with molten gold light bleeding through.',
 		inspiration: 'Beyoncé',
@@ -314,7 +316,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'radiant-geometry',
-		file: 'proposal-beyonce-4.html',
+		file: 'radiant-geometry.html',
 		title: 'Radiant Geometry',
 		desc: 'Animated Islamic geometric art with layered golden star patterns and counter-rotating tracery.',
 		inspiration: 'Beyoncé',
@@ -326,7 +328,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'velvet-cascade',
-		file: 'proposal-adele-1.html',
+		file: 'velvet-cascade.html',
 		title: 'Velvet Cascade',
 		desc: 'Flowing dark velvet fabric with golden candlelight sheen and undulating folds.',
 		inspiration: 'Adele',
@@ -338,7 +340,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'smoke-and-gold',
-		file: 'proposal-adele-3.html',
+		file: 'smoke-and-gold.html',
 		title: 'Smoke & Gold',
 		desc: 'Volumetric smoke tendrils with golden light beams cutting through darkness.',
 		inspiration: 'Adele',
@@ -350,7 +352,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'tropical-heat',
-		file: '17-tropical-heat.html',
+		file: 'tropical-heat.html',
 		title: 'Tropical Heat',
 		desc: 'Heat shimmer distortion with chromatic aberration and tropical color blooms.',
 		inspiration: 'Bad Bunny',
@@ -362,7 +364,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'neon-drip',
-		file: 'proposal-badbunny-1.html',
+		file: 'neon-drip.html',
 		title: 'Neon Drip',
 		desc: 'Metaball blobs dripping upward with surface tension physics and trailing tendrils.',
 		inspiration: 'Bad Bunny',
@@ -374,7 +376,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'chrome-drip',
-		file: 'proposal-badbunny-2.html',
+		file: 'chrome-drip.html',
 		title: 'Chrome Drip',
 		desc: 'Liquid chrome surface with metallic specular highlights and organic pooling flow.',
 		inspiration: 'Bad Bunny',
@@ -386,7 +388,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'voltage-arc',
-		file: 'proposal-badbunny-5.html',
+		file: 'voltage-arc.html',
 		title: 'Voltage Arc',
 		desc: 'Electric plasma arcs crackling between floating conductor points with warm glow.',
 		inspiration: 'Bad Bunny',
@@ -398,7 +400,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'celestial-drift',
-		file: '18-celestial-drift.html',
+		file: 'celestial-drift.html',
 		title: 'Celestial Drift',
 		desc: 'Luminous bodies in gravitational orbit with fading trails and star field.',
 		inspiration: 'SZA',
@@ -410,7 +412,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'moonlit-ripple',
-		file: 'proposal-sza-1.html',
+		file: 'moonlit-ripple.html',
 		title: 'Moonlit Ripple',
 		desc: 'Moon reflection on dark water with concentric ripple interference and specular wave crests.',
 		inspiration: 'SZA',
@@ -422,7 +424,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'eclipse-glow',
-		file: 'proposal-sza-3.html',
+		file: 'eclipse-glow.html',
 		title: 'Eclipse Glow',
 		desc: 'Solar eclipse corona with radial noise rays, diamond ring effect, and streaming solar wind.',
 		inspiration: 'SZA',
@@ -434,7 +436,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'canopy-light',
-		file: 'proposal-sza-5.html',
+		file: 'canopy-light.html',
 		title: 'Canopy Light',
 		desc: 'Dappled golden sunlight filtering through layered forest canopy with wind-driven sway.',
 		inspiration: 'SZA',
@@ -446,7 +448,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'diamond-caustics',
-		file: '19-diamond-caustics.html',
+		file: 'diamond-caustics.html',
 		title: 'Diamond Caustics',
 		desc: 'Light refracting through rotating diamond facets casting prismatic caustic patterns.',
 		inspiration: 'Rihanna',
@@ -457,20 +459,8 @@ export const shaders: Shader[] = [
 		]
 	},
 	{
-		id: 'rain-curtain',
-		file: 'proposal-rihanna-1.html',
-		title: 'Rain Curtain',
-		desc: 'Parallax rain layers with wind-sheared diagonal streaks, ground splashes, and warm amber reflections.',
-		inspiration: 'Rihanna',
-		tags: ['fill', 'particles'],
-		params: [
-			{ name: 'RAIN_INTENSITY', label: 'Rain Intensity', min: 0.2, max: 2.0, step: 0.1, default: 1.0 },
-			{ name: 'WIND_ANGLE', label: 'Wind Angle', min: 0.0, max: 1.0, step: 0.05, default: 0.5 }
-		]
-	},
-	{
 		id: 'obsidian-flow',
-		file: 'proposal-rihanna-5.html',
+		file: 'obsidian-flow.html',
 		title: 'Obsidian Flow',
 		desc: 'Volcanic glass surface with domain-warped ridges and razor-sharp golden specular catches.',
 		inspiration: 'Rihanna',
@@ -482,19 +472,36 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'rain-on-glass',
-		file: 'proposal-rihanna-11.html',
+		file: 'rain-on-glass.html',
 		title: 'Rain on Glass',
 		desc: 'Ultra-realistic water droplets on a window, refracting a blurred city night with realistic trail physics.',
 		inspiration: 'Rihanna',
+		credit: 'Inspired by the excellent work of Lucas Bebber',
+		creditUrl: 'https://github.com/codrops/RainEffect',
 		tags: ['fill', 'physics', 'noise'],
 		params: [
 			{ name: 'RAIN_AMOUNT', label: 'Rain Amount', min: 0.1, max: 2.0, step: 0.1, default: 1.0 },
-			{ name: 'REFRACTION', label: 'Refraction Strength', min: 0.1, max: 3.0, step: 0.1, default: 1.2 }
+			{ name: 'REFRACTION', label: 'Refraction Strength', min: 0.1, max: 3.0, step: 0.1, default: 1.0 }
+		]
+	},
+	{
+		id: 'rain-umbrella',
+		file: 'rain-umbrella.html',
+		title: 'Rain on Umbrella',
+		desc: 'Looking up through a translucent umbrella at city lights, with refractive drops sliding down the dome and a slow walking drift.',
+		inspiration: 'Rihanna',
+		credit: 'Inspired by the excellent work of Lucas Bebber',
+		creditUrl: 'https://github.com/codrops/RainEffect',
+		tags: ['fill', 'physics', 'noise'],
+		params: [
+			{ name: 'RAIN_AMOUNT', label: 'Rain Amount', min: 0.1, max: 2.0, step: 0.1, default: 1.0 },
+			{ name: 'REFRACTION', label: 'Refraction Strength', min: 0.1, max: 3.0, step: 0.1, default: 1.0 },
+			{ name: 'WALK_SPEED', label: 'Walk Speed', min: 0.0, max: 3.0, step: 0.1, default: 1.0 }
 		]
 	},
 	{
 		id: 'metamorphosis',
-		file: '20-metamorphosis.html',
+		file: 'metamorphosis.html',
 		title: 'Metamorphosis',
 		desc: 'Raymarched metaballs continuously merging and splitting with liquid-metal surface.',
 		inspiration: 'Lady Gaga',
@@ -505,8 +512,20 @@ export const shaders: Shader[] = [
 		]
 	},
 	{
+		id: 'artpop-iridescence',
+		file: 'artpop-iridescence.html',
+		title: 'Artpop Iridescence',
+		desc: 'Holographic membrane with thin-film interference creating prismatic color shifts across an undulating surface.',
+		inspiration: 'Lady Gaga',
+		tags: ['fill', 'organic', 'noise'],
+		params: [
+			{ name: 'FILM_THICKNESS', label: 'Film Thickness', min: 0.5, max: 3.0, step: 0.1, default: 1.0 },
+			{ name: 'FLOW_SPEED', label: 'Flow Speed', min: 0.1, max: 2.0, step: 0.1, default: 0.5 }
+		]
+	},
+	{
 		id: 'silk-groove',
-		file: '21-silk-groove.html',
+		file: 'silk-groove.html',
 		title: 'Silk Groove',
 		desc: 'Flowing silk ribbons with specular highlights and cloth-like wave animation.',
 		inspiration: 'Bruno Mars',
@@ -518,7 +537,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'after-hours',
-		file: '22-after-hours.html',
+		file: 'after-hours.html',
 		title: 'After Hours',
 		desc: 'Cinematic city bokeh lights with depth layers, rain streaks, and lens flares.',
 		inspiration: 'The Weeknd',
@@ -530,7 +549,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'shatter',
-		file: '23-shatter.html',
+		file: 'shatter.html',
 		title: 'Shatter',
 		desc: 'Glass fracturing from impact with Voronoi fragments that separate and reassemble.',
 		inspiration: 'Olivia Rodrigo',
@@ -542,7 +561,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'cloud-kingdom',
-		file: '24-cloud-kingdom.html',
+		file: 'cloud-kingdom.html',
 		title: 'Cloud Kingdom',
 		desc: 'Raymarched volumetric clouds with warm internal glow drifting through dark sky.',
 		inspiration: 'Ariana Grande',
@@ -554,7 +573,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'ink-bloom',
-		file: '25-ink-bloom.html',
+		file: 'ink-bloom.html',
 		title: 'Ink Bloom',
 		desc: 'Symmetric inkblot patterns bleeding and branching with Rorschach symmetry.',
 		inspiration: 'Post Malone',
@@ -566,7 +585,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'verse-particles',
-		file: '26-verse-particles.html',
+		file: 'verse-particles.html',
 		title: 'Verse Particles',
 		desc: 'Particles converging to form words then dissolving back into cosmic chaos.',
 		inspiration: 'Kendrick Lamar',
@@ -578,7 +597,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'rhinestone-cascade',
-		file: '27-rhinestone-cascade.html',
+		file: 'rhinestone-cascade.html',
 		title: 'Rhinestone Cascade',
 		desc: 'Faceted crystal particles cascading with specular flashes and prismatic sparkle.',
 		inspiration: 'Dolly Parton',
@@ -590,7 +609,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'moss-and-bone',
-		file: '28-moss-and-bone.html',
+		file: 'moss-and-bone.html',
 		title: 'Moss & Bone',
 		desc: 'Cellular automata moss growth spreading across ancient stone with earthy palette.',
 		inspiration: 'Hozier',
@@ -602,7 +621,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'neon-revival',
-		file: '29-neon-revival.html',
+		file: 'neon-revival.html',
 		title: 'Neon Revival',
 		desc: 'Flickering neon sign with electrical buzz, dripping light particles, and wall reflections.',
 		inspiration: 'Chappell Roan',
@@ -614,7 +633,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'rubber-reality',
-		file: '30-rubber-reality.html',
+		file: 'rubber-reality.html',
 		title: 'Rubber Reality',
 		desc: 'Elastic grid mesh deformed by traveling attractors with spring physics and snap-back.',
 		inspiration: 'Jim Carrey',
@@ -626,7 +645,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'magma-core',
-		file: '31-magma-core.html',
+		file: 'magma-core.html',
 		title: 'Magma Core',
 		desc: 'Volcanic eruption with thermal lava particles, cooling physics, and magma pool.',
 		inspiration: 'Jack Black',
@@ -638,7 +657,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'clockwork-mind',
-		file: '32-clockwork-mind.html',
+		file: 'clockwork-mind.html',
 		title: 'Clockwork Mind',
 		desc: 'Interlocking precision gears with metallic rendering and mathematically correct meshing.',
 		inspiration: 'Robert Downey Jr.',
@@ -650,7 +669,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'shifting-veils',
-		file: '33-shifting-veils.html',
+		file: 'shifting-veils.html',
 		title: 'Shifting Veils',
 		desc: 'Layered translucent noise curtains that morph and reveal patterns underneath.',
 		inspiration: 'Meryl Streep',
@@ -662,7 +681,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'crystal-lattice',
-		file: '34-crystal-lattice.html',
+		file: 'crystal-lattice.html',
 		title: 'Crystal Lattice',
 		desc: 'Procedural crystal formations growing with faceted 3D lighting and prismatic sparkle.',
 		inspiration: 'Anne Hathaway',
@@ -674,7 +693,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'morning-fog',
-		file: '35-morning-fog.html',
+		file: 'morning-fog.html',
 		title: 'Morning Fog',
 		desc: 'Volumetric light shafts cutting through layered fog with illuminated dust motes.',
 		inspiration: 'Timothée Chalamet',
@@ -686,7 +705,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'kaleidoscope-runway',
-		file: '36-kaleidoscope-runway.html',
+		file: 'kaleidoscope-runway.html',
 		title: 'Kaleidoscope Runway',
 		desc: 'Fashion-inspired kaleidoscopic tessellations with symmetric mirror segments.',
 		inspiration: 'Zendaya',
@@ -698,7 +717,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'digital-rain',
-		file: '37-digital-rain.html',
+		file: 'digital-rain.html',
 		title: 'Digital Rain',
 		desc: 'Warm amber character columns dissolving into zen ripples at the water surface.',
 		inspiration: 'Keanu Reeves',
@@ -710,7 +729,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'ember-garden',
-		file: '38-ember-garden.html',
+		file: 'ember-garden.html',
 		title: 'Ember Garden',
 		desc: 'Glowing embers rising from smoldering ground with thermal cooling and heat shimmer.',
 		inspiration: 'Florence Pugh',
@@ -722,7 +741,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'desert-mirage',
-		file: '39-desert-mirage.html',
+		file: 'desert-mirage.html',
 		title: 'Desert Mirage',
 		desc: 'Layered parallax sand dunes with heat shimmer and wind-blown particles.',
 		inspiration: 'Pedro Pascal',
@@ -734,7 +753,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'neon-drive',
-		file: '40-neon-drive.html',
+		file: 'neon-drive.html',
 		title: 'Neon Drive',
 		desc: 'Rain-slicked neon road stretching to a vanishing point with approaching headlights.',
 		inspiration: 'Ryan Gosling',
@@ -746,7 +765,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'liquid-gold',
-		file: '41-liquid-gold.html',
+		file: 'liquid-gold.html',
 		title: 'Liquid Gold',
 		desc: 'Molten metal flow with surface tension, metallic PBR shading, and golden reflections.',
 		inspiration: 'Margot Robbie',
@@ -758,7 +777,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'dark-nebula',
-		file: '42-dark-nebula.html',
+		file: 'dark-nebula.html',
 		title: 'Dark Nebula',
 		desc: 'Cosmic dust clouds with hidden forming stars and parallax depth.',
 		inspiration: 'Oscar Isaac',
@@ -770,7 +789,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'aurora-veil',
-		file: '43-aurora-veil.html',
+		file: 'aurora-veil.html',
 		title: 'Aurora Veil',
 		desc: 'Northern lights ribbons flowing above hexagonal ice crystal formations.',
 		inspiration: 'Cate Blanchett',
@@ -782,7 +801,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'chain-reaction',
-		file: '44-chain-reaction.html',
+		file: 'chain-reaction.html',
 		title: 'Chain Reaction',
 		desc: 'Nuclear fission-inspired exponential particle cascade with shockwave rings.',
 		inspiration: 'Cillian Murphy',
@@ -794,7 +813,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'bioluminescence',
-		file: '45-bioluminescence.html',
+		file: 'bioluminescence.html',
 		title: 'Bioluminescence',
 		desc: 'Deep sea jellyfish pulsing with bioluminescent glow and drifting plankton.',
 		inspiration: 'Sydney Sweeney',
@@ -806,7 +825,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'gothic-filigree',
-		file: '46-gothic-filigree.html',
+		file: 'gothic-filigree.html',
 		title: 'Gothic Filigree',
 		desc: 'Ornate fractal lace scrollwork growing from corners with dark metallic rendering.',
 		inspiration: 'Jenna Ortega',
@@ -818,7 +837,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'contrail-weave',
-		file: '47-contrail-weave.html',
+		file: 'contrail-weave.html',
 		title: 'Contrail Weave',
 		desc: 'Aircraft contrails painting sweeping arcs across a warm sunset sky.',
 		inspiration: 'Glen Powell',
@@ -830,7 +849,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'laser-precision',
-		file: '48-laser-precision.html',
+		file: 'laser-precision.html',
 		title: 'Laser Precision',
 		desc: 'Laser beams tracing geometric patterns with spark particles and intersection flares.',
 		inspiration: 'Ana de Armas',
@@ -842,7 +861,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'deep-current',
-		file: '49-deep-current.html',
+		file: 'deep-current.html',
 		title: 'Deep Current',
 		desc: 'Underwater ocean currents with kelp fronds, rising bubbles, and caustic light.',
 		inspiration: 'Jason Momoa',
@@ -854,7 +873,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'woven-radiance',
-		file: '50-woven-radiance.html',
+		file: 'woven-radiance.html',
 		title: 'Woven Radiance',
 		desc: 'African textile-inspired weave patterns with vibrant kente cloth geometry.',
 		inspiration: 'Lupita Nyong\'o',
@@ -866,7 +885,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'jazz-chaos',
-		file: '51-jazz-chaos.html',
+		file: 'jazz-chaos.html',
 		title: 'Jazz Chaos',
 		desc: 'Syncopated particle groups moving in rhythm with swing timing and solos.',
 		inspiration: 'Jeff Goldblum',
@@ -878,7 +897,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'firefly-meadow',
-		file: '52-firefly-meadow.html',
+		file: 'firefly-meadow.html',
 		title: 'Firefly Meadow',
 		desc: 'Gentle fireflies blinking in synchrony above a dark summer meadow.',
 		inspiration: 'Tom Hanks',
@@ -890,7 +909,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'tectonic',
-		file: '53-tectonic.html',
+		file: 'tectonic.html',
 		title: 'Tectonic',
 		desc: 'Shifting tectonic plates revealing glowing magma in the cracks between.',
 		inspiration: 'Viola Davis',
@@ -902,7 +921,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'thunder-sermon',
-		file: '54-thunder-sermon.html',
+		file: 'thunder-sermon.html',
 		title: 'Thunder Sermon',
 		desc: 'Fractal lightning bolts with Lichtenberg branching and thunder shockwaves.',
 		inspiration: 'Denzel Washington',
@@ -914,7 +933,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'noir-smoke',
-		file: '55-noir-smoke.html',
+		file: 'noir-smoke.html',
 		title: 'Noir Smoke',
 		desc: 'Film noir smoke curling through angled light beams with chiaroscuro contrast.',
 		inspiration: 'Scarlett Johansson',
@@ -926,7 +945,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'playful-caustics',
-		file: '56-playful-caustics.html',
+		file: 'playful-caustics.html',
 		title: 'Playful Caustics',
 		desc: 'Dancing water caustic light patterns on a warm sunlit surface.',
 		inspiration: 'Emma Stone',
@@ -938,7 +957,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'wildfire',
-		file: '57-wildfire.html',
+		file: 'wildfire.html',
 		title: 'Wildfire',
 		desc: 'Cellular automata fire propagation across terrain with wind influence.',
 		inspiration: 'Jennifer Lawrence',
@@ -950,7 +969,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'vinyl-grooves',
-		file: '58-vinyl-grooves.html',
+		file: 'vinyl-grooves.html',
 		title: 'Vinyl Grooves',
 		desc: 'Spinning vinyl record with visible grooves, tonearm, and needle spark.',
 		inspiration: 'Austin Butler',
@@ -962,7 +981,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'vintage-static',
-		file: '59-vintage-static.html',
+		file: 'vintage-static.html',
 		title: 'Vintage Static',
 		desc: 'Retro TV color bars melting with VHS glitches and CRT scan lines.',
 		inspiration: 'Harry Styles',

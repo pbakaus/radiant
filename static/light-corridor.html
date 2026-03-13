@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Light Corridor</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Light Corridor</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// Light Corridor — Infinite tunnel of chromatic light rings
+// Inspired by Dua Lipa concert stage visuals
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var _pad = parseFloat(new URLSearchParams(location.search).get('p')) || 1;
+
+  var gl = canvas.getContext('webgl', { alpha: false, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  var vertSrc = [
+    'attribute vec2 a_pos;',
+    'void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }'
+  ].join('\n');
+
+  var fragSrc = [
+    'precision highp float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform float u_tunnelSpeed;',
+    'uniform float u_colorCycle;',
+    '',
+    '#define PI 3.14159265359',
+    '#define TAU 6.28318530718',
+    '',
+    '// ── Spectrum color from hue (0..1) ──',
+    '// Full disco spectrum: red -> magenta -> blue -> cyan -> green -> yellow -> red',
+    'vec3 spectrum(float t) {',
+    '  vec3 a = vec3(0.5, 0.5, 0.5);',
+    '  vec3 b = vec3(0.5, 0.5, 0.5);',
+    '  vec3 c = vec3(1.0, 1.0, 1.0);',
+    '  vec3 d = vec3(0.0, 0.33, 0.67);',
+    '  return a + b * cos(TAU * (c * t + d));',
+    '}',
+    '',
+    '// ── Hash for slight variation ──',
+    'float hash(float n) {',
+    '  return fract(sin(n) * 43758.5453123);',
+    '}',
+    '',
+    'void main() {',
+    '  vec2 uv = (gl_FragCoord.xy - u_res * 0.5) / u_res.y;',
+    '  float t = u_time;',
+    '',
+    '  // ── Camera wobble for dynamism ──',
+    '  float wobbleX = sin(t * 0.7) * 0.03 + sin(t * 1.1) * 0.015;',
+    '  float wobbleY = cos(t * 0.5) * 0.025 + cos(t * 0.9) * 0.012;',
+    '  uv += vec2(wobbleX, wobbleY);',
+    '',
+    '  // ── Tunnel coordinate system ──',
+    '  float angle = atan(uv.y, uv.x);',
+    '  float radius = length(uv);',
+    '',
+    '  // Avoid division by zero at exact center',
+    '  radius = max(radius, 0.001);',
+    '',
+    '  // ── Tunnel depth: smaller radius = farther away ──',
+    '  // Inverse mapping: depth increases as radius decreases',
+    '  float depth = 1.0 / radius;',
+    '',
+    '  // ── Forward motion ──',
+    '  float speed = t * u_tunnelSpeed * 2.0;',
+    '  float movingDepth = depth + speed;',
+    '',
+    '  // ── Ring generation via modular arithmetic ──',
+    '  // Ring spacing in depth space',
+    '  float ringSpacing = 1.8;',
+    '  float ringPhase = mod(movingDepth, ringSpacing);',
+    '',
+    '  // ── Beat-like pulse: rings breathe with rhythm ──',
+    '  float beatFreq = 2.2;',
+    '  float beat = 0.5 + 0.5 * sin(t * beatFreq * TAU * 0.16);',
+    '  beat = beat * beat; // sharpen the pulse',
+    '',
+    '  // ── Ring shape: bright at the ring position, soft falloff ──',
+    '  // The ring sits at a specific depth; we measure distance to it',
+    '  float ringCenter = ringSpacing * 0.5;',
+    '  float distToRing = abs(ringPhase - ringCenter);',
+    '',
+    '  // Ring width varies with pulse',
+    '  float ringWidth = 0.15 + beat * 0.08;',
+    '',
+    '  // Smooth ring shape with glow',
+    '  float ringCore = exp(-distToRing * distToRing / (ringWidth * ringWidth * 0.08));',
+    '  float ringGlow = exp(-distToRing * distToRing / (ringWidth * ringWidth * 0.6));',
+    '  float ringOuter = exp(-distToRing * distToRing / (ringWidth * ringWidth * 2.5));',
+    '',
+    '  // ── Subtle undulation: rings wobble organically ──',
+    '  float ringIndex = floor(movingDepth / ringSpacing);',
+    '  float undulate = sin(angle * 3.0 + ringIndex * 1.7 + t * 1.3) * 0.04;',
+    '  undulate += sin(angle * 5.0 - ringIndex * 2.3 + t * 0.8) * 0.02;',
+    '',
+    '  // Modulate ring brightness with undulation',
+    '  float undulationFactor = 1.0 + undulate;',
+    '  ringCore *= undulationFactor;',
+    '  ringGlow *= undulationFactor;',
+    '',
+    '  // ── Chromatic color progression along depth ──',
+    '  float colorPhase = ringIndex * 0.12 * u_colorCycle + t * 0.08 * u_colorCycle;',
+    '  vec3 ringColor = spectrum(colorPhase);',
+    '',
+    '  // Boost saturation and vibrancy',
+    '  ringColor = pow(ringColor, vec3(0.8));',
+    '',
+    '  // ── Atmospheric fog: distant rings are dimmer ──',
+    '  // depth is large for distant rings (small radius), small for close ones',
+    '  float fogStart = 3.0;',
+    '  float fogDensity = 0.06;',
+    '  float fog = exp(-max(depth - fogStart, 0.0) * fogDensity);',
+    '',
+    '  // Also fade close rings that are right at the edge of screen',
+    '  float nearFade = smoothstep(0.8, 2.0, depth);',
+    '',
+    '  // ── Assemble ring layers ──',
+    '  // White-hot core on ring edges',
+    '  vec3 coreColor = mix(ringColor, vec3(1.0, 0.97, 0.92), 0.7);',
+    '  // Colored glow',
+    '  vec3 glowColor = ringColor * 1.4;',
+    '  // Soft outer atmospheric tint',
+    '  vec3 outerColor = ringColor * 0.5;',
+    '',
+    '  vec3 col = vec3(0.0);',
+    '  col += coreColor * ringCore * 2.0;',
+    '  col += glowColor * ringGlow * 0.8;',
+    '  col += outerColor * ringOuter * 0.3;',
+    '',
+    '  // ── Secondary ring set (offset for denser tunnel feel) ──',
+    '  float ringSpacing2 = ringSpacing * 0.7;',
+    '  float ringPhase2 = mod(movingDepth + ringSpacing * 0.35, ringSpacing2);',
+    '  float ringCenter2 = ringSpacing2 * 0.5;',
+    '  float distToRing2 = abs(ringPhase2 - ringCenter2);',
+    '  float ringWidth2 = 0.10 + beat * 0.04;',
+    '',
+    '  float ring2Core = exp(-distToRing2 * distToRing2 / (ringWidth2 * ringWidth2 * 0.08));',
+    '  float ring2Glow = exp(-distToRing2 * distToRing2 / (ringWidth2 * ringWidth2 * 0.5));',
+    '',
+    '  float ringIndex2 = floor((movingDepth + ringSpacing * 0.35) / ringSpacing2);',
+    '  float colorPhase2 = ringIndex2 * 0.15 * u_colorCycle + t * 0.1 * u_colorCycle + 0.5;',
+    '  vec3 ringColor2 = spectrum(colorPhase2);',
+    '  ringColor2 = pow(ringColor2, vec3(0.8));',
+    '',
+    '  // Undulate secondary rings differently',
+    '  float undulate2 = sin(angle * 4.0 + ringIndex2 * 2.1 + t * 1.0) * 0.03;',
+    '  ring2Core *= (1.0 + undulate2);',
+    '  ring2Glow *= (1.0 + undulate2);',
+    '',
+    '  vec3 core2Color = mix(ringColor2, vec3(1.0, 0.95, 0.9), 0.6);',
+    '  col += core2Color * ring2Core * 1.0;',
+    '  col += ringColor2 * ring2Glow * 0.4;',
+    '',
+    '  // ── Apply fog and near fade ──',
+    '  col *= fog * nearFade;',
+    '',
+    '  // ── Ambient tunnel atmosphere ──',
+    '  // Subtle colored haze that fills the tunnel interior',
+    '  float ambientDepth = mod(movingDepth * 0.3, 6.0) / 6.0;',
+    '  vec3 ambientColor = spectrum(ambientDepth + t * 0.02 * u_colorCycle) * 0.03;',
+    '  float ambientMask = smoothstep(0.5, 0.05, radius);',
+    '  col += ambientColor * ambientMask * fog;',
+    '',
+    '  // ── Edge glow: bright rim at tunnel opening ──',
+    '  float edgeGlow = smoothstep(0.6, 0.15, radius) * smoothstep(0.0, 0.05, radius);',
+    '  vec3 edgeColor = spectrum(t * 0.05 * u_colorCycle) * 0.08;',
+    '  col += edgeColor * edgeGlow;',
+    '',
+    '  // ── Vignette ──',
+    '  float screenRadius = length((gl_FragCoord.xy - u_res * 0.5) / u_res);',
+    '  float vignette = smoothstep(0.7, 0.3, screenRadius);',
+    '  col *= vignette;',
+    '',
+    '  // ── Tone mapping ──',
+    '  col = col / (col + vec3(0.7));',
+    '  col = pow(col, vec3(0.92));',
+    '',
+    '  gl_FragColor = vec4(col, 1.0);',
+    '}',
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error('Shader compile error:', gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error('Program link error:', gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uTunnelSpeed = gl.getUniformLocation(prog, 'u_tunnelSpeed');
+  var uColorCycle = gl.getUniformLocation(prog, 'u_colorCycle');
+
+  var tunnelSpeedVal = 1.0;
+  var colorCycleVal = 0.5;
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  function resize() {
+    var w = Math.round(canvas.clientWidth * dpr);
+    var h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  var isVisible = true;
+  var animId = 0;
+
+  function render(now) {
+    if (!isVisible) return;
+    resize();
+    gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uTunnelSpeed, tunnelSpeedVal);
+    gl.uniform1f(uColorCycle, colorCycleVal);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    animId = requestAnimationFrame(render);
+  }
+
+  animId = requestAnimationFrame(render);
+
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) {
+      isVisible = false;
+      cancelAnimationFrame(animId);
+    } else {
+      isVisible = true;
+      animId = requestAnimationFrame(render);
+    }
+  });
+
+  window.addEventListener('message', function (e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'TUNNEL_SPEED': tunnelSpeedVal = e.data.value; break;
+        case 'COLOR_CYCLE': colorCycleVal = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

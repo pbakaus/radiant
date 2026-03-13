@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Moss & Bone</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Moss & Bone</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// 28 · Moss & Bone — Nature reclaiming stone
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var params = new URLSearchParams(location.search);
+  var _pad = parseFloat(params.get('p')) || 1;
+
+  var gl = canvas.getContext('webgl', { alpha: true, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  var vertSrc = 'attribute vec2 a_pos;\nvoid main(){gl_Position=vec4(a_pos,0.0,1.0);}';
+
+  var fragSrc = [
+'precision highp float;',
+'uniform float u_time;',
+'uniform vec2 u_res;',
+'uniform float u_growthSpeed;',
+'uniform float u_mossIntensity;',
+'',
+'vec2 hash2(vec2 p){',
+'  p=vec2(dot(p,vec2(127.1,311.7)),dot(p,vec2(269.5,183.3)));',
+'  return -1.0+2.0*fract(sin(p)*43758.5453123);',
+'}',
+'float hash1(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}',
+'',
+'float gnoise(vec2 p){',
+'  vec2 i=floor(p),f=fract(p);',
+'  vec2 u=f*f*(3.0-2.0*f);',
+'  return mix(mix(dot(hash2(i),f),',
+'    dot(hash2(i+vec2(1,0)),f-vec2(1,0)),u.x),',
+'    mix(dot(hash2(i+vec2(0,1)),f-vec2(0,1)),',
+'    dot(hash2(i+vec2(1,1)),f-vec2(1,1)),u.x),u.y);',
+'}',
+'',
+'float fbm3(vec2 p){',
+'  mat2 rot=mat2(0.8,0.6,-0.6,0.8);',
+'  float v=0.0,a=0.5;',
+'  for(int i=0;i<3;i++){v+=a*gnoise(p);p=rot*p*2.03;a*=0.49;}',
+'  return v;',
+'}',
+'float fbm4(vec2 p){',
+'  mat2 rot=mat2(0.8,0.6,-0.6,0.8);',
+'  float v=0.0,a=0.5;',
+'  for(int i=0;i<4;i++){v+=a*gnoise(p);p=rot*p*2.03;a*=0.49;}',
+'  return v;',
+'}',
+'float fbm5(vec2 p){',
+'  mat2 rot=mat2(0.8,0.6,-0.6,0.8);',
+'  float v=0.0,a=0.5;',
+'  for(int i=0;i<5;i++){v+=a*gnoise(p);p=rot*p*2.03;a*=0.49;}',
+'  return v;',
+'}',
+'float fbm6(vec2 p){',
+'  mat2 rot=mat2(0.8,0.6,-0.6,0.8);',
+'  float v=0.0,a=0.5;',
+'  for(int i=0;i<6;i++){v+=a*gnoise(p);p=rot*p*2.03;a*=0.49;}',
+'  return v;',
+'}',
+'',
+'// Voronoi crack structure',
+'vec3 voronoi(vec2 p){',
+'  vec2 ip=floor(p),fp=fract(p);',
+'  float d1=8.0,d2=8.0;vec2 id1=vec2(0);',
+'  for(int y=-1;y<=1;y++)for(int x=-1;x<=1;x++){',
+'    vec2 nb=vec2(float(x),float(y));',
+'    vec2 o=hash2(ip+nb)*0.5+0.5;',
+'    vec2 diff=nb+o-fp;',
+'    float d=dot(diff,diff);',
+'    if(d<d1){d2=d1;d1=d;id1=ip+nb;}',
+'    else if(d<d2){d2=d;}',
+'  }',
+'  return vec3(sqrt(d1),sqrt(d2),hash1(id1));',
+'}',
+'',
+'// Stone surface with marble veining',
+'vec3 stoneTexture(vec2 uv){',
+'  float vein1=fbm6(uv*3.0+vec2(5.2,1.3));',
+'  float vein2=fbm5(uv*5.0+vec2(8.7,3.1));',
+'  float marble=sin(uv.x*6.0+vein1*4.0+vein2*2.0)*0.5+0.5;',
+'  marble=pow(marble,0.6);',
+'  vec3 stoneL=vec3(0.56,0.53,0.48);',
+'  vec3 stoneD=vec3(0.32,0.29,0.26);',
+'  vec3 stoneW=vec3(0.46,0.39,0.32);',
+'  vec3 s=mix(stoneD,stoneL,marble);',
+'  float warm=smoothstep(0.3,0.7,fbm4(uv*4.0+vec2(2,7)));',
+'  s=mix(s,stoneW,warm*0.3);',
+'  s+=gnoise(uv*40.0)*0.04+gnoise(uv*80.0)*0.02;',
+'  return s;',
+'}',
+'',
+'// Crack edges from voronoi',
+'float crackPattern(vec2 uv){',
+'  vec3 v1=voronoi(uv*3.5);',
+'  vec3 v2=voronoi(uv*7.0+vec2(3.7,1.2));',
+'  vec3 v3=voronoi(uv*14.0+vec2(7.3,5.9));',
+'  float c1=1.0-smoothstep(0.0,0.10,v1.y-v1.x);',
+'  float c2=1.0-smoothstep(0.0,0.07,v2.y-v2.x);',
+'  float c3=1.0-smoothstep(0.0,0.05,v3.y-v3.x);',
+'  float cracks=c1*0.55+c2*0.30+c3*0.15;',
+'  float nc=abs(fbm5(uv*5.0+vec2(11,3)));',
+'  nc=1.0-smoothstep(0.0,0.07,nc);',
+'  cracks=max(cracks,nc*0.45);',
+'  return clamp(cracks,0.0,1.0);',
+'}',
+'',
+'// Wider zone around cracks where moss thrives',
+'float crackInfluence(vec2 uv){',
+'  vec3 v1=voronoi(uv*3.5);',
+'  vec3 v2=voronoi(uv*7.0+vec2(3.7,1.2));',
+'  float i1=1.0-smoothstep(0.0,0.35,v1.y-v1.x);',
+'  float i2=1.0-smoothstep(0.0,0.25,v2.y-v2.x);',
+'  float inf=i1*0.6+i2*0.4;',
+'  float nc=abs(fbm5(uv*5.0+vec2(11,3)));',
+'  float ni=1.0-smoothstep(0.0,0.22,nc);',
+'  inf=max(inf,ni*0.4);',
+'  return clamp(inf,0.0,1.0);',
+'}',
+'',
+'// Organic growth field: moss expanding from seed points',
+'float mossGrowth(vec2 uv, float time){',
+'  float growth=0.0;',
+'  float gt=time*u_growthSpeed;',
+'  // Smooth oscillation: slowly breathes between partial and full coverage',
+'  // Never fully bare: ranges from ~0.3 to 1.0',
+'  float wave=sin(gt*0.35)*0.5+0.5;',
+'  float expansion=mix(0.3,1.0,wave);',
+'  // Initial ramp: first 15 seconds grow in from nothing',
+'  float startup=smoothstep(0.0,5.0,gt);',
+'  expansion*=startup;',
+'',
+'  // 8 seed points spread across the frame',
+'  vec2 s0=vec2(0.22,0.68); vec2 s1=vec2(0.75,0.35);',
+'  vec2 s2=vec2(0.50,0.85); vec2 s3=vec2(0.12,0.25);',
+'  vec2 s4=vec2(0.82,0.78); vec2 s5=vec2(0.58,0.15);',
+'  vec2 s6=vec2(0.35,0.45); vec2 s7=vec2(0.68,0.60);',
+'',
+'  float dist,r;',
+'',
+'  // Each seed: distort distance with noise for organic tendrils',
+'  dist=length(uv-s0)+fbm4(uv*6.0+s0*3.0)*0.25;',
+'  r=expansion*(0.30+hash1(s0*7.0)*0.15);',
+'  growth=max(growth,smoothstep(r+0.04,r-0.10,dist));',
+'',
+'  dist=length(uv-s1)+fbm4(uv*6.0+s1*3.0+vec2(2.3,0))*0.25;',
+'  r=expansion*(0.30+hash1(s1*7.0)*0.15);',
+'  growth=max(growth,smoothstep(r+0.04,r-0.10,dist));',
+'',
+'  dist=length(uv-s2)+fbm4(uv*6.0+s2*3.0+vec2(4.6,0))*0.25;',
+'  r=expansion*(0.30+hash1(s2*7.0)*0.15);',
+'  growth=max(growth,smoothstep(r+0.04,r-0.10,dist));',
+'',
+'  dist=length(uv-s3)+fbm4(uv*6.0+s3*3.0+vec2(6.9,0))*0.25;',
+'  r=expansion*(0.30+hash1(s3*7.0)*0.15);',
+'  growth=max(growth,smoothstep(r+0.04,r-0.10,dist));',
+'',
+'  dist=length(uv-s4)+fbm4(uv*6.0+s4*3.0+vec2(9.2,0))*0.25;',
+'  r=expansion*(0.30+hash1(s4*7.0)*0.15);',
+'  growth=max(growth,smoothstep(r+0.04,r-0.10,dist));',
+'',
+'  dist=length(uv-s5)+fbm4(uv*6.0+s5*3.0+vec2(11.5,0))*0.25;',
+'  r=expansion*(0.30+hash1(s5*7.0)*0.15);',
+'  growth=max(growth,smoothstep(r+0.04,r-0.10,dist));',
+'',
+'  dist=length(uv-s6)+fbm4(uv*6.0+s6*3.0+vec2(13.8,0))*0.25;',
+'  r=expansion*(0.28+hash1(s6*7.0)*0.15);',
+'  growth=max(growth,smoothstep(r+0.04,r-0.10,dist));',
+'',
+'  dist=length(uv-s7)+fbm4(uv*6.0+s7*3.0+vec2(16.1,0))*0.25;',
+'  r=expansion*(0.28+hash1(s7*7.0)*0.15);',
+'  growth=max(growth,smoothstep(r+0.04,r-0.10,dist));',
+'',
+'  // Crack influence: moss concentrates in cracks but also spreads onto surface',
+'  float crInf=crackInfluence(vec2(uv.x*(u_res.x/u_res.y),uv.y));',
+'  // At low growth, moss lives mainly in cracks; at high growth, spreads everywhere',
+'  float crackMask=mix(crInf,1.0,growth*growth);',
+'  crackMask=max(crackMask,0.18);',
+'  growth*=crackMask;',
+'',
+'  // Organic patch variation: clumping',
+'  float patches=fbm4(uv*8.0+vec2(3,9));',
+'  patches=smoothstep(-0.1,0.3,patches);',
+'  growth*=mix(0.45,1.0,patches);',
+'',
+'  // Slightly more moss toward bottom (moisture runs down)',
+'  growth*=mix(0.82,1.0,1.0-uv.y);',
+'',
+'  // Permanent moss in deep cracks (always visible)',
+'  float deepCr=crackInfluence(vec2(uv.x*(u_res.x/u_res.y),uv.y));',
+'  float baseMoss=deepCr*deepCr*0.35*startup;',
+'  growth=max(growth,baseMoss);',
+'',
+'  // Living pulse: the moss breathes',
+'  float pulse=sin(time*0.5+fbm3(uv*3.0)*6.0)*0.05;',
+'  growth+=pulse*growth;',
+'',
+'  return clamp(growth,0.0,1.0);',
+'}',
+'',
+'// Rich moss coloring with amber highlights',
+'vec3 mossColor(vec2 uv, float growth, float crInf, float time){',
+'  // Core green palette - richer, more saturated',
+'  vec3 mDeep=vec3(0.08,0.22,0.04);',
+'  vec3 mLush=vec3(0.18,0.48,0.10);',
+'  vec3 mBright=vec3(0.28,0.58,0.14);',
+'  vec3 mYoung=vec3(0.35,0.65,0.20);',
+'  // Warm accents',
+'  vec3 amber=vec3(0.80,0.58,0.24);',
+'  vec3 lichen=vec3(0.52,0.60,0.28);',
+'  vec3 gold=vec3(0.68,0.52,0.20);',
+'',
+'  // Base color varies with thickness noise',
+'  float thick=fbm4(uv*8.0+vec2(1,4))*0.5+0.5;',
+'  vec3 col=mix(mDeep,mLush,thick);',
+'',
+'  // Brighter in cracks (more moisture feeds the moss)',
+'  col=mix(col,mBright,crInf*0.7);',
+'',
+'  // Mature thick moss gets richer',
+'  float maturity=smoothstep(0.3,0.8,growth);',
+'  col=mix(col,mLush*1.3,maturity*0.4);',
+'',
+'  // Fresh bright edges where growth is thin/new',
+'  float edgeFresh=smoothstep(0.4,0.05,growth);',
+'  col=mix(col,mYoung,edgeFresh*0.4);',
+'',
+'  // Amber lichen patches scattered through mature moss',
+'  float lp=fbm4(uv*10.0+vec2(20,15));',
+'  float amberPatch=smoothstep(0.15,0.38,lp);',
+'  col=mix(col,amber,amberPatch*0.35*smoothstep(0.25,0.6,growth));',
+'',
+'  // Golden-green lichen spots',
+'  float gl2=smoothstep(0.25,0.45,fbm4(uv*16.0+vec2(40,30)));',
+'  col=mix(col,gold,gl2*0.20*growth);',
+'',
+'  // Pale lichen patches',
+'  float paleLich=smoothstep(0.30,0.48,fbm3(uv*13.0+vec2(55,22)));',
+'  col=mix(col,lichen,paleLich*0.22*growth);',
+'',
+'  // Inner luminous glow: the moss radiates faint light',
+'  float glow=sin(time*0.6+fbm3(uv*4.0)*8.0)*0.5+0.5;',
+'  col+=vec3(0.04,0.12,0.03)*glow*growth;',
+'',
+'  // Subtle highlight variation to break uniformity',
+'  float highlight=fbm3(uv*20.0+vec2(7,13))*0.5+0.5;',
+'  col*=mix(0.85,1.15,highlight);',
+'',
+'  return col;',
+'}',
+'',
+'// Tiny flowers/spores on mature moss',
+'float flowerDots(vec2 uv, float time){',
+'  vec3 v=voronoi(uv*22.0);',
+'  float chance=step(0.75,v.z);',
+'  float d=smoothstep(0.10,0.015,v.x);',
+'  float pulse=sin(time*0.8+v.z*15.0)*0.3+0.7;',
+'  return d*chance*pulse;',
+'}',
+'',
+'// Floating spore particles drifting upward',
+'float sporeField(vec2 uv, float time){',
+'  float sp=0.0;',
+'  for(int i=0;i<8;i++){',
+'    float fi=float(i);',
+'    vec2 pos=vec2(hash1(vec2(fi*1.7,3.2)),hash1(vec2(fi*2.3,7.1)));',
+'    pos.y=fract(pos.y-time*(0.006+hash1(vec2(fi,0))*0.010));',
+'    pos.x+=sin(time*0.2+fi*1.5)*0.04;',
+'    float d=length(uv-pos);',
+'    float bright=smoothstep(0.015,0.003,d);',
+'    float fade=sin(time*0.4+fi*2.0)*0.5+0.5;',
+'    sp+=bright*fade*0.5;',
+'  }',
+'  return clamp(sp,0.0,1.0);',
+'}',
+'',
+'void main(){',
+'  vec2 uv=gl_FragCoord.xy/u_res;',
+'  float aspect=u_res.x/u_res.y;',
+'  vec2 uvA=vec2(uv.x*aspect,uv.y);',
+'  float t=u_time;',
+'',
+'  // ── Stone surface ──',
+'  vec3 stone=stoneTexture(uvA);',
+'',
+'  // ── Cracks darken stone ──',
+'  float cracks=crackPattern(uvA);',
+'  float deepCrack=smoothstep(0.25,0.7,cracks);',
+'  stone*=1.0-cracks*0.45;',
+'  stone=mix(stone,vec3(0.06,0.06,0.05),deepCrack*0.7);',
+'',
+'  // ── Moss growth ──',
+'  float growth=mossGrowth(uv,t);',
+'  float crInf=crackInfluence(uvA);',
+'  vec3 moss=mossColor(uvA,growth,crInf,t);',
+'',
+'  // ── Blend moss onto stone ──',
+'  float mAlpha=growth*u_mossIntensity;',
+'  // Extra density in cracks',
+'  mAlpha=mix(mAlpha,min(1.0,mAlpha*1.5),crInf);',
+'  mAlpha=clamp(mAlpha,0.0,1.0);',
+'',
+'  // Bumpy texture look',
+'  float bump=fbm3(uvA*22.0+vec2(5,8))*0.5+0.5;',
+'  float mThick=mAlpha*mix(0.80,1.0,bump);',
+'',
+'  // Sharp blend: thin moss is semi-transparent, thick moss is opaque',
+'  float blendFactor=smoothstep(0.0,0.10,mThick)*mThick;',
+'  blendFactor=pow(blendFactor,0.8);',
+'  vec3 col=mix(stone,moss,blendFactor);',
+'',
+'  // ── Tiny flowers on thickest moss ──',
+'  float mature=smoothstep(0.45,0.70,growth);',
+'  float flowers=flowerDots(uvA,t)*mature;',
+'  vec3 flowerCol=mix(vec3(0.95,0.90,0.75),vec3(0.98,0.80,0.90),',
+'    step(0.5,hash1(floor(uvA*22.0))));',
+'  col=mix(col,flowerCol,flowers*0.8);',
+'',
+'  // ── Spores floating up ──',
+'  float spores=sporeField(uv,t)*smoothstep(0.25,0.5,growth);',
+'  col+=vec3(0.18,0.32,0.10)*spores;',
+'',
+'  // ── Luminous edge glow on moss boundary ──',
+'  float mossEdge=smoothstep(0.02,0.12,growth)-smoothstep(0.12,0.40,growth);',
+'  mossEdge=max(0.0,mossEdge);',
+'  float edgePulse=sin(t*0.8+fbm3(uvA*5.0)*10.0)*0.3+0.7;',
+'  col+=vec3(0.06,0.18,0.03)*mossEdge*edgePulse;',
+'',
+'  // ── Green tint in deep cracks (damp/algae staining) ──',
+'  float dampStain=deepCrack*(1.0-mThick)*0.25;',
+'  col=mix(col,vec3(0.08,0.14,0.06),dampStain);',
+'',
+'  // ── Ambient occlusion in cracks ──',
+'  col*=1.0-deepCrack*0.15*(1.0-mThick);',
+'',
+'  // ── Vignette ──',
+'  vec2 vigUV=uv-0.5;',
+'  float vig=1.0-dot(vigUV,vigUV)*0.7;',
+'  col*=mix(0.65,1.0,vig);',
+'',
+'  // ── Color grading ──',
+'  col.r*=1.03; col.b*=0.93;',
+'  col=pow(max(col,0.0),vec3(0.95));',
+'',
+'  gl_FragColor=vec4(col,1.0);',
+'}'
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error('Shader compile error:', gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error('Program link error:', gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uGrowthSpeed = gl.getUniformLocation(prog, 'u_growthSpeed');
+  var uMossIntensity = gl.getUniformLocation(prog, 'u_mossIntensity');
+  var growthSpeedVal = 0.35;
+  var mossIntensityVal = 1.0;
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  function resize() {
+    var w = Math.round(canvas.clientWidth * dpr);
+    var h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  var running = true;
+
+  function render(now) {
+    if (!running) { requestAnimationFrame(render); return; }
+    resize();
+    gl.uniform1f(uTime, prefersReduced ? 25.0 : now * 0.001);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uGrowthSpeed, growthSpeedVal);
+    gl.uniform1f(uMossIntensity, mossIntensityVal);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  // ── Visibility pause ──
+  document.addEventListener('visibilitychange', function () {
+    running = !document.hidden;
+  });
+
+  // ── PostMessage API ──
+  window.addEventListener('message', function (e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'growthSpeed': growthSpeedVal = e.data.value; break;
+        case 'mossIntensity': mossIntensityVal = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

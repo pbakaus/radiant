@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ethereal Submersion</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Ethereal Submersion</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// 13 · Ethereal Submersion — Underwater dreamscape with bioluminescent tendrils
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var _pad = parseFloat(new URLSearchParams(location.search).get('p')) || 1;
+
+  var gl = canvas.getContext('webgl', { alpha: true, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  var vertSrc = [
+    'attribute vec2 a_pos;',
+    'void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }'
+  ].join('\n');
+
+  var fragSrc = [
+    'precision highp float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform float u_pad;',
+    'uniform float u_depth;',
+    'uniform float u_glow;',
+    '',
+    '// --- Noise functions ---',
+    'vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }',
+    'vec4 mod289v4(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }',
+    'vec2 mod289v2(vec2 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }',
+    'vec3 permute(vec3 x) { return mod289(((x * 34.0) + 1.0) * x); }',
+    'vec4 permutev4(vec4 x) { return mod289v4(((x * 34.0) + 1.0) * x); }',
+    '',
+    'float snoise(vec2 v) {',
+    '  const vec4 C = vec4(0.211324865405187, 0.366025403784439,',
+    '                     -0.577350269189626, 0.024390243902439);',
+    '  vec2 i = floor(v + dot(v, C.yy));',
+    '  vec2 x0 = v - i + dot(i, C.xx);',
+    '  vec2 i1 = (x0.x > x0.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);',
+    '  vec4 x12 = x0.xyxy + C.xxzz;',
+    '  x12.xy -= i1;',
+    '  i = mod289v2(i);',
+    '  vec3 p = permute(permute(i.y + vec3(0.0, i1.y, 1.0)) + i.x + vec3(0.0, i1.x, 1.0));',
+    '  vec3 m = max(0.5 - vec3(dot(x0, x0), dot(x12.xy, x12.xy), dot(x12.zw, x12.zw)), 0.0);',
+    '  m = m * m;',
+    '  m = m * m;',
+    '  vec3 x = 2.0 * fract(p * C.www) - 1.0;',
+    '  vec3 h = abs(x) - 0.5;',
+    '  vec3 ox = floor(x + 0.5);',
+    '  vec3 a0 = x - ox;',
+    '  m *= 1.79284291400159 - 0.85373472095314 * (a0 * a0 + h * h);',
+    '  vec3 g;',
+    '  g.x = a0.x * x0.x + h.x * x0.y;',
+    '  g.yz = a0.yz * x12.xz + h.yz * x12.yw;',
+    '  return 130.0 * dot(m, g);',
+    '}',
+    '',
+    'float fbm(vec2 p, float t) {',
+    '  float val = 0.0;',
+    '  float amp = 0.5;',
+    '  float freq = 1.0;',
+    '  for (int i = 0; i < 5; i++) {',
+    '    val += amp * snoise(p * freq + t * 0.15);',
+    '    freq *= 2.05;',
+    '    amp *= 0.5;',
+    '    p += vec2(1.7, 9.2);',
+    '  }',
+    '  return val;',
+    '}',
+    '',
+    '// Hash for pseudo-random',
+    'float hash(vec2 p) {',
+    '  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);',
+    '}',
+    '',
+    'float hash1(float n) {',
+    '  return fract(sin(n) * 43758.5453123);',
+    '}',
+    '',
+    '// --- Caustic light pattern ---',
+    'float caustic(vec2 uv, float t) {',
+    '  float c = 0.0;',
+    '  vec2 p = uv * 3.0;',
+    '  for (int i = 0; i < 3; i++) {',
+    '    float fi = float(i);',
+    '    vec2 q = p * (1.0 + fi * 0.4);',
+    '    q += vec2(snoise(p + t * 0.3 + fi * 1.7), snoise(p + t * 0.2 + fi * 2.3 + 50.0)) * 0.4;',
+    '    float n = snoise(q + t * (0.1 + fi * 0.05));',
+    '    c += smoothstep(0.3, 0.7, abs(n)) * (0.5 / (1.0 + fi * 0.5));',
+    '  }',
+    '  return c;',
+    '}',
+    '',
+    '// --- Floating tendril / hair strand ---',
+    'float tendril(vec2 uv, float seed, float t) {',
+    '  float h = hash1(seed * 73.137);',
+    '  float centerX = (h - 0.5) * 1.4;',
+    '  float startY = -0.6 + hash1(seed * 31.71) * 0.3;',
+    '  float len = 0.5 + hash1(seed * 47.29) * 0.6;',
+    '  float speed = 0.15 + hash1(seed * 19.83) * 0.15;',
+    '  float thickness = 0.003 + hash1(seed * 61.17) * 0.006;',
+    '',
+    '  float d = 1.0;',
+    '  float segments = 40.0;',
+    '',
+    '  for (float i = 0.0; i < 40.0; i++) {',
+    '    float f = i / segments;',
+    '    float py = startY + f * len;',
+    '    float wave1 = sin(f * 6.0 + t * speed * 4.0 + seed * 2.0) * 0.06 * (0.3 + f);',
+    '    float wave2 = sin(f * 10.0 - t * speed * 3.0 + seed * 5.0) * 0.03 * f;',
+    '    float wave3 = sin(f * 3.0 + t * speed * 1.5 + seed) * 0.04 * (0.5 + f * 0.5);',
+    '    float px = centerX + wave1 + wave2 + wave3;',
+    '',
+    '    float dx = uv.x - px;',
+    '    float dy = uv.y - py;',
+    '    float segDist = sqrt(dx * dx + dy * dy);',
+    '',
+    '    float taperThick = thickness * (1.0 - f * 0.7);',
+    '    d = min(d, segDist / taperThick);',
+    '  }',
+    '',
+    '  float glow = exp(-d * 1.5) * 0.8;',
+    '  float core = exp(-d * d * 8.0);',
+    '  return glow + core * 0.5;',
+    '}',
+    '',
+    '// --- Bubbles ---',
+    'float bubble(vec2 uv, float seed, float t) {',
+    '  float h1 = hash1(seed * 137.31);',
+    '  float h2 = hash1(seed * 249.17);',
+    '  float h3 = hash1(seed * 371.53);',
+    '',
+    '  float bx = (h1 - 0.5) * 1.6;',
+    '  float speed = 0.08 + h2 * 0.12;',
+    '  float by = mod(-0.8 + t * speed + h3 * 6.0, 2.4) - 1.2;',
+    '',
+    '  bx += sin(by * 3.0 + t * 0.5 + seed) * 0.04;',
+    '',
+    '  float radius = 0.008 + h3 * 0.018;',
+    '  float dx = uv.x - bx;',
+    '  float dy = uv.y - by;',
+    '  float dist = sqrt(dx * dx + dy * dy);',
+    '',
+    '  float ring = smoothstep(radius, radius - 0.002, dist) - smoothstep(radius - 0.002, radius - 0.004, dist);',
+    '  float highlight = smoothstep(radius * 0.6, 0.0, length(uv - vec2(bx - radius * 0.3, by + radius * 0.3)));',
+    '  float interior = smoothstep(radius, radius * 0.8, dist) * 0.05;',
+    '',
+    '  return (ring * 0.6 + highlight * 0.4 + interior);',
+    '}',
+    '',
+    '// --- Marine snow (floating particles) ---',
+    'float marineSnow(vec2 uv, float t) {',
+    '  float particles = 0.0;',
+    '  for (float i = 0.0; i < 50.0; i++) {',
+    '    float h1 = hash1(i * 17.31 + 100.0);',
+    '    float h2 = hash1(i * 29.17 + 200.0);',
+    '    float h3 = hash1(i * 41.53 + 300.0);',
+    '',
+    '    float px = (h1 - 0.5) * 2.2;',
+    '    float speed = 0.02 + h3 * 0.04;',
+    '    float py = mod(0.8 - t * speed + h2 * 6.0, 2.4) - 1.2;',
+    '',
+    '    px += sin(t * 0.3 + i * 1.7) * 0.02;',
+    '',
+    '    float dist = length(uv - vec2(px, py));',
+    '    float size = 0.001 + h3 * 0.003;',
+    '    float brightness = h2 * 0.5;',
+    '',
+    '    particles += smoothstep(size, 0.0, dist) * brightness;',
+    '  }',
+    '  return particles;',
+    '}',
+    '',
+    'void main() {',
+    '  vec2 uv = (gl_FragCoord.xy - u_res * 0.5) / min(u_res.x, u_res.y);',
+    '  vec2 uvNorm = gl_FragCoord.xy / u_res;',
+    '  float t = u_time;',
+    '  float depthFactor = u_depth;',
+    '  float glowIntensity = u_glow;',
+    '',
+    '  // --- Deep water base ---',
+    '  // Vertical gradient: darker at bottom, slightly lighter at top',
+    '  float vertGrad = uvNorm.y;',
+    '  vec3 deepWater = mix(',
+    '    vec3(0.0, 0.01, 0.02),  // abyss black-blue',
+    '    vec3(0.0, 0.04, 0.06) * depthFactor,  // dark teal up top',
+    '    vertGrad * vertGrad',
+    '  );',
+    '',
+    '  vec3 col = deepWater;',
+    '',
+    '  // --- Light from above (god rays) ---',
+    '  float rays = 0.0;',
+    '  for (int i = 0; i < 5; i++) {',
+    '    float fi = float(i);',
+    '    float rayX = (fi - 2.0) * 0.25 + sin(t * 0.1 + fi * 1.3) * 0.15;',
+    '    float spread = 0.08 + fi * 0.02;',
+    '    float ray = exp(-pow((uv.x - rayX) / spread, 2.0));',
+    '    ray *= smoothstep(-0.2, 0.8, uvNorm.y);  // stronger at top',
+    '    ray *= (0.5 + 0.5 * sin(t * 0.2 + fi * 2.0));  // slow pulsation',
+    '    float noiseModulate = 0.7 + 0.3 * snoise(vec2(uv.x * 3.0 + fi, t * 0.1));',
+    '    ray *= noiseModulate;',
+    '    rays += ray * 0.12;',
+    '  }',
+    '',
+    '  // Teal-green light filtering through water',
+    '  vec3 lightColor = vec3(0.1, 0.6, 0.5) * depthFactor;',
+    '  col += lightColor * rays * glowIntensity;',
+    '',
+    '  // Faint neon green light scatter at the top',
+    '  float topGlow = smoothstep(0.3, 1.0, uvNorm.y);',
+    '  col += vec3(0.05, 0.25, 0.15) * topGlow * topGlow * 0.15 * glowIntensity;',
+    '',
+    '  // --- Underwater current distortion ---',
+    '  vec2 distortedUV = uv;',
+    '  distortedUV.x += snoise(vec2(uv.y * 2.0, t * 0.15)) * 0.03;',
+    '  distortedUV.y += snoise(vec2(uv.x * 2.0 + 50.0, t * 0.12)) * 0.02;',
+    '',
+    '  // --- Caustic light patterns on the "sea floor" ---',
+    '  float causticPattern = caustic(distortedUV * 1.5, t * 0.6);',
+    '  float causticMask = smoothstep(0.5, -0.2, uvNorm.y);  // visible at bottom',
+    '  vec3 causticColor = vec3(0.05, 0.35, 0.25) * causticPattern * causticMask * 0.5 * glowIntensity;',
+    '  col += causticColor;',
+    '',
+    '  // Secondary caustic layer - neon green highlights',
+    '  float caustic2 = caustic(distortedUV * 2.5 + 10.0, t * 0.4 + 3.0);',
+    '  float neonCaustic = pow(caustic2, 3.0) * causticMask;',
+    '  col += vec3(0.0, 1.0, 0.4) * neonCaustic * 0.08 * glowIntensity;',
+    '',
+    '  // --- Floating hair-like tendrils ---',
+    '  float tendrils = 0.0;',
+    '  for (float i = 0.0; i < 8.0; i++) {',
+    '    tendrils += tendril(distortedUV, i + 1.0, t) * (0.6 + hash1(i * 53.0) * 0.4);',
+    '  }',
+    '',
+    '  // Neon green tendril color with teal tint',
+    '  vec3 tendrilColor = mix(',
+    '    vec3(0.0, 0.8, 0.3),   // neon green',
+    '    vec3(0.0, 0.5, 0.6),   // teal',
+    '    0.3 + 0.2 * sin(t * 0.3)',
+    '  );',
+    '  col += tendrilColor * tendrils * 0.12 * glowIntensity;',
+    '',
+    '  // Brighter core of tendrils',
+    '  col += vec3(0.3, 1.0, 0.5) * pow(tendrils, 3.0) * 0.05 * glowIntensity;',
+    '',
+    '  // --- Bubbles ---',
+    '  float bubbles = 0.0;',
+    '  for (float i = 0.0; i < 25.0; i++) {',
+    '    bubbles += bubble(distortedUV, i + 1.0, t);',
+    '  }',
+    '  // Bubbles are slightly teal-tinted',
+    '  col += vec3(0.3, 0.8, 0.7) * bubbles * 0.3 * glowIntensity;',
+    '',
+    '  // --- Marine snow ---',
+    '  float snow = marineSnow(distortedUV, t);',
+    '  col += vec3(0.4, 0.7, 0.6) * snow * 0.25 * glowIntensity;',
+    '',
+    '  // --- Deep ambient noise (slow, organic movement) ---',
+    '  float ambientNoise = fbm(distortedUV * 1.5 + vec2(0.0, t * 0.05), t * 0.3);',
+    '  col += vec3(0.0, 0.12, 0.08) * (ambientNoise * 0.5 + 0.5) * 0.15;',
+    '',
+    '  // --- Bioluminescent pulses (occasional bright spots) ---',
+    '  for (float i = 0.0; i < 6.0; i++) {',
+    '    float h1 = hash1(i * 83.17);',
+    '    float h2 = hash1(i * 127.31);',
+    '    vec2 pulseCenter = vec2((h1 - 0.5) * 1.6, (h2 - 0.5) * 1.2);',
+    '    float pulseTime = sin(t * (0.3 + h1 * 0.2) + i * 2.5);',
+    '    float pulse = max(0.0, pulseTime);',
+    '    pulse = pulse * pulse * pulse;',
+    '    float pulseDist = length(distortedUV - pulseCenter);',
+    '    float pulseGlow = exp(-pulseDist * 5.0) * pulse;',
+    '    col += vec3(0.0, 0.9, 0.4) * pulseGlow * 0.15 * glowIntensity;',
+    '  }',
+    '',
+    '  // --- Vignette (dark edges for depth) ---',
+    '  float vig = 1.0 - length(uv) * 0.7;',
+    '  vig = smoothstep(0.0, 1.0, vig);',
+    '  col *= vig;',
+    '',
+    '  // --- Very subtle film grain for texture ---',
+    '  float grain = (hash(gl_FragCoord.xy + t * 100.0) - 0.5) * 0.015;',
+    '  col += grain;',
+    '',
+    '  // --- Color grading: push toward Billie palette ---',
+    '  // Slightly desaturate, then boost greens',
+    '  float lum = dot(col, vec3(0.299, 0.587, 0.114));',
+    '  col = mix(vec3(lum), col, 1.1);  // slight saturation boost',
+    '  col.g *= 1.1;  // push green channel',
+    '',
+    '  // Ensure we stay in range',
+    '  col = clamp(col, 0.0, 1.0);',
+    '',
+    '  // Gamma',
+    '  col = pow(col, vec3(0.95));',
+    '',
+    '  gl_FragColor = vec4(col, 1.0);',
+    '}',
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error(gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uPad = gl.getUniformLocation(prog, 'u_pad');
+  var uDepth = gl.getUniformLocation(prog, 'u_depth');
+  var uGlow = gl.getUniformLocation(prog, 'u_glow');
+  var depthVal = 1.0;
+  var glowVal = 0.8;
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  function resize() {
+    var w = Math.round(canvas.clientWidth * dpr);
+    var h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  function render(now) {
+    resize();
+    gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uPad, _pad);
+    gl.uniform1f(uDepth, depthVal);
+    gl.uniform1f(uGlow, glowVal);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'DEPTH': depthVal = e.data.value; break;
+        case 'GLOW_INTENSITY': glowVal = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

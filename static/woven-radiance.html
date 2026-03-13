@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Woven Radiance</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Woven Radiance</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// 50 · Woven Radiance — African textile-inspired geometric weave
+// Smooth, continuous animation — fabric flowing like being woven
+// ─────────────────────────────────────────────
+(function() {
+  var canvas = document.getElementById('canvas');
+  var ctx = canvas.getContext('2d');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var _pad = parseFloat(new URLSearchParams(location.search).get('p')) || 1;
+
+  var width, height, dpr;
+
+  function resize() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    canvas.style.width = width + 'px';
+    canvas.style.height = height + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
+  window.addEventListener('resize', resize);
+  resize();
+
+  // Tunable parameters
+  var WEAVE_SPEED = 0.5;
+  var COLOR_RICHNESS = 0.8;
+
+  // ── Smooth easing helpers ──
+  // Attempt to make all transitions silky: smoothstep, hermite, etc.
+
+  // Classic smoothstep: 0->1 smoothly within [edge0, edge1]
+  function smoothstep(edge0, edge1, x) {
+    var t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
+    return t * t * (3 - 2 * t);
+  }
+
+  // Quintic smootherstep for even smoother transitions
+  function smootherstep(edge0, edge1, x) {
+    var t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
+    return t * t * t * (t * (t * 6 - 15) + 10);
+  }
+
+  // Smooth lerp between two values
+  function lerp(a, b, t) {
+    return a + (b - a) * t;
+  }
+
+  // Smooth color lerp
+  function lerpColor(c1, c2, t) {
+    return {
+      r: c1.r + (c2.r - c1.r) * t,
+      g: c1.g + (c2.g - c1.g) * t,
+      b: c1.b + (c2.b - c1.b) * t
+    };
+  }
+
+  // Sinusoidal ease-in-out: produces smooth 0->1->0 oscillation without sharp corners
+  function easeInOutSin(t) {
+    return 0.5 - 0.5 * Math.cos(t * Math.PI * 2);
+  }
+
+  // ── Color palette — vibrant African textile-inspired ──
+  var basePalette = [
+    { r: 218, g: 165, b: 32  }, // deep gold
+    { r: 205, g: 133, b: 63  }, // amber/peru
+    { r: 184, g: 115, b: 51  }, // copper
+    { r: 178, g: 34,  b: 34  }, // crimson/firebrick
+    { r: 101, g: 67,  b: 33  }, // chocolate/dark brown
+    { r: 240, g: 220, b: 170 }, // warm ivory
+    { r: 139, g: 69,  b: 19  }, // saddle brown
+    { r: 220, g: 90,  b: 40  }, // burnt orange
+    { r: 160, g: 40,  b: 40  }, // dark crimson
+    { r: 255, g: 195, b: 60  }, // bright gold
+    { r: 80,  g: 45,  b: 22  }, // espresso
+    { r: 230, g: 150, b: 50  }  // marigold
+  ];
+
+  // ── Pseudo-random seeded function for deterministic pattern blocks ──
+  function seededRandom(seed) {
+    var x = Math.sin(seed * 127.1 + 311.7) * 43758.5453;
+    return x - Math.floor(x);
+  }
+
+  // ── Weave configuration ──
+  var BASE_THREAD_W = 18 * _pad;
+  var GAP = 1.5 * _pad;
+  var BLOCK_THREADS = 8;
+
+  // ── Smooth thread color with continuous interpolation ──
+  // Instead of abrupt color switching, we continuously blend between palette colors
+  function getThreadColor(threadIndex, isVertical, time) {
+    var seed = isVertical ? threadIndex * 7.3 + 13.7 : threadIndex * 11.1 + 29.3;
+    var baseIdx = Math.floor(seededRandom(seed) * basePalette.length);
+    var nextIdx = (baseIdx + 1 + Math.floor(seededRandom(seed + 100) * 3)) % basePalette.length;
+
+    // Very slow, smooth sinusoidal blend between two colors — no sudden shifts
+    // Use a slow sine wave for continuous back-and-forth blending
+    var phase = time * 0.06 * WEAVE_SPEED + threadIndex * 0.3 + (isVertical ? 5.0 : 0.0);
+    var blend = 0.5 + 0.5 * Math.sin(phase); // smooth 0..1 oscillation
+
+    var c1 = basePalette[baseIdx];
+    var c2 = basePalette[nextIdx];
+    var t = blend * COLOR_RICHNESS;
+
+    return lerpColor(c1, c2, t);
+  }
+
+  // ── Smooth weave pattern: continuous over/under blending ──
+  // Instead of discrete pattern switching (which causes choppiness),
+  // we compute a continuous "vertical-on-top" value in [0, 1].
+  // Values near 1 = vertical fully on top, near 0 = horizontal fully on top.
+  // Values in between produce a smooth crossfade at the crossing.
+
+  // Individual pattern functions return a continuous value [-1, 1]
+  // positive = vertical on top, negative = horizontal on top
+  function patternPlain(localH, localV) {
+    // Plain weave: alternating like a checkerboard
+    // Use sin for smooth continuous version
+    return Math.sin((localH + localV) * Math.PI);
+  }
+
+  function patternTwill(localH, localV) {
+    // Twill: diagonal lines
+    return Math.sin((localH + localV) * Math.PI * 0.5);
+  }
+
+  function patternSatin(localH, localV) {
+    // Satin: long floats
+    return Math.sin((localH * 2 + localV) * Math.PI * 0.5);
+  }
+
+  function patternBasket(localH, localV) {
+    // Basket weave: 2x2 blocks
+    return Math.sin(Math.floor(localH / 2) * Math.PI + Math.floor(localV / 2) * Math.PI);
+  }
+
+  function patternHerringbone(localH, localV) {
+    // Herringbone: zigzag
+    var diag = Math.sin((localH + localV) * Math.PI * 0.5);
+    var flip = Math.sin(localH * Math.PI * 0.25);
+    return diag * (flip > 0 ? 1 : -1);
+  }
+
+  var patternFuncs = [patternPlain, patternTwill, patternSatin, patternBasket, patternHerringbone];
+
+  // Returns a continuous value in [0, 1] representing how much the vertical thread is on top
+  function getVerticalOnTopAmount(hIdx, vIdx, time) {
+    var blockH = Math.floor(hIdx / BLOCK_THREADS);
+    var blockV = Math.floor(vIdx / BLOCK_THREADS);
+    var localH = hIdx % BLOCK_THREADS;
+    var localV = vIdx % BLOCK_THREADS;
+
+    // Determine which two patterns to blend between, smoothly
+    var patternSeed = blockH * 37 + blockV * 71;
+    var basePattern = Math.floor(seededRandom(patternSeed) * patternFuncs.length);
+    var nextPattern = (basePattern + 1) % patternFuncs.length;
+
+    // Very slow evolution phase — smoothly cycles between patterns
+    // Using smootherstep on a sine wave for extra-smooth transitions
+    var evolveSpeed = 0.025 * WEAVE_SPEED; // very slow
+    var evolvePhase = time * evolveSpeed + blockH * 2.3 + blockV * 3.7;
+    // Create a smooth 0..1 blend factor that oscillates between patterns
+    var rawBlend = 0.5 + 0.5 * Math.sin(evolvePhase);
+    var blendFactor = smootherstep(0, 1, rawBlend);
+
+    // Evaluate both patterns and blend smoothly
+    var val1 = patternFuncs[basePattern](localH, localV);
+    var val2 = patternFuncs[nextPattern](localH, localV);
+    var blended = lerp(val1, val2, blendFactor);
+
+    // Convert from [-1, 1] to [0, 1] with smoothstep for soft edges
+    return smoothstep(-0.3, 0.3, blended);
+  }
+
+  // ── Draw a single thread segment with 3D-ish shading ──
+  // Now accepts a continuous "onTopAmount" (0..1) instead of boolean
+  function drawThreadSegment(x, y, w, h, color, onTopAmount, isVertical, time, threadIdx) {
+    // Gentle breathing effect on thread width — very slow and smooth
+    var breatheSpeed = 0.4 * WEAVE_SPEED; // slower breathing
+    var breathePhase = time * breatheSpeed + threadIdx * 0.5 + (isVertical ? 3.0 : 0.0);
+    var breathe = Math.sin(breathePhase) * 0.03; // reduced amplitude for subtlety
+    var pulseW = w * (1 + breathe);
+    var pulseH = h * (1 + breathe);
+
+    var drawX = isVertical ? x + (w - pulseW) * 0.5 : x;
+    var drawY = isVertical ? y : y + (h - pulseH) * 0.5;
+    var drawW = isVertical ? pulseW : w;
+    var drawH = isVertical ? h : pulseH;
+
+    // Thread body color — smoothly interpolate brightness based on onTopAmount
+    var r = Math.min(255, color.r * COLOR_RICHNESS + (1 - COLOR_RICHNESS) * 140);
+    var g = Math.min(255, color.g * COLOR_RICHNESS + (1 - COLOR_RICHNESS) * 120);
+    var b = Math.min(255, color.b * COLOR_RICHNESS + (1 - COLOR_RICHNESS) * 100);
+
+    // Smooth brightness based on how much this thread is "on top"
+    // On top = brighter (1.12), underneath = darker (0.75)
+    var lightMod = lerp(0.75, 1.12, onTopAmount);
+    r = Math.round(Math.min(255, r * lightMod));
+    g = Math.round(Math.min(255, g * lightMod));
+    b = Math.round(Math.min(255, b * lightMod));
+
+    ctx.fillStyle = 'rgb(' + r + ',' + g + ',' + b + ')';
+    ctx.fillRect(drawX, drawY, drawW, drawH);
+
+    // Thread texture — subtle grain lines within the thread
+    var lineAlpha = 0.08 * COLOR_RICHNESS;
+    ctx.strokeStyle = 'rgba(255, 255, 240, ' + lineAlpha + ')';
+    ctx.lineWidth = 0.5;
+    if (isVertical) {
+      var step = Math.max(2, pulseW / 4);
+      for (var lx = drawX + step; lx < drawX + drawW; lx += step) {
+        ctx.beginPath();
+        ctx.moveTo(lx, drawY);
+        ctx.lineTo(lx, drawY + drawH);
+        ctx.stroke();
+      }
+    } else {
+      var step2 = Math.max(2, pulseH / 4);
+      for (var ly = drawY + step2; ly < drawY + drawH; ly += step2) {
+        ctx.beginPath();
+        ctx.moveTo(drawX, ly);
+        ctx.lineTo(drawX + drawW, ly);
+        ctx.stroke();
+      }
+    }
+
+    // Highlight along leading edge — intensity scales with onTopAmount
+    if (onTopAmount > 0.1) {
+      var hlAlpha = 0.15 * COLOR_RICHNESS * onTopAmount;
+      if (isVertical) {
+        var hlGrad = ctx.createLinearGradient(drawX, drawY, drawX + drawW * 0.3, drawY);
+        hlGrad.addColorStop(0, 'rgba(255, 245, 220, ' + hlAlpha + ')');
+        hlGrad.addColorStop(1, 'rgba(255, 245, 220, 0)');
+        ctx.fillStyle = hlGrad;
+        ctx.fillRect(drawX, drawY, drawW * 0.4, drawH);
+      } else {
+        var hlGrad2 = ctx.createLinearGradient(drawX, drawY, drawX, drawY + drawH * 0.3);
+        hlGrad2.addColorStop(0, 'rgba(255, 245, 220, ' + hlAlpha + ')');
+        hlGrad2.addColorStop(1, 'rgba(255, 245, 220, 0)');
+        ctx.fillStyle = hlGrad2;
+        ctx.fillRect(drawX, drawY, drawW, drawH * 0.4);
+      }
+    }
+  }
+
+  // ── Shadow drawing — now with smooth alpha based on onTopAmount ──
+  function drawShadow(x, y, w, h, isVertical, onTopAmount) {
+    var shadowOffset = 2 * _pad;
+    // Shadow fades smoothly with onTopAmount
+    var shadowAlpha = 0.3 * onTopAmount;
+    if (shadowAlpha < 0.01) return; // skip invisible shadows
+    ctx.fillStyle = 'rgba(5, 3, 0, ' + shadowAlpha + ')';
+    if (isVertical) {
+      ctx.fillRect(x + w, y + shadowOffset, shadowOffset, h);
+      ctx.fillRect(x + shadowOffset, y + h, w, shadowOffset);
+    } else {
+      ctx.fillRect(x + w, y + shadowOffset, shadowOffset, h);
+      ctx.fillRect(x + shadowOffset, y + h, w, shadowOffset);
+    }
+  }
+
+  // ── Main weave rendering ──
+  // Now uses continuous blending instead of discrete over/under passes
+  function drawWeave(time) {
+    var threadW = BASE_THREAD_W;
+    var cellSize = threadW + GAP;
+
+    var cols = Math.ceil(width / cellSize) + 2;
+    var rows = Math.ceil(height / cellSize) + 2;
+
+    // Slow, smooth pan offset — continuous drift
+    var panX = Math.sin(time * 0.02 * WEAVE_SPEED) * cellSize * 0.5;
+    var panY = Math.cos(time * 0.015 * WEAVE_SPEED) * cellSize * 0.3;
+    var startX = -cellSize + panX;
+    var startY = -cellSize + panY;
+
+    // We draw in two passes, but now with smooth blending:
+    // Pass 1: Draw threads with lower onTopAmount (more "under")
+    // Pass 2: Draw threads with higher onTopAmount (more "over") + shadows
+
+    // Pre-compute all onTopAmounts for this frame
+    var onTopAmounts = [];
+    for (var row = 0; row < rows; row++) {
+      onTopAmounts[row] = [];
+      for (var col = 0; col < cols; col++) {
+        onTopAmounts[row][col] = getVerticalOnTopAmount(row, col, time);
+      }
+    }
+
+    // Pass 1: Draw "under" threads (the ones with lower onTopAmount)
+    for (var row1 = 0; row1 < rows; row1++) {
+      for (var col1 = 0; col1 < cols; col1++) {
+        var cx = startX + col1 * cellSize;
+        var cy = startY + row1 * cellSize;
+        var vAmount = onTopAmounts[row1][col1]; // 0..1, higher = vertical more on top
+
+        var hColor = getThreadColor(row1, false, time);
+        var vColor = getThreadColor(col1, true, time);
+
+        // Draw the thread that is more "under"
+        if (vAmount > 0.5) {
+          // Horizontal is more under
+          drawThreadSegment(cx, cy, cellSize + GAP, threadW, hColor, 1 - vAmount, false, time, row1);
+        } else {
+          // Vertical is more under
+          drawThreadSegment(cx, cy, threadW, cellSize + GAP, vColor, vAmount, true, time, col1);
+        }
+      }
+    }
+
+    // Pass 2: Draw "over" threads with shadows
+    for (var row2 = 0; row2 < rows; row2++) {
+      for (var col2 = 0; col2 < cols; col2++) {
+        var cx2 = startX + col2 * cellSize;
+        var cy2 = startY + row2 * cellSize;
+        var vAmount2 = onTopAmounts[row2][col2];
+
+        var hColor2 = getThreadColor(row2, false, time);
+        var vColor2 = getThreadColor(col2, true, time);
+
+        if (vAmount2 > 0.5) {
+          // Vertical is more on top
+          drawShadow(cx2, cy2, threadW, cellSize + GAP, true, vAmount2);
+          drawThreadSegment(cx2, cy2, threadW, cellSize + GAP, vColor2, vAmount2, true, time, col2);
+        } else {
+          // Horizontal is more on top
+          var hOnTop = 1 - vAmount2;
+          drawShadow(cx2, cy2, cellSize + GAP, threadW, false, hOnTop);
+          drawThreadSegment(cx2, cy2, cellSize + GAP, threadW, hColor2, hOnTop, false, time, row2);
+        }
+      }
+    }
+  }
+
+  // ── Vignette ──
+  function drawVignette() {
+    var cx = width / 2;
+    var cy = height / 2;
+    var maxDim = Math.max(width, height);
+    var vignette = ctx.createRadialGradient(cx, cy, maxDim * 0.3, cx, cy, maxDim * 0.85);
+    vignette.addColorStop(0, 'rgba(10, 10, 10, 0)');
+    vignette.addColorStop(1, 'rgba(10, 10, 10, 0.35)');
+    ctx.fillStyle = vignette;
+    ctx.fillRect(0, 0, width, height);
+  }
+
+  // ── Warm glow overlay — smoother movement ──
+  function drawWarmGlow(time) {
+    // Very gentle, slow-moving warm radiance
+    var cx = width / 2 + Math.sin(time * 0.08 * WEAVE_SPEED) * width * 0.08;
+    var cy = height / 2 + Math.cos(time * 0.06 * WEAVE_SPEED) * height * 0.06;
+    var maxDim = Math.max(width, height);
+    // Slow smooth pulse
+    var pulse = 0.035 + Math.sin(time * 0.15 * WEAVE_SPEED) * 0.012;
+
+    var glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, maxDim * 0.6);
+    glow.addColorStop(0, 'rgba(255, 200, 100, ' + pulse + ')');
+    glow.addColorStop(0.5, 'rgba(200, 149, 108, ' + (pulse * 0.4) + ')');
+    glow.addColorStop(1, 'rgba(200, 149, 108, 0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, width, height);
+  }
+
+  // ── Animation loop — frame-rate independent via elapsed time ──
+  var animTime = 0;
+  var lastTimestamp = 0;
+  var isVisible = true;
+
+  function render(timestamp) {
+    if (!lastTimestamp) lastTimestamp = timestamp;
+    // Delta time in seconds, capped to avoid jumps after tab switch
+    var dt = Math.min((timestamp - lastTimestamp) / 1000, 0.05);
+    lastTimestamp = timestamp;
+
+    if (prefersReduced) dt = 0;
+
+    // Accumulate smooth time — frame-rate independent
+    animTime += dt;
+
+    // Clear
+    ctx.clearRect(0, 0, width, height);
+
+    // Background
+    ctx.fillStyle = '#0a0a0a';
+    ctx.fillRect(0, 0, width, height);
+
+    // Draw the weave using accumulated time (not raw timestamp)
+    drawWeave(animTime);
+
+    // Post effects
+    drawWarmGlow(animTime);
+    drawVignette();
+
+    requestAnimationFrame(render);
+  }
+
+  // Pause when offscreen
+  document.addEventListener('visibilitychange', function() {
+    isVisible = !document.hidden;
+    if (isVisible) {
+      lastTimestamp = 0; // reset so we don't get a huge dt jump
+      requestAnimationFrame(render);
+    }
+  });
+
+  requestAnimationFrame(render);
+
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'WEAVE_SPEED': WEAVE_SPEED = e.data.value; break;
+        case 'COLOR_RICHNESS': COLOR_RICHNESS = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

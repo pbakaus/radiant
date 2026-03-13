@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Noir Smoke</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Noir Smoke</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// 55 · Noir Smoke — Cigarette smoke in a dimly lit jazz club
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var urlParams = new URLSearchParams(window.location.search);
+  var pixelScale = parseFloat(urlParams.get('p')) || 1;
+
+  var gl = canvas.getContext('webgl', { alpha: true, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  var vertSrc = [
+    'attribute vec2 a_pos;',
+    'void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }'
+  ].join('\n');
+
+  var fragSrc = `
+precision highp float;
+uniform float u_time;
+uniform vec2 u_res;
+
+// ── Hash ──
+float hash(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+
+// ── Smooth value noise ──
+float noise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  f = f * f * f * (f * (f * 6.0 - 15.0) + 10.0); // quintic smooth
+  return mix(
+    mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),
+    mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x),
+    f.y
+  );
+}
+
+// ── FBM with inter-octave rotation for isotropy ──
+float fbm(vec2 p) {
+  float v = 0.0, a = 0.5;
+  mat2 rot = mat2(0.8, 0.6, -0.6, 0.8);
+  for (int i = 0; i < 6; i++) {
+    v += a * noise(p);
+    p = rot * p * 2.03 + vec2(1.7, 9.2);
+    a *= 0.49;
+  }
+  return v;
+}
+
+// ── Double domain warp — creates organic curling smoke ──
+float smokeField(vec2 p, float t) {
+  vec2 q = vec2(
+    fbm(p + t * 0.035),
+    fbm(p + vec2(5.2, 1.3) + t * 0.03)
+  );
+  vec2 r = vec2(
+    fbm(p + 3.8 * q + vec2(1.7, 9.2) + t * 0.018),
+    fbm(p + 3.8 * q + vec2(8.3, 2.8) + t * 0.022)
+  );
+  return fbm(p + 3.2 * r + t * 0.008);
+}
+
+void main() {
+  vec2 uv = gl_FragCoord.xy / u_res;
+  float aspect = u_res.x / u_res.y;
+  vec2 p = vec2((uv.x - 0.5) * aspect, uv.y);
+
+  float t = u_time;
+
+  // ── Smoke texture layers with upward drift ──
+  vec2 s1 = p * 2.5;
+  s1.y -= t * 0.05;
+  s1.x += sin(p.y * 2.0 + t * 0.1) * 0.12;
+  float tex1 = smokeField(s1, t);
+
+  vec2 s2 = p * 3.8 + vec2(3.7, 1.2);
+  s2.y -= t * 0.065;
+  s2.x += sin(p.y * 3.5 + t * 0.15) * 0.08;
+  float tex2 = smokeField(s2, t * 0.8);
+
+  vec2 s3 = p * 5.5 + vec2(7.1, 4.8);
+  s3.y -= t * 0.085;
+  s3.x += cos(p.y * 4.5 + t * 0.12) * 0.06;
+  float tex3 = smokeField(s3, t * 1.15);
+
+  float smokeTex = tex1 * 0.50 + tex2 * 0.30 + tex3 * 0.20;
+
+  // ── Wisp envelopes — thin cigarette smoke trails ──
+  // Main wisp — starts narrow, curls as it rises
+  float curl1 = sin(p.y * 3.0 + t * 0.22) * 0.08
+              + sin(p.y * 7.0 - t * 0.15) * 0.04
+              + sin(p.y * 12.0 + t * 0.3) * 0.015;
+  float dx1 = p.x - (-0.02 + curl1);
+  float width1 = 0.04 + p.y * 0.16; // very narrow at base, widens as it rises
+  float w1 = exp(-(dx1 * dx1) / (width1 * width1));
+
+  // Second wisp — splits off to the right
+  float curl2 = sin(p.y * 3.5 + t * 0.18 + 2.0) * 0.07
+              + sin(p.y * 8.0 + t * 0.12) * 0.03;
+  float dx2 = p.x - (0.06 + curl2);
+  float width2 = 0.03 + p.y * 0.14;
+  float w2 = exp(-(dx2 * dx2) / (width2 * width2));
+
+  // Thin accent wisp — delicate tendril
+  float curl3 = sin(p.y * 4.0 + t * 0.28 + 4.5) * 0.05
+              + sin(p.y * 10.0 - t * 0.2) * 0.02;
+  float dx3 = p.x - (-0.12 + curl3);
+  float width3 = 0.025 + p.y * 0.09;
+  float w3 = exp(-(dx3 * dx3) / (width3 * width3));
+
+  // Fourth wisp — very thin, fast curl
+  float curl4 = sin(p.y * 5.0 + t * 0.3 + 1.0) * 0.04;
+  float dx4 = p.x - (0.15 + curl4);
+  float width4 = 0.02 + p.y * 0.07;
+  float w4 = exp(-(dx4 * dx4) / (width4 * width4));
+
+  float wispEnv = w1 * 0.8 + w2 * 0.55 + w3 * 0.35 + w4 * 0.2;
+  wispEnv = clamp(wispEnv, 0.0, 1.0);
+
+  // Vertical fade: source is a point near bottom, smoke dissipates near top
+  float vFade = smoothstep(0.02, 0.18, p.y) * smoothstep(1.05, 0.35, p.y);
+
+  // Combine: texture modulated by wisp shape
+  float smoke = smokeTex * wispEnv * vFade;
+  // Sharper threshold creates breaks and gaps in the smoke
+  smoke = smoothstep(0.18, 0.58, smoke) * 0.75;
+  // Fine wisp tendrils from high-freq layer
+  float tendrils = tex3 * wispEnv * vFade;
+  tendrils = smoothstep(0.35, 0.72, tendrils) * 0.25;
+  smoke = max(smoke, tendrils);
+  // Cut holes in the smoke with secondary texture for realism
+  float holes = smoothstep(0.32, 0.58, tex2);
+  smoke *= mix(0.5, 1.0, holes);
+
+  // Gentle ambient haze in upper region
+  float haze = smoothstep(0.2, 0.7, p.y) * smoothstep(1.0, 0.65, p.y);
+  haze *= smokeTex * 0.35 * 0.2;
+
+  float totalSmoke = clamp(smoke + haze, 0.0, 1.0);
+
+  // ── Spotlight — warm cone from upper-right ──
+  vec2 lightPos = vec2(0.3 * aspect, 1.4);
+  vec2 lightDir = normalize(vec2(-0.15, -1.0));
+
+  vec2 toP = p - lightPos;
+  float along = dot(toP, lightDir);
+  float perp = length(toP - lightDir * along);
+
+  // Cone geometry — narrower beam for dramatic noir look
+  float coneW = 0.06 + along * 0.20;
+  float spot = 1.0 - smoothstep(coneW * 0.3, coneW, perp);
+  spot *= smoothstep(0.0, 0.25, along);
+  spot *= spot; // sharper edge
+
+  // Distance attenuation
+  float dist = length(toP);
+  float atten = 1.0 / (1.0 + dist * 0.5);
+  float spotLight = spot * atten;
+
+  // ── Fill light from lower-left (very dim) ──
+  vec2 fillPos = vec2(-0.55 * aspect, -0.3);
+  float fillDist = length(p - fillPos);
+  float fillLight = 1.0 / (1.0 + fillDist * fillDist * 5.0) * 0.12;
+
+  // ── Volumetric: smoke particles scatter the spotlight ──
+  float volumetric = totalSmoke * spotLight;
+
+  // Forward scattering — extra glow along the beam direction
+  float fwd = max(dot(normalize(toP + vec2(0.001)), lightDir), 0.0);
+  fwd = pow(fwd, 5.0);
+  volumetric += totalSmoke * fwd * atten * 0.35;
+
+  // ── Color composition ──
+  vec3 col = vec3(0.010, 0.009, 0.009);
+
+  // Palette
+  vec3 warmAmber = vec3(0.78, 0.58, 0.42);
+  vec3 warmGold  = vec3(0.95, 0.75, 0.42);
+  vec3 hotCore   = vec3(1.0, 0.90, 0.70);
+  vec3 coolGrey  = vec3(0.50, 0.52, 0.58);
+
+  // Smoke in shadow — barely-visible cool grey
+  float inShadow = 1.0 - clamp(spotLight * 3.0, 0.0, 1.0);
+  col += coolGrey * totalSmoke * inShadow * 0.04;
+
+  // Fill light contribution
+  col += warmAmber * totalSmoke * fillLight * 0.4;
+
+  // Atmospheric beam glow (even without smoke)
+  col += warmGold * spot * atten * 0.05;
+
+  // ── Hero effect: smoke illuminated by spotlight ──
+  col += warmGold * volumetric * 0.55;
+  col += hotCore * pow(volumetric, 1.4) * 0.7;
+  col += hotCore * pow(volumetric, 2.8) * 0.35;
+
+  // ── Tiny dust motes drifting in the beam ──
+  float dust = 0.0;
+  for (int i = 0; i < 3; i++) {
+    float fi = float(i);
+    vec2 dp = p * (40.0 + fi * 25.0);
+    dp.y += t * (0.015 + fi * 0.008);
+    dp.x += sin(t * 0.08 + fi * 2.5) * 1.5;
+    float n = noise(dp + fi * 137.0);
+    // Very tight threshold — only tiny bright specks
+    dust += smoothstep(0.88, 0.98, n) * (0.08 - fi * 0.015);
+  }
+  col += hotCore * dust * spotLight * 0.25;
+
+  // ── Heavy noir vignette ──
+  vec2 vig = uv * 2.0 - 1.0;
+  float vignette = 1.0 - dot(vig * vec2(0.55, 0.42), vig * vec2(0.55, 0.42));
+  vignette = smoothstep(0.0, 0.65, vignette);
+  col *= vignette;
+
+  // ── Film grain ──
+  float grain = (hash(gl_FragCoord.xy + fract(t * 60.0) * 1000.0) - 0.5) * 0.02;
+  col += grain;
+
+  // ── Tone mapping ──
+  col = max(col, 0.0);
+  col = col / (col + vec3(0.42));
+  col *= 1.3;
+
+  // Subtle warm push in shadows
+  float lum = dot(col, vec3(0.299, 0.587, 0.114));
+  col = mix(col, col * vec3(1.06, 0.97, 0.90), smoothstep(0.06, 0.0, lum) * 0.35);
+
+  gl_FragColor = vec4(col, 1.0);
+}
+`;
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error('Shader compile error:', gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error('Program link error:', gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  function resize() {
+    var scale = 1.0 / pixelScale;
+    var w = Math.round(canvas.clientWidth * dpr * scale);
+    var h = Math.round(canvas.clientHeight * dpr * scale);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  var running = true;
+
+  function render(now) {
+    if (!running) { requestAnimationFrame(render); return; }
+    resize();
+    gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  // ── Pause when offscreen ──
+  document.addEventListener('visibilitychange', function () {
+    running = !document.hidden;
+  });
+
+  // ── PostMessage API ──
+  window.addEventListener('message', function (e) {
+    if (e.data && e.data.type === 'param') {
+      // Reserved for future tunables
+    }
+  });
+})();
+</script>
+</body>
+</html>

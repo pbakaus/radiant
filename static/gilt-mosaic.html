@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gilt Mosaic</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Gilt Mosaic</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// Gilt Mosaic — Byzantine golden mosaic wall catching candlelight
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var urlParams = new URLSearchParams(window.location.search);
+  var pixelScale = parseFloat(urlParams.get('p')) || 1;
+
+  var gl = canvas.getContext('webgl', { alpha: true, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  var vertSrc = [
+    'attribute vec2 a_pos;',
+    'void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }'
+  ].join('\n');
+
+  var fragSrc = [
+    'precision highp float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform float u_lightSpeed;',
+    'uniform float u_tileScale;',
+    '',
+    '#define PI 3.14159265359',
+    '#define TAU 6.28318530718',
+    '',
+    '// ── Pseudo-random hash ──',
+    'float hash(vec2 p) {',
+    '  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);',
+    '}',
+    '',
+    'vec2 hash2(vec2 p) {',
+    '  return vec2(',
+    '    fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453),',
+    '    fract(sin(dot(p, vec2(269.5, 183.3))) * 43758.5453)',
+    '  );',
+    '}',
+    '',
+    '// ── Smooth value noise ──',
+    'float noise(vec2 p) {',
+    '  vec2 i = floor(p);',
+    '  vec2 f = fract(p);',
+    '  f = f * f * (3.0 - 2.0 * f);',
+    '  float a = hash(i);',
+    '  float b = hash(i + vec2(1.0, 0.0));',
+    '  float c = hash(i + vec2(0.0, 1.0));',
+    '  float d = hash(i + vec2(1.0, 1.0));',
+    '  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);',
+    '}',
+    '',
+    '// ── Tile grid with jitter ──',
+    '// Returns: xy = local coord within tile, zw = tile ID',
+    'vec4 tileGrid(vec2 p, float scale) {',
+    '  vec2 sp = p * scale;',
+    '  vec2 id = floor(sp);',
+    '  vec2 f = fract(sp);',
+    '',
+    '  // Jitter tile boundaries slightly for organic look',
+    '  vec2 jitter = hash2(id) * 0.12 - 0.06;',
+    '  f -= jitter;',
+    '',
+    '  return vec4(f, id);',
+    '}',
+    '',
+    '// ── Per-tile normal (tilted surface) ──',
+    'vec3 tileNormal(vec2 id) {',
+    '  float h1 = hash(id * 1.731 + 17.3);',
+    '  float h2 = hash(id * 2.419 + 31.7);',
+    '',
+    '  // Slight random tilt - each tile angled differently',
+    '  float tiltX = (h1 - 0.5) * 0.35;',
+    '  float tiltY = (h2 - 0.5) * 0.35;',
+    '',
+    '  return normalize(vec3(tiltX, tiltY, 1.0));',
+    '}',
+    '',
+    '// ── Grout detection ──',
+    'float groutMask(vec2 f, float groutWidth) {',
+    '  vec2 edge = smoothstep(vec2(0.0), vec2(groutWidth), f) *',
+    '              smoothstep(vec2(0.0), vec2(groutWidth), vec2(1.0) - f);',
+    '  return edge.x * edge.y;',
+    '}',
+    '',
+    '// ── Surface micro-roughness within a tile ──',
+    'float tileRoughness(vec2 f, vec2 id) {',
+    '  // Subtle bumps on tile surface (faceted glass / tesserae)',
+    '  float h = hash(id + 99.0);',
+    '  float n1 = noise(f * 8.0 + id * 3.7);',
+    '  float n2 = noise(f * 16.0 + id * 7.1 + 50.0);',
+    '  return n1 * 0.6 + n2 * 0.4;',
+    '}',
+    '',
+    'void main() {',
+    '  vec2 uv = gl_FragCoord.xy / u_res;',
+    '  vec2 aspect = vec2(u_res.x / u_res.y, 1.0);',
+    '  vec2 p = uv * aspect;',
+    '  float t = u_time * u_lightSpeed;',
+    '',
+    '  // ── Tile grid ──',
+    '  float scale = 18.0 * u_tileScale;',
+    '  vec4 tile = tileGrid(p, scale);',
+    '  vec2 f = tile.xy;',  // local coords within tile
+    '  vec2 id = tile.zw;', // tile ID
+    '',
+    '  // ── Grout ──',
+    '  float groutW = 0.06;',
+    '  float tMask = groutMask(f, groutW);',
+    '',
+    '  // ── Per-tile properties ──',
+    '  float tileHash = hash(id);',
+    '  float tileHash2 = hash(id + 200.0);',
+    '  float tileHash3 = hash(id + 400.0);',
+    '  vec3 N = tileNormal(id);',
+    '',
+    '  // Add micro-surface variation within tile',
+    '  float roughness = tileRoughness(f, id);',
+    '  N = normalize(N + vec3(',
+    '    (roughness - 0.5) * 0.12,',
+    '    (noise(f * 12.0 + id * 5.3) - 0.5) * 0.12,',
+    '    0.0',
+    '  ));',
+    '',
+    '  // ── Moving light sources ──',
+    '  // Light 1: main overhead sweep (slow figure-eight)',
+    '  vec3 light1Pos = vec3(',
+    '    aspect.x * 0.5 + sin(t * 0.7) * aspect.x * 0.4,',
+    '    0.5 + cos(t * 0.53) * 0.4,',
+    '    0.8 + sin(t * 0.31) * 0.15',
+    '  );',
+    '',
+    '  // Light 2: secondary, slower, offset orbit',
+    '  vec3 light2Pos = vec3(',
+    '    aspect.x * 0.5 + cos(t * 0.43 + 2.0) * aspect.x * 0.35,',
+    '    0.5 + sin(t * 0.37 + 1.5) * 0.35,',
+    '    0.7 + cos(t * 0.29) * 0.1',
+    '  );',
+    '',
+    '  // Light 3: gentle background fill, very slow',
+    '  vec3 light3Pos = vec3(',
+    '    aspect.x * 0.5 + sin(t * 0.19 + 4.0) * aspect.x * 0.25,',
+    '    0.5 + cos(t * 0.23 + 3.0) * 0.25,',
+    '    1.2',
+    '  );',
+    '',
+    '  // ── Per-tile specular calculation ──',
+    '  vec3 tileWorldPos = vec3(p, 0.0);',
+    '  vec3 viewDir = normalize(vec3(aspect.x * 0.5, 0.5, 1.5) - tileWorldPos);',
+    '',
+    '  // Light 1 specular',
+    '  vec3 L1 = normalize(light1Pos - tileWorldPos);',
+    '  vec3 H1 = normalize(L1 + viewDir);',
+    '  float NdotH1 = max(dot(N, H1), 0.0);',
+    '  float spec1 = pow(NdotH1, 80.0 + tileHash * 60.0);',
+    '  float diff1 = max(dot(N, L1), 0.0);',
+    '',
+    '  // Light 2 specular',
+    '  vec3 L2 = normalize(light2Pos - tileWorldPos);',
+    '  vec3 H2 = normalize(L2 + viewDir);',
+    '  float NdotH2 = max(dot(N, H2), 0.0);',
+    '  float spec2 = pow(NdotH2, 60.0 + tileHash2 * 80.0);',
+    '  float diff2 = max(dot(N, L2), 0.0);',
+    '',
+    '  // Light 3 specular (broader, softer)',
+    '  vec3 L3 = normalize(light3Pos - tileWorldPos);',
+    '  vec3 H3 = normalize(L3 + viewDir);',
+    '  float NdotH3 = max(dot(N, H3), 0.0);',
+    '  float spec3 = pow(NdotH3, 30.0 + tileHash3 * 20.0);',
+    '  float diff3 = max(dot(N, L3), 0.0);',
+    '',
+    '  // Combined specular',
+    '  float specTotal = spec1 * 1.2 + spec2 * 0.9 + spec3 * 0.4;',
+    '  float diffTotal = diff1 * 0.5 + diff2 * 0.35 + diff3 * 0.25;',
+    '',
+    '  // ── Slow breathing / pulsing ──',
+    '  float breathe = 1.0 + sin(t * 0.6) * 0.08 + sin(t * 0.37 + 1.0) * 0.05;',
+    '  specTotal *= breathe;',
+    '  diffTotal *= breathe;',
+    '',
+    '  // ── Per-tile shimmer (individual tiles catch light at random moments) ──',
+    '  float shimmerPhase = tileHash * TAU + t * (0.8 + tileHash2 * 1.5);',
+    '  float shimmer = pow(max(sin(shimmerPhase), 0.0), 16.0);',
+    '  // Second shimmer layer for more organic feel',
+    '  float shimmer2Phase = tileHash3 * TAU + t * (0.5 + tileHash * 0.7) + 2.0;',
+    '  float shimmer2 = pow(max(sin(shimmer2Phase), 0.0), 24.0);',
+    '  float shimmerTotal = shimmer * 0.6 + shimmer2 * 0.4;',
+    '',
+    '  // ── Gold color palette ──',
+    '  vec3 groutColor = vec3(0.03, 0.02, 0.01);',
+    '  vec3 darkGold   = vec3(0.12, 0.09, 0.05);',
+    '  vec3 medGold    = vec3(0.45, 0.32, 0.14);',
+    '  vec3 brightGold = vec3(0.78, 0.58, 0.24);',
+    '  vec3 flashGold  = vec3(1.0, 0.85, 0.55);',
+    '  vec3 hotGold    = vec3(1.0, 0.95, 0.80);',
+    '',
+    '  // ── Per-tile base color variation ──',
+    '  // Each tile has a slightly different base tone',
+    '  float baseVar = tileHash;',
+    '  vec3 tileBase = mix(darkGold, medGold, smoothstep(0.0, 0.5, baseVar));',
+    '  tileBase = mix(tileBase, brightGold, smoothstep(0.5, 0.85, baseVar));',
+    '',
+    '  // Subtle warm/cool variation per tile',
+    '  tileBase *= 0.9 + tileHash2 * 0.2;',
+    '',
+    '  // ── Build tile color with lighting ──',
+    '  vec3 tileColor = tileBase;',
+    '',
+    '  // Diffuse lighting adds warmth',
+    '  tileColor += tileBase * diffTotal * 0.6;',
+    '',
+    '  // Specular highlights: gold to white-hot',
+    '  vec3 specColor = mix(brightGold, flashGold, smoothstep(0.0, 0.5, specTotal));',
+    '  specColor = mix(specColor, hotGold, smoothstep(0.5, 1.0, specTotal));',
+    '  tileColor += specColor * specTotal * 1.4;',
+    '',
+    '  // Shimmer flashes (brief bright catches)',
+    '  vec3 shimmerColor = mix(flashGold, hotGold, shimmerTotal);',
+    '  tileColor += shimmerColor * shimmerTotal * 0.7;',
+    '',
+    '  // ── Micro-facet sparkle within tiles ──',
+    '  // Small bright point when roughness noise aligns with light',
+    '  float microSpec = pow(roughness, 4.0) * specTotal * 3.0;',
+    '  tileColor += flashGold * microSpec * 0.3;',
+    '',
+    '  // ── Edge highlighting: tiles catch more light at beveled edges ──',
+    '  float edgeDist = min(min(f.x, 1.0 - f.x), min(f.y, 1.0 - f.y));',
+    '  float edgeHighlight = smoothstep(0.15, 0.05, edgeDist);',
+    '  tileColor += brightGold * edgeHighlight * (diffTotal + specTotal * 0.5) * 0.15;',
+    '',
+    '  // ── Composite: tile or grout ──',
+    '  vec3 col = mix(groutColor, tileColor, tMask);',
+    '',
+    '  // ── Subtle grout depth: darker where grout is deeper ──',
+    '  float groutDepth = 1.0 - tMask;',
+    '  col -= vec3(0.01, 0.008, 0.005) * groutDepth * (1.0 - smoothstep(0.0, 0.03, edgeDist));',
+    '',
+    '  // ── Global warm glow: light pools that move across the wall ──',
+    '  float glow1 = smoothstep(0.7, 0.0, length(p - light1Pos.xy));',
+    '  float glow2 = smoothstep(0.6, 0.0, length(p - light2Pos.xy));',
+    '  col += medGold * glow1 * 0.06;',
+    '  col += medGold * glow2 * 0.04;',
+    '',
+    '  // ── Vignette for depth and focus ──',
+    '  vec2 vigUv = uv * 2.0 - 1.0;',
+    '  float vig = 1.0 - dot(vigUv, vigUv) * 0.35;',
+    '  vig = max(vig, 0.0);',
+    '  vig = smoothstep(0.0, 1.0, vig);',
+    '  col *= 0.5 + vig * 0.5;',
+    '',
+    '  // ── Tone mapping (ACES-like for rich highlights) ──',
+    '  col = col * (2.51 * col + 0.03) / (col * (2.43 * col + 0.59) + 0.14);',
+    '',
+    '  // ── Slight warmth push ──',
+    '  col = pow(col, vec3(0.95, 1.0, 1.1));',
+    '',
+    '  gl_FragColor = vec4(col, 1.0);',
+    '}'
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error('Shader compile error:', gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error('Program link error:', gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uLightSpeed = gl.getUniformLocation(prog, 'u_lightSpeed');
+  var uTileScale = gl.getUniformLocation(prog, 'u_tileScale');
+
+  var lightSpeedVal = 0.4;
+  var tileScaleVal = 1.0;
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2) * pixelScale;
+
+  function resize() {
+    var w = Math.round(canvas.clientWidth * dpr);
+    var h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  function render(now) {
+    resize();
+    gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uLightSpeed, lightSpeedVal);
+    gl.uniform1f(uTileScale, tileScaleVal);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  document.addEventListener('visibilitychange', function() {
+    if (!document.hidden) {
+      requestAnimationFrame(render);
+    }
+  });
+
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'LIGHT_SPEED': lightSpeedVal = e.data.value; break;
+        case 'TILE_SCALE': tileScaleVal = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

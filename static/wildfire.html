@@ -1,0 +1,840 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wildfire</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Wildfire</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// 57 · Wildfire — Dramatic fire propagation across terrain
+// ─────────────────────────────────────────────
+(function() {
+  var canvas = document.getElementById('canvas');
+  var ctx = canvas.getContext('2d');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var _pad = parseFloat(new URLSearchParams(location.search).get('p')) || 1;
+
+  // Tunable parameters
+  var SPREAD_SPEED = 1.0;
+  var WIND_STRENGTH = 0.5;
+
+  var width, height, dpr;
+  var CELL_SIZE = 4;
+  var gridW, gridH;
+
+  // Cell states
+  var UNBURNED = 0;
+  var BURNING = 1;
+  var SMOLDERING = 2;
+  var CHARCOAL = 3;
+  var REGROWING = 4;
+
+  // Grid arrays
+  var cellState;
+  var cellBurnTime;
+  var cellSmolderTime;
+  var cellRegrowTime;
+  var terrainNoise;
+  var terrainColor;
+
+  // Wind
+  var windAngle = Math.PI * 0.25;
+  var windDx, windDy;
+
+  // Ember particles
+  var embers = [];
+  var MAX_EMBERS = 600;
+
+  // Smoke particles
+  var smokes = [];
+  var MAX_SMOKES = 400;
+
+  // State
+  var cycleTime = 0;
+  var burnedCount = 0;
+  var totalCells = 0;
+  var regrowPhase = false;
+  var regrowTimer = 0;
+  var REGROW_DURATION = 6.0;
+  var PAUSE_BEFORE_REGROW = 2.0;
+  var pauseTimer = 0;
+  var pausing = false;
+
+  // Burn timing
+  var BURN_DURATION = 1.2;
+  var SMOLDER_DURATION = 3.0;
+
+  // ── Noise helpers ──
+  function hash(x, y) {
+    var s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
+    return s - Math.floor(s);
+  }
+
+  function smoothNoise(x, y) {
+    var ix = Math.floor(x);
+    var iy = Math.floor(y);
+    var fx = x - ix;
+    var fy = y - iy;
+    fx = fx * fx * (3.0 - 2.0 * fx);
+    fy = fy * fy * (3.0 - 2.0 * fy);
+    var a = hash(ix, iy);
+    var b = hash(ix + 1, iy);
+    var c = hash(ix, iy + 1);
+    var d = hash(ix + 1, iy + 1);
+    return a + (b - a) * fx + (c - a) * fy + (a - b - c + d) * fx * fy;
+  }
+
+  function fbm(x, y, octaves) {
+    var val = 0;
+    var amp = 0.5;
+    var freq = 1;
+    for (var i = 0; i < octaves; i++) {
+      val += amp * smoothNoise(x * freq, y * freq);
+      freq *= 2.1;
+      amp *= 0.5;
+    }
+    return val;
+  }
+
+  // ── Resize ──
+  function resize() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    canvas.style.width = width + 'px';
+    canvas.style.height = height + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    var newGridW = Math.ceil(width / CELL_SIZE);
+    var newGridH = Math.ceil(height / CELL_SIZE);
+    if (newGridW !== gridW || newGridH !== gridH) {
+      gridW = newGridW;
+      gridH = newGridH;
+      totalCells = gridW * gridH;
+      initGrid();
+    }
+  }
+
+  window.addEventListener('resize', resize);
+
+  // ── Grid initialization ──
+  function initGrid() {
+    cellState = new Uint8Array(gridW * gridH);
+    cellBurnTime = new Float32Array(gridW * gridH);
+    cellSmolderTime = new Float32Array(gridW * gridH);
+    cellRegrowTime = new Float32Array(gridW * gridH);
+    terrainNoise = new Float32Array(gridW * gridH);
+    terrainColor = new Float32Array(gridW * gridH);
+
+    // Generate terrain noise
+    var seedX = Math.random() * 1000;
+    var seedY = Math.random() * 1000;
+    for (var y = 0; y < gridH; y++) {
+      for (var x = 0; x < gridW; x++) {
+        var idx = y * gridW + x;
+        terrainNoise[idx] = fbm(x * 0.03 + seedX, y * 0.03 + seedY, 4);
+        terrainColor[idx] = fbm(x * 0.05 + seedX + 100, y * 0.05 + seedY + 100, 3);
+      }
+    }
+
+    burnedCount = 0;
+    regrowPhase = false;
+    regrowTimer = 0;
+    pausing = false;
+    pauseTimer = 0;
+    embers = [];
+    smokes = [];
+
+    // New wind direction each cycle
+    windAngle = Math.random() * Math.PI * 2;
+    windDx = Math.cos(windAngle);
+    windDy = Math.sin(windAngle);
+
+    // Multiple ignition points with larger initial fire areas
+    var numIgnitions = 3 + Math.floor(Math.random() * 3); // 3–5 ignition sites
+    for (var i = 0; i < numIgnitions; i++) {
+      var cx = Math.floor(gridW * (0.1 + Math.random() * 0.8));
+      var cy = Math.floor(gridH * (0.1 + Math.random() * 0.8));
+      // Ignite a cluster of cells around each point
+      var clusterRadius = 3 + Math.floor(Math.random() * 5); // 3–7 cell radius
+      for (var dy = -clusterRadius; dy <= clusterRadius; dy++) {
+        for (var dx = -clusterRadius; dx <= clusterRadius; dx++) {
+          if (dx * dx + dy * dy <= clusterRadius * clusterRadius) {
+            igniteCell(cx + dx, cy + dy);
+          }
+        }
+      }
+    }
+  }
+
+  function igniteCell(gx, gy) {
+    if (gx < 0 || gx >= gridW || gy < 0 || gy >= gridH) return;
+    var idx = gy * gridW + gx;
+    if (cellState[idx] === UNBURNED) {
+      cellState[idx] = BURNING;
+      cellBurnTime[idx] = 0;
+    }
+  }
+
+  // ── Spread logic ──
+  var neighborDx = [-1, 0, 1, -1, 1, -1, 0, 1];
+  var neighborDy = [-1, -1, -1, 0, 0, 1, 1, 1];
+
+  function spreadFire(dt) {
+    // Collect currently burning cells
+    var burningCells = [];
+    for (var i = 0; i < cellState.length; i++) {
+      if (cellState[i] === BURNING) {
+        burningCells.push(i);
+      }
+    }
+
+    // Dramatically increased spread probability
+    var spreadProb = 0.55 * SPREAD_SPEED * dt * 60;
+
+    for (var b = 0; b < burningCells.length; b++) {
+      var idx = burningCells[b];
+      var gx = idx % gridW;
+      var gy = (idx - gx) / gridW;
+
+      // Update burn time
+      cellBurnTime[idx] += dt * SPREAD_SPEED;
+
+      // Transition to smoldering
+      if (cellBurnTime[idx] > BURN_DURATION) {
+        cellState[idx] = SMOLDERING;
+        cellSmolderTime[idx] = 0;
+        burnedCount++;
+        continue;
+      }
+
+      // Try to spread to neighbors
+      for (var n = 0; n < 8; n++) {
+        var nx = gx + neighborDx[n];
+        var ny = gy + neighborDy[n];
+        if (nx < 0 || nx >= gridW || ny < 0 || ny >= gridH) continue;
+        var nIdx = ny * gridW + nx;
+        if (cellState[nIdx] !== UNBURNED) continue;
+
+        var prob = spreadProb;
+
+        // Diagonal neighbors spread slightly slower
+        if (neighborDx[n] !== 0 && neighborDy[n] !== 0) {
+          prob *= 0.8;
+        }
+
+        // Wind influence
+        var sdx = neighborDx[n];
+        var sdy = neighborDy[n];
+        var len = Math.sqrt(sdx * sdx + sdy * sdy);
+        var dot = (sdx / len) * windDx + (sdy / len) * windDy;
+        var windFactor = 1.0 + dot * WIND_STRENGTH * 3.0;
+        if (windFactor < 0.2) windFactor = 0.2;
+        prob *= windFactor;
+
+        // Terrain influence
+        var terrainFactor = 0.6 + terrainNoise[nIdx] * 0.8;
+        prob *= terrainFactor;
+
+        if (Math.random() < prob) {
+          cellState[nIdx] = BURNING;
+          cellBurnTime[nIdx] = 0;
+
+          // Spawn ember from newly ignited cells
+          if (Math.random() < 0.08 && embers.length < MAX_EMBERS) {
+            spawnEmber(nx * CELL_SIZE + CELL_SIZE * 0.5, ny * CELL_SIZE + CELL_SIZE * 0.5);
+          }
+          // Spawn smoke from newly ignited cells
+          if (Math.random() < 0.06 && smokes.length < MAX_SMOKES) {
+            spawnSmoke(nx * CELL_SIZE + CELL_SIZE * 0.5, ny * CELL_SIZE + CELL_SIZE * 0.5);
+          }
+        }
+      }
+
+      // Also try to jump-spread (firebrands carried by wind)
+      if (Math.random() < 0.004 * SPREAD_SPEED * dt * 60) {
+        var jumpDist = 8 + Math.floor(Math.random() * 20);
+        var jx = gx + Math.round(windDx * jumpDist + (Math.random() - 0.5) * jumpDist * 0.6);
+        var jy = gy + Math.round(windDy * jumpDist + (Math.random() - 0.5) * jumpDist * 0.6);
+        if (jx >= 0 && jx < gridW && jy >= 0 && jy < gridH) {
+          var jIdx = jy * gridW + jx;
+          if (cellState[jIdx] === UNBURNED) {
+            // Ignite a small cluster at the jump point
+            for (var jdy = -1; jdy <= 1; jdy++) {
+              for (var jdx = -1; jdx <= 1; jdx++) {
+                igniteCell(jx + jdx, jy + jdy);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Update smoldering cells
+    for (var i = 0; i < cellState.length; i++) {
+      if (cellState[i] === SMOLDERING) {
+        cellSmolderTime[i] += dt * SPREAD_SPEED;
+        if (cellSmolderTime[i] > SMOLDER_DURATION) {
+          cellState[i] = CHARCOAL;
+        }
+      }
+    }
+  }
+
+  // ── Smoke particles ──
+  function spawnSmoke(px, py) {
+    smokes.push({
+      x: px + (Math.random() - 0.5) * CELL_SIZE * 2,
+      y: py,
+      vx: windDx * (0.5 + Math.random() * 1.0) + (Math.random() - 0.5) * 0.8,
+      vy: -(2.0 + Math.random() * 3.5),
+      size: (3 + Math.random() * 6) * _pad,
+      life: 1.0,
+      decay: 0.2 + Math.random() * 0.3,
+      alpha: 0.15 + Math.random() * 0.15
+    });
+  }
+
+  function updateSmokes(dt) {
+    var i = smokes.length;
+    while (i--) {
+      var s = smokes[i];
+      s.x += s.vx * dt * 25;
+      s.y += s.vy * dt * 25;
+      s.vy -= 0.3 * dt; // accelerate upward slightly
+      s.vx += (Math.random() - 0.5) * 1.5 * dt;
+      s.size += dt * 4; // expand as it rises
+      s.life -= s.decay * dt;
+      if (s.life <= 0 || s.y < -50 || s.x < -50 || s.x > width + 50) {
+        smokes.splice(i, 1);
+      }
+    }
+  }
+
+  // ── Ember particles ──
+  function spawnEmber(px, py) {
+    embers.push({
+      x: px,
+      y: py,
+      vx: windDx * (2.0 + Math.random() * 3) + (Math.random() - 0.5) * 2.0,
+      vy: -(2.5 + Math.random() * 4.5) + windDy * (0.5 + Math.random()),
+      size: (1.2 + Math.random() * 2.5) * _pad,
+      life: 1.0,
+      decay: 0.3 + Math.random() * 0.5,
+      flickerPhase: Math.random() * Math.PI * 2,
+      flickerSpeed: 5 + Math.random() * 10
+    });
+  }
+
+  function updateEmbers(dt) {
+    var i = embers.length;
+    while (i--) {
+      var e = embers[i];
+      e.x += e.vx * dt * 30;
+      e.y += e.vy * dt * 30;
+      e.vy -= 1.2 * dt; // rise faster
+      e.vx += (Math.random() - 0.5) * 3 * dt;
+      e.life -= e.decay * dt;
+      if (e.life <= 0 || e.y < -30 || e.x < -30 || e.x > width + 30) {
+        embers.splice(i, 1);
+      }
+    }
+  }
+
+  // ── Off-screen buffer for smooth rendering ──
+  var gridCanvas = document.createElement('canvas');
+  var gridCtx = gridCanvas.getContext('2d');
+
+  function ensureGridCanvas() {
+    if (gridCanvas.width !== gridW || gridCanvas.height !== gridH) {
+      gridCanvas.width = gridW;
+      gridCanvas.height = gridH;
+    }
+  }
+
+  // ── Render grid ──
+  function renderGrid(time) {
+    ensureGridCanvas();
+    var imgData = gridCtx.createImageData(gridW, gridH);
+    var data = imgData.data;
+
+    for (var y = 0; y < gridH; y++) {
+      for (var x = 0; x < gridW; x++) {
+        var idx = y * gridW + x;
+        var pIdx = idx * 4;
+        var state = cellState[idx];
+        var tn = terrainNoise[idx];
+        var tc = terrainColor[idx];
+
+        var r, g, b;
+
+        if (state === UNBURNED) {
+          // Dark green-brown terrain
+          r = 18 + tn * 14 + tc * 10;
+          g = 28 + tn * 16 + tc * 10;
+          b = 12 + tn * 8 + tc * 5;
+        } else if (state === BURNING) {
+          // Bright, vivid fire
+          var bt = cellBurnTime[idx] / BURN_DURATION;
+          var flicker = 0.85 + 0.15 * Math.sin(time * 14 + x * 0.9 + y * 0.7);
+
+          if (bt < 0.25) {
+            // Initial ignition: bright white-yellow
+            var t = bt / 0.25;
+            r = 255 * flicker;
+            g = (240 - t * 30) * flicker;
+            b = (180 - t * 140) * flicker;
+          } else if (bt < 0.6) {
+            // Peak burn: intense orange-yellow
+            var t = (bt - 0.25) / 0.35;
+            r = 255 * flicker;
+            g = (210 - t * 90) * flicker;
+            b = (40 - t * 25) * flicker;
+          } else {
+            // Late flame: deep orange-red
+            var t = (bt - 0.6) / 0.4;
+            r = (255 - t * 40) * flicker;
+            g = (120 - t * 70) * flicker;
+            b = (15 + t * 5) * flicker;
+          }
+        } else if (state === SMOLDERING) {
+          var st = cellSmolderTime[idx] / SMOLDER_DURATION;
+          var pulse = 0.7 + 0.3 * Math.sin(time * 3 + x * 0.3 + y * 0.4 + tn * 6);
+
+          if (st < 0.3) {
+            r = (200 - st / 0.3 * 70) * pulse;
+            g = (80 - st / 0.3 * 40) * pulse;
+            b = (15 + st / 0.3 * 5) * pulse;
+          } else if (st < 0.7) {
+            var t = (st - 0.3) / 0.4;
+            r = (130 - t * 80) * pulse;
+            g = (40 - t * 25) * pulse;
+            b = (20 - t * 12) * pulse;
+          } else {
+            var t = (st - 0.7) / 0.3;
+            var emberPulse = 0.5 + 0.5 * Math.sin(time * 1.5 + tn * 10);
+            r = (50 - t * 25) * pulse + emberPulse * 10 * (1 - t);
+            g = (15 - t * 8) * pulse + emberPulse * 4 * (1 - t);
+            b = (8 - t * 5) * pulse;
+          }
+        } else if (state === REGROWING) {
+          // Regrow: transition from charcoal to green
+          var rt = cellRegrowTime[idx];
+          var regrowProgress = Math.min(rt / 3.0, 1.0); // 3 seconds to fully regrow
+          var ease = regrowProgress * regrowProgress * (3 - 2 * regrowProgress); // smoothstep
+
+          // Charcoal base
+          var cr = 14 + tn * 6;
+          var cg = 11 + tn * 4;
+          var cb = 9 + tn * 3;
+
+          // Target green
+          var tr = 18 + tn * 14 + tc * 10;
+          var tg = 28 + tn * 16 + tc * 10;
+          var tb = 12 + tn * 8 + tc * 5;
+
+          // Sprout effect: brief bright green flash at the midpoint
+          var sprout = Math.max(0, 1 - Math.abs(regrowProgress - 0.4) * 5) * 0.5;
+
+          r = cr + (tr - cr) * ease;
+          g = cg + (tg - cg) * ease + sprout * 40;
+          b = cb + (tb - cb) * ease + sprout * 10;
+        } else {
+          // Charcoal
+          var emberGlow = Math.max(0, Math.sin(time * 0.8 + tn * 15) - 0.9) * 10;
+          r = 14 + tn * 6 + emberGlow * 25;
+          g = 11 + tn * 4 + emberGlow * 6;
+          b = 9 + tn * 3;
+        }
+
+        data[pIdx] = Math.min(255, Math.max(0, r));
+        data[pIdx + 1] = Math.min(255, Math.max(0, g));
+        data[pIdx + 2] = Math.min(255, Math.max(0, b));
+        data[pIdx + 3] = 255;
+      }
+    }
+
+    gridCtx.putImageData(imgData, 0, 0);
+
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(gridCanvas, 0, 0, gridW, gridH, 0, 0, width, height);
+  }
+
+  // ── Glow pass for fire front ──
+  function drawFireGlow(time) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+
+    for (var y = 0; y < gridH; y += 2) {
+      for (var x = 0; x < gridW; x += 2) {
+        var idx = y * gridW + x;
+        if (cellState[idx] !== BURNING) continue;
+
+        var bt = cellBurnTime[idx] / BURN_DURATION;
+        var intensity = (1 - bt * 0.6) * 0.4;
+        var px = x * CELL_SIZE + CELL_SIZE * 0.5;
+        var py = y * CELL_SIZE + CELL_SIZE * 0.5;
+        var radius = (CELL_SIZE * 5 + (1 - bt) * CELL_SIZE * 8) * _pad;
+
+        var grad = ctx.createRadialGradient(px, py, 0, px, py, radius);
+        var flicker = 0.8 + 0.2 * Math.sin(time * 12 + x + y * 1.3);
+        intensity *= flicker;
+
+        grad.addColorStop(0, 'rgba(255, 230, 140, ' + (intensity * 0.6) + ')');
+        grad.addColorStop(0.25, 'rgba(255, 180, 60, ' + (intensity * 0.35) + ')');
+        grad.addColorStop(0.5, 'rgba(220, 100, 25, ' + (intensity * 0.12) + ')');
+        grad.addColorStop(1, 'rgba(120, 40, 5, 0)');
+        ctx.fillStyle = grad;
+        ctx.fillRect(px - radius, py - radius, radius * 2, radius * 2);
+      }
+    }
+
+    ctx.restore();
+  }
+
+  // ── Draw smoke ──
+  function drawSmoke(time) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-over';
+
+    for (var i = 0; i < smokes.length; i++) {
+      var s = smokes[i];
+      var alpha = s.life * s.alpha;
+
+      // Smoke is dark gray, slightly warm-tinted
+      var warmth = 0.3 + 0.7 * s.life;
+      var sr = Math.floor(30 + warmth * 20);
+      var sg = Math.floor(25 + warmth * 12);
+      var sb = Math.floor(22 + warmth * 8);
+
+      ctx.fillStyle = 'rgba(' + sr + ',' + sg + ',' + sb + ',' + alpha + ')';
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.size, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
+
+  // ── Draw embers ──
+  function drawEmbers(time) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+
+    for (var i = 0; i < embers.length; i++) {
+      var e = embers[i];
+      var flicker = 0.6 + 0.4 * Math.sin(time * e.flickerSpeed + e.flickerPhase);
+      var alpha = e.life * flicker;
+
+      // Glow
+      var glowSize = e.size * 5;
+      var grad = ctx.createRadialGradient(e.x, e.y, 0, e.x, e.y, glowSize);
+      grad.addColorStop(0, 'rgba(255, 210, 90, ' + (alpha * 0.4) + ')');
+      grad.addColorStop(0.4, 'rgba(255, 140, 40, ' + (alpha * 0.15) + ')');
+      grad.addColorStop(1, 'rgba(200, 60, 10, 0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, glowSize, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Core
+      var coreAlpha = alpha * 0.95;
+      var temp = e.life;
+      var cr, cg, cb;
+      if (temp > 0.6) {
+        cr = 255; cg = 230 + (temp - 0.6) / 0.4 * 25; cb = 140 + (temp - 0.6) / 0.4 * 60;
+      } else if (temp > 0.3) {
+        cr = 255; cg = 160 + (temp - 0.3) / 0.3 * 70; cb = 40 + (temp - 0.3) / 0.3 * 100;
+      } else {
+        cr = 210 + temp / 0.3 * 45; cg = 90 + temp / 0.3 * 70; cb = 15 + temp / 0.3 * 25;
+      }
+      ctx.fillStyle = 'rgba(' + Math.floor(cr) + ',' + Math.floor(cg) + ',' + Math.floor(cb) + ',' + coreAlpha + ')';
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, e.size, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
+
+  // ── Wind indicator ──
+  function drawWindIndicator() {
+    ctx.save();
+    ctx.globalAlpha = 0.15;
+    var cx = width - 40;
+    var cy = 40;
+    var arrowLen = 16;
+
+    ctx.strokeStyle = 'rgba(200, 149, 108, 0.6)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 12, 0, Math.PI * 2);
+    ctx.stroke();
+
+    var ax = cx + windDx * arrowLen;
+    var ay = cy + windDy * arrowLen;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(ax, ay);
+    ctx.stroke();
+
+    var headLen = 5;
+    var headAngle = Math.atan2(windDy, windDx);
+    ctx.beginPath();
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(ax - Math.cos(headAngle - 0.5) * headLen, ay - Math.sin(headAngle - 0.5) * headLen);
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(ax - Math.cos(headAngle + 0.5) * headLen, ay - Math.sin(headAngle + 0.5) * headLen);
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  // ── Vignette ──
+  function drawVignette() {
+    var cx = width / 2;
+    var cy = height / 2;
+    var maxDim = Math.max(width, height);
+    var vignette = ctx.createRadialGradient(cx, cy, maxDim * 0.25, cx, cy, maxDim * 0.85);
+    vignette.addColorStop(0, 'rgba(10, 10, 10, 0)');
+    vignette.addColorStop(1, 'rgba(5, 3, 2, 0.45)');
+    ctx.fillStyle = vignette;
+    ctx.fillRect(0, 0, width, height);
+  }
+
+  // ── Ambient fire light ──
+  function drawAmbientFireLight() {
+    var burningRatio = 0;
+    var sampleStep = 8;
+    var samples = 0;
+    var burning = 0;
+    for (var i = 0; i < cellState.length; i += sampleStep) {
+      samples++;
+      if (cellState[i] === BURNING) burning++;
+      else if (cellState[i] === SMOLDERING && cellSmolderTime[i] < SMOLDER_DURATION * 0.3) burning += 0.4;
+    }
+    burningRatio = burning / samples;
+
+    if (burningRatio > 0.001) {
+      var intensity = Math.min(burningRatio * 4, 0.2);
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.fillStyle = 'rgba(90, 35, 10, ' + intensity + ')';
+      ctx.fillRect(0, 0, width, height);
+      ctx.restore();
+    }
+  }
+
+  // ── Regrow logic ──
+  function handleRegrowth(dt) {
+    // Check if fire is mostly done
+    var activeFire = 0;
+    for (var i = 0; i < cellState.length; i += 4) {
+      if (cellState[i] === BURNING) activeFire++;
+    }
+
+    var fireRatio = activeFire / (cellState.length / 4);
+    var charcoalCount = 0;
+    for (var i = 0; i < cellState.length; i += 4) {
+      if (cellState[i] === CHARCOAL || cellState[i] === SMOLDERING) charcoalCount++;
+    }
+    var burnRatio = charcoalCount / (cellState.length / 4);
+
+    // If most terrain has burned and fire is dying out, start regrow
+    if (!regrowPhase && burnRatio > 0.5 && fireRatio < 0.02) {
+      regrowPhase = true;
+      regrowTimer = 0;
+      // Mark all charcoal as regrowing
+      for (var i = 0; i < cellState.length; i++) {
+        if (cellState[i] === CHARCOAL) {
+          cellState[i] = REGROWING;
+          // Stagger regrow times based on distance from center for wave effect
+          var gx = i % gridW;
+          var gy = (i - gx) / gridW;
+          var dx = gx / gridW - 0.5;
+          var dy = gy / gridH - 0.5;
+          var dist = Math.sqrt(dx * dx + dy * dy);
+          cellRegrowTime[i] = -dist * 4 - Math.random() * 1.5; // negative = delay
+        }
+      }
+    }
+
+    if (regrowPhase) {
+      regrowTimer += dt;
+
+      // Update regrowing cells
+      var allDone = true;
+      for (var i = 0; i < cellState.length; i++) {
+        if (cellState[i] === SMOLDERING) {
+          cellSmolderTime[i] += dt * 2;
+          if (cellSmolderTime[i] > SMOLDER_DURATION) {
+            cellState[i] = REGROWING;
+            cellRegrowTime[i] = -Math.random() * 1.0;
+          }
+          allDone = false;
+        } else if (cellState[i] === REGROWING) {
+          cellRegrowTime[i] += dt;
+          if (cellRegrowTime[i] >= 3.0) {
+            cellState[i] = UNBURNED;
+          } else {
+            allDone = false;
+          }
+        } else if (cellState[i] === BURNING) {
+          cellBurnTime[i] += dt * 3;
+          if (cellBurnTime[i] > BURN_DURATION) {
+            cellState[i] = SMOLDERING;
+            cellSmolderTime[i] = 0;
+          }
+          allDone = false;
+        }
+      }
+
+      if (allDone) {
+        // Restart fire cycle
+        regrowPhase = false;
+        regrowTimer = 0;
+        burnedCount = 0;
+        embers = [];
+        smokes = [];
+
+        // New wind
+        windAngle = Math.random() * Math.PI * 2;
+        windDx = Math.cos(windAngle);
+        windDy = Math.sin(windAngle);
+
+        // New ignition points
+        var numIgnitions = 3 + Math.floor(Math.random() * 3);
+        for (var i = 0; i < numIgnitions; i++) {
+          var cx = Math.floor(gridW * (0.1 + Math.random() * 0.8));
+          var cy = Math.floor(gridH * (0.1 + Math.random() * 0.8));
+          var clusterRadius = 3 + Math.floor(Math.random() * 5);
+          for (var dy = -clusterRadius; dy <= clusterRadius; dy++) {
+            for (var dx = -clusterRadius; dx <= clusterRadius; dx++) {
+              if (dx * dx + dy * dy <= clusterRadius * clusterRadius) {
+                igniteCell(cx + dx, cy + dy);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // ── Main loop ──
+  var lastTime = 0;
+
+  resize();
+
+  function render(timestamp) {
+    if (!lastTime) lastTime = timestamp;
+    var dt = Math.min((timestamp - lastTime) / 1000, 0.05);
+    lastTime = timestamp;
+
+    if (prefersReduced) dt *= 0.15;
+
+    var time = timestamp / 1000;
+    cycleTime += dt;
+
+    // Clear
+    ctx.clearRect(0, 0, width, height);
+    ctx.fillStyle = '#0a0a0a';
+    ctx.fillRect(0, 0, width, height);
+
+    // Spread fire (unless in regrow phase)
+    if (!regrowPhase) {
+      spreadFire(dt);
+    }
+
+    // Handle regrowth cycle
+    handleRegrowth(dt);
+
+    // Spawn embers from burning cells continuously
+    if (!regrowPhase) {
+      var emberSpawnRate = 3.0 * dt * SPREAD_SPEED;
+      var embersToSpawn = Math.floor(emberSpawnRate) + (Math.random() < (emberSpawnRate % 1) ? 1 : 0);
+      for (var ei = 0; ei < embersToSpawn && embers.length < MAX_EMBERS; ei++) {
+        var attempts = 15;
+        while (attempts-- > 0) {
+          var ri = Math.floor(Math.random() * cellState.length);
+          if (cellState[ri] === BURNING) {
+            var rx = ri % gridW;
+            var ry = (ri - rx) / gridW;
+            spawnEmber(rx * CELL_SIZE + CELL_SIZE * 0.5, ry * CELL_SIZE + CELL_SIZE * 0.5);
+            break;
+          }
+        }
+      }
+
+      // Spawn smoke from burning and smoldering cells
+      var smokeSpawnRate = 4.0 * dt * SPREAD_SPEED;
+      var smokesToSpawn = Math.floor(smokeSpawnRate) + (Math.random() < (smokeSpawnRate % 1) ? 1 : 0);
+      for (var si = 0; si < smokesToSpawn && smokes.length < MAX_SMOKES; si++) {
+        var attempts = 15;
+        while (attempts-- > 0) {
+          var ri = Math.floor(Math.random() * cellState.length);
+          if (cellState[ri] === BURNING || (cellState[ri] === SMOLDERING && cellSmolderTime[ri] < SMOLDER_DURATION * 0.4)) {
+            var rx = ri % gridW;
+            var ry = (ri - rx) / gridW;
+            spawnSmoke(rx * CELL_SIZE + CELL_SIZE * 0.5, ry * CELL_SIZE + CELL_SIZE * 0.5);
+            break;
+          }
+        }
+      }
+    }
+
+    updateEmbers(dt);
+    updateSmokes(dt);
+
+    // Draw layers
+    renderGrid(time);
+    drawSmoke(time);
+    drawFireGlow(time);
+    drawAmbientFireLight();
+    drawEmbers(time);
+    drawWindIndicator();
+    drawVignette();
+
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  // ── PostMessage listener for parameter updates ──
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'SPREAD_SPEED': SPREAD_SPEED = e.data.value; break;
+        case 'WIND_STRENGTH': WIND_STRENGTH = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

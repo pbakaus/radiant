@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Golden Throne</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Golden Throne</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// 15 · Golden Throne — Sacred geometry mandala
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // URL param for embed scaling
+  var urlParams = new URLSearchParams(window.location.search);
+  var pixelScale = parseFloat(urlParams.get('p')) || 1;
+
+  var gl = canvas.getContext('webgl', { alpha: true, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  var vertSrc = [
+    'attribute vec2 a_pos;',
+    'void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }'
+  ].join('\n');
+
+  var fragSrc = [
+    'precision highp float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform float u_rotationSpeed;',
+    'uniform float u_complexity;',
+    '',
+    '#define PI 3.14159265359',
+    '#define TAU 6.28318530718',
+    '#define PHI 1.6180339887',
+    '',
+    '// ── Rotation matrix ──',
+    'mat2 rot(float a) {',
+    '  float c = cos(a), s = sin(a);',
+    '  return mat2(c, -s, s, c);',
+    '}',
+    '',
+    '// ── Golden color palette ──',
+    'vec3 gold(float t) {',
+    '  vec3 a = vec3(0.45, 0.32, 0.14);',
+    '  vec3 b = vec3(0.45, 0.35, 0.2);',
+    '  vec3 c = vec3(1.0, 0.8, 0.5);',
+    '  vec3 d = vec3(0.0, 0.1, 0.25);',
+    '  return a + b * cos(TAU * (c * t + d));',
+    '}',
+    '',
+    '// ── Smooth repetition for SDF ──',
+    'float smin(float a, float b, float k) {',
+    '  float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);',
+    '  return mix(b, a, h) - k * h * (1.0 - h);',
+    '}',
+    '',
+    '// ── Hexagonal distance ──',
+    'float hexDist(vec2 p) {',
+    '  p = abs(p);',
+    '  return max(p.x + p.y * 0.577350269, p.y * 1.154700538);',
+    '}',
+    '',
+    '// ── Triangle distance ──',
+    'float triDist(vec2 p) {',
+    '  float k = sqrt(3.0);',
+    '  p.x = abs(p.x) - 1.0;',
+    '  p.y = p.y + 1.0 / k;',
+    '  if (p.x + k * p.y > 0.0) p = vec2(p.x - k * p.y, -k * p.x - p.y) / 2.0;',
+    '  p.x -= clamp(p.x, -2.0, 0.0);',
+    '  return -length(p) * sign(p.y);',
+    '}',
+    '',
+    '// ── Flower of Life petal ──',
+    'float flowerPetal(vec2 p, float r) {',
+    '  float d = 1e9;',
+    '  for (int i = 0; i < 6; i++) {',
+    '    float a = float(i) * TAU / 6.0;',
+    '    vec2 c = vec2(cos(a), sin(a)) * r;',
+    '    d = min(d, length(p - c) - r);',
+    '  }',
+    '  return d;',
+    '}',
+    '',
+    '// ── Star polygon ──',
+    'float starDist(vec2 p, float r, int n, float inset) {',
+    '  float an = PI / float(n);',
+    '  float en = PI / float(n);',
+    '  vec2 acs = vec2(cos(an), sin(an));',
+    '  vec2 ecs = vec2(cos(en), sin(en));',
+    '  float bn = mod(atan(p.x, p.y), 2.0 * an) - an;',
+    '  p = length(p) * vec2(cos(bn), abs(sin(bn)));',
+    '  p -= r * acs;',
+    '  p += ecs * clamp(-dot(p, ecs), 0.0, r * acs.y / ecs.y);',
+    '  return length(p) * sign(p.x);',
+    '}',
+    '',
+    '// ── Sacred geometry layer compositing ──',
+    'float sacredRing(vec2 p, float radius, float width) {',
+    '  return abs(length(p) - radius) - width;',
+    '}',
+    '',
+    '// ── Mandala layer ──',
+    'float mandalaLayer(vec2 uv, float time, float layer, float totalLayers) {',
+    '  float t = layer / totalLayers;',
+    '  float radius = 0.08 + t * 0.38;',
+    '  ',
+    '  // Differential rotation — inner faster, outer slower, some counter-rotating',
+    '  float speed = u_rotationSpeed * (1.5 - t * 1.2);',
+    '  float direction = mod(layer, 2.0) < 1.0 ? 1.0 : -1.0;',
+    '  float rot_angle = time * speed * direction + layer * PHI;',
+    '  vec2 p = rot(rot_angle) * uv;',
+    '',
+    '  float d = 1e9;',
+    '  float symmetry = 6.0 + floor(layer * 1.5);',
+    '',
+    '  // Angular repetition for symmetry',
+    '  float angle = atan(p.y, p.x);',
+    '  float r = length(p);',
+    '  float sector = TAU / symmetry;',
+    '  float a = mod(angle + sector * 0.5, sector) - sector * 0.5;',
+    '  vec2 sp = vec2(cos(a), sin(a)) * r;',
+    '',
+    '  // ── Concentric ring ──',
+    '  float ring = abs(r - radius) - 0.003 * (1.0 + t);',
+    '  d = min(d, ring);',
+    '',
+    '  // ── Petal arcs (flower of life inspiration) ──',
+    '  float petalR = radius * 0.35 / PHI;',
+    '  vec2 petalCenter = vec2(radius, 0.0);',
+    '  float petal = abs(length(sp - petalCenter) - petalR) - 0.002;',
+    '  d = min(d, petal);',
+    '',
+    '  // ── Inner petal arc ──',
+    '  vec2 innerPetalCenter = vec2(radius * 0.65, 0.0);',
+    '  float innerPetalR = radius * 0.25;',
+    '  float innerPetal = abs(length(sp - innerPetalCenter) - innerPetalR) - 0.0015;',
+    '  d = min(d, innerPetal);',
+    '',
+    '  // ── Radial spokes ──',
+    '  float spoke = abs(sp.y) - 0.001;',
+    '  float spokeMask = smoothstep(radius - 0.05, radius - 0.01, r) * smoothstep(radius + 0.05, radius + 0.01, r);',
+    '  d = min(d, spoke / max(spokeMask, 0.001));',
+    '',
+    '  // ── Hexagonal elements at intersections ──',
+    '  float hexR = 0.012 + t * 0.008;',
+    '  vec2 hexPos = vec2(radius, 0.0);',
+    '  float hex = hexDist(sp - hexPos) - hexR;',
+    '  d = min(d, hex);',
+    '',
+    '  // ── Diamond/triangular detail at half-radius ──',
+    '  if (layer > 1.0) {',
+    '    vec2 triPos = vec2(radius * 0.5, 0.0);',
+    '    vec2 tp = (sp - triPos) * 60.0;',
+    '    float tri = triDist(tp) / 60.0;',
+    '    d = min(d, tri);',
+    '  }',
+    '',
+    '  return d;',
+    '}',
+    '',
+    '// ── Spiral arms based on golden ratio ──',
+    'float goldenSpiral(vec2 uv, float time) {',
+    '  float r = length(uv);',
+    '  float a = atan(uv.y, uv.x);',
+    '  ',
+    '  // Golden spiral: r = PHI^(2*theta/PI)',
+    '  float spiralPhase = log(max(r, 0.001)) / log(PHI) * PI * 0.5;',
+    '  float spiralD = abs(mod(a - spiralPhase + time * u_rotationSpeed * 0.2 + PI, TAU) - PI);',
+    '  spiralD = min(spiralD, abs(mod(a - spiralPhase + time * u_rotationSpeed * 0.2 + PI + PI, TAU) - PI));',
+    '',
+    '  // Fade spiral intensity with radius',
+    '  float fade = smoothstep(0.0, 0.05, r) * smoothstep(0.5, 0.35, r);',
+    '  return spiralD * fade + (1.0 - fade);',
+    '}',
+    '',
+    '// ── Fractal detail — repeating at smaller scales ──',
+    'float fractalDetail(vec2 uv, float time) {',
+    '  float d = 1e9;',
+    '  float scale = 1.0;',
+    '  float intensity = 0.0;',
+    '  ',
+    '  for (int i = 0; i < 4; i++) {',
+    '    float fi = float(i);',
+    '    vec2 p = uv * scale;',
+    '    p = rot(time * u_rotationSpeed * (0.1 + fi * 0.05) * (mod(fi, 2.0) < 1.0 ? 1.0 : -1.0)) * p;',
+    '    ',
+    '    // Hexagonal tiling at this scale',
+    '    float hexSize = 0.15 / scale;',
+    '    vec2 hexUV = p;',
+    '    float hx = hexDist(mod(hexUV + hexSize, hexSize * 2.0) - hexSize);',
+    '    float hexLine = abs(hx - hexSize * 0.4) - 0.001 * scale;',
+    '    intensity += smoothstep(0.003, 0.0, hexLine) * (0.15 / (1.0 + fi));',
+    '    ',
+    '    scale *= PHI;',
+    '  }',
+    '  return intensity;',
+    '}',
+    '',
+    'void main() {',
+    '  vec2 uv = (gl_FragCoord.xy - u_res * 0.5) / min(u_res.x, u_res.y);',
+    '  float t = u_time;',
+    '  float complexity = u_complexity;',
+    '  ',
+    '  // ── Accumulated glow ──',
+    '  vec3 col = vec3(0.0);',
+    '  float r = length(uv);',
+    '  ',
+    '  // ── Object mask — keep mandala centered with dark surround ──',
+    '  float objectRadius = 0.48;',
+    '  float objectFade = smoothstep(objectRadius, objectRadius * 0.7, r);',
+    '',
+    '  // ── Build sacred geometry mandala layers ──',
+    '  float totalGlow = 0.0;',
+    '  ',
+    '  for (int i = 0; i < 8; i++) {',
+    '    if (float(i) >= complexity) break;',
+    '    float fi = float(i);',
+    '    float layerD = mandalaLayer(uv, t, fi, complexity);',
+    '    ',
+    '    // Convert SDF to glow — sharp lines with soft bloom',
+    '    float lineGlow = 0.0025 / (abs(layerD) + 0.0025);',
+    '    float bloom = 0.008 / (abs(layerD) + 0.008) * 0.3;',
+    '    float layerIntensity = (lineGlow + bloom);',
+    '    ',
+    '    // Color varies per layer — golden gradient from warm amber to bright gold',
+    '    float colorT = fi / complexity + t * 0.02;',
+    '    vec3 layerColor = gold(colorT);',
+    '    ',
+    '    // Inner layers are brighter',
+    '    float brightness = 1.0 - fi / complexity * 0.5;',
+    '    ',
+    '    col += layerColor * layerIntensity * brightness * 0.6;',
+    '    totalGlow += layerIntensity * brightness;',
+    '  }',
+    '',
+    '  // ── Golden ratio spiral arms ──',
+    '  float spiral = goldenSpiral(uv, t);',
+    '  float spiralGlow = 0.015 / (spiral + 0.015);',
+    '  col += gold(0.7 + t * 0.01) * spiralGlow * 0.25;',
+    '',
+    '  // ── Fractal hexagonal detail overlay ──',
+    '  float fractal = fractalDetail(uv, t);',
+    '  col += gold(0.3 + t * 0.03) * fractal * 0.4;',
+    '',
+    '  // ── Central glowing point — pulses subtly ──',
+    '  float centerPulse = 0.8 + 0.2 * sin(t * 1.5);',
+    '  float centerGlow = 0.01 / (r * r + 0.01) * centerPulse;',
+    '  vec3 centerColor = vec3(1.0, 0.92, 0.7); // bright white-gold',
+    '  col += centerColor * centerGlow * 0.08;',
+    '',
+    '  // ── Secondary center ring pulse ──',
+    '  float ringPulse = 0.9 + 0.1 * sin(t * 2.3 + 1.0);',
+    '  float innerRing = abs(r - 0.03 * ringPulse) - 0.002;',
+    '  float innerRingGlow = 0.003 / (abs(innerRing) + 0.003);',
+    '  col += vec3(1.0, 0.88, 0.6) * innerRingGlow * 0.3;',
+    '',
+    '  // ── Outer boundary ring — ornate edge ──',
+    '  float outerRing = abs(r - objectRadius + 0.01) - 0.003;',
+    '  float outerGlow = 0.004 / (abs(outerRing) + 0.004);',
+    '  col += gold(0.5 + t * 0.015) * outerGlow * 0.35;',
+    '',
+    '  // ── Second outer ring — slightly inside ──',
+    '  float outerRing2 = abs(r - objectRadius + 0.035) - 0.002;',
+    '  float outerGlow2 = 0.003 / (abs(outerRing2) + 0.003);',
+    '  col += gold(0.6) * outerGlow2 * 0.2;',
+    '',
+    '  // ── Decorative dots at outer ring intersections ──',
+    '  float dotAngle = atan(uv.y, uv.x);',
+    '  float dotSymmetry = 12.0;',
+    '  float dotA = mod(dotAngle + PI / dotSymmetry, TAU / dotSymmetry) - PI / dotSymmetry;',
+    '  vec2 dotP = vec2(cos(dotA), sin(dotA)) * r;',
+    '  vec2 dotCenter = vec2(objectRadius - 0.01, 0.0);',
+    '  float dot = length(dotP - dotCenter) - 0.008;',
+    '  float dotGlow = 0.004 / (abs(dot) + 0.004);',
+    '  col += vec3(1.0, 0.9, 0.65) * dotGlow * 0.3;',
+    '',
+    '  // ── Apply object mask ──',
+    '  col *= objectFade;',
+    '',
+    '  // ── Subtle warm ambient radial glow behind the mandala ──',
+    '  float ambientGlow = exp(-r * r * 6.0) * 0.06;',
+    '  col += vec3(0.3, 0.2, 0.08) * ambientGlow;',
+    '',
+    '  // ── Tone mapping ──',
+    '  col = col / (1.0 + col * 0.4);',
+    '',
+    '  // ── Slight warmth boost ──',
+    '  col = pow(col, vec3(0.95, 0.98, 1.05));',
+    '',
+    '  gl_FragColor = vec4(col, 1.0);',
+    '}'
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error('Shader compile error:', gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error('Program link error:', gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uRotationSpeed = gl.getUniformLocation(prog, 'u_rotationSpeed');
+  var uComplexity = gl.getUniformLocation(prog, 'u_complexity');
+
+  var rotationSpeedVal = 0.3;
+  var complexityVal = 5.0;
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2) * pixelScale;
+
+  function resize() {
+    var w = Math.round(canvas.clientWidth * dpr);
+    var h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  function render(now) {
+    resize();
+    gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uRotationSpeed, rotationSpeedVal);
+    gl.uniform1f(uComplexity, complexityVal);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'ROTATION_SPEED': rotationSpeedVal = e.data.value; break;
+        case 'COMPLEXITY': complexityVal = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

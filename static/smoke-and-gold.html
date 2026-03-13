@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Smoke & Gold</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Smoke & Gold</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// Smoke & Gold — Wisps of smoke curling through golden light beams
+// in a dark theater space. Cinematic volumetric atmosphere.
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var urlParams = new URLSearchParams(window.location.search);
+  var pixelScale = parseFloat(urlParams.get('p')) || 1;
+
+  var gl = canvas.getContext('webgl', { alpha: true, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  var vertSrc = [
+    'attribute vec2 a_pos;',
+    'void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }'
+  ].join('\n');
+
+  var fragSrc = `
+precision highp float;
+uniform float u_time;
+uniform vec2 u_res;
+uniform float u_smokeSpeed;
+uniform float u_beamIntensity;
+
+// ── Hash ──
+float hash(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+
+// ── Smooth value noise (quintic interpolation) ──
+float noise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  f = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+  return mix(
+    mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),
+    mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x),
+    f.y
+  );
+}
+
+// ── FBM with inter-octave rotation for isotropy ──
+float fbm(vec2 p) {
+  float v = 0.0, a = 0.5;
+  mat2 rot = mat2(0.8, 0.6, -0.6, 0.8);
+  for (int i = 0; i < 7; i++) {
+    v += a * noise(p);
+    p = rot * p * 2.03 + vec2(1.7, 9.2);
+    a *= 0.48;
+  }
+  return v;
+}
+
+// ── Domain-warped smoke field ──
+// Double domain warp creates organic curling turbulence
+float smokeField(vec2 p, float t) {
+  vec2 q = vec2(
+    fbm(p + t * 0.04),
+    fbm(p + vec2(5.2, 1.3) + t * 0.035)
+  );
+  vec2 r = vec2(
+    fbm(p + 3.5 * q + vec2(1.7, 9.2) + t * 0.02),
+    fbm(p + 3.5 * q + vec2(8.3, 2.8) + t * 0.025)
+  );
+  return fbm(p + 3.0 * r + t * 0.01);
+}
+
+// ── Light beam — soft-edged angled shaft ──
+// Returns intensity of beam at point p
+// origin: where beam emanates from
+// dir: normalized beam direction
+// width: beam half-width
+// softness: edge falloff
+// length: how far the beam extends
+float lightBeam(vec2 p, vec2 origin, vec2 dir, float width, float softness, float beamLen) {
+  vec2 toP = p - origin;
+  float along = dot(toP, dir);
+  float perp = abs(dot(toP, vec2(-dir.y, dir.x)));
+
+  // Beam only travels forward
+  float forwardMask = smoothstep(-0.05, 0.2, along);
+  // Fade out at the end
+  float endFade = smoothstep(beamLen, beamLen * 0.6, along);
+
+  // Beam widens slightly as it travels
+  float w = width + along * 0.06;
+
+  // Soft edges
+  float edge = 1.0 - smoothstep(w * (1.0 - softness), w, perp);
+
+  // Distance attenuation — inverse square-ish
+  float dist = length(toP);
+  float atten = 1.0 / (1.0 + dist * 0.8 + dist * dist * 0.15);
+
+  return edge * forwardMask * endFade * atten;
+}
+
+void main() {
+  vec2 uv = gl_FragCoord.xy / u_res;
+  float aspect = u_res.x / u_res.y;
+  vec2 p = vec2((uv.x - 0.5) * aspect, uv.y - 0.5);
+
+  float t = u_time * u_smokeSpeed;
+
+  // ── Smoke layers at different depths for parallax ──
+
+  // Layer 1: Large, slow, background smoke
+  vec2 s1 = p * 2.0;
+  s1.y -= t * 0.04;
+  s1.x += sin(p.y * 1.5 + t * 0.08) * 0.15;
+  float smoke1 = smokeField(s1, t);
+
+  // Layer 2: Medium-scale, mid-depth
+  vec2 s2 = p * 3.2 + vec2(4.1, 2.3);
+  s2.y -= t * 0.055;
+  s2.x += sin(p.y * 2.5 + t * 0.12) * 0.10;
+  float smoke2 = smokeField(s2, t * 0.85);
+
+  // Layer 3: Fine detail, foreground wisps
+  vec2 s3 = p * 4.8 + vec2(8.7, 5.1);
+  s3.y -= t * 0.075;
+  s3.x += cos(p.y * 3.8 + t * 0.1) * 0.07;
+  float smoke3 = smokeField(s3, t * 1.1);
+
+  // Layer 4: Very fine turbulent wisps — highest detail
+  vec2 s4 = p * 7.0 + vec2(2.3, 11.4);
+  s4.y -= t * 0.09;
+  s4.x += sin(p.y * 5.0 + t * 0.14) * 0.05;
+  float smoke4 = smokeField(s4, t * 1.3);
+
+  // Composite smoke layers with depth-based weighting
+  float smokeTex = smoke1 * 0.38 + smoke2 * 0.30 + smoke3 * 0.20 + smoke4 * 0.12;
+
+  // Create wisp-like structure — not uniform fog
+  float smokeShape = smoothstep(0.22, 0.65, smokeTex);
+  // Fine detail pass
+  float smokeDetail = smoothstep(0.30, 0.70, smoke3) * 0.3;
+  float smokeFinal = clamp(smokeShape + smokeDetail, 0.0, 1.0);
+
+  // Subtle vertical gradient — more smoke in the middle/upper zone
+  float vGrad = smoothstep(-0.5, -0.1, p.y) * smoothstep(0.55, 0.15, p.y);
+  smokeFinal *= mix(0.3, 1.0, vGrad);
+
+  // ── Light beams — 3 angled shafts of warm golden light ──
+  // They slowly sway back and forth, like spotlights drifting
+
+  float sway = t * 0.35;
+
+  // Beam 1: From upper left, angling down-right
+  float angle1 = -0.85 + sin(sway * 0.7) * 0.12;
+  vec2 dir1 = normalize(vec2(cos(angle1), sin(angle1)));
+  vec2 origin1 = vec2(-0.25 * aspect, 0.65);
+  float beam1 = lightBeam(p, origin1, dir1, 0.08, 0.4, 1.8);
+
+  // Beam 2: From upper center-right, angling down
+  float angle2 = -1.35 + sin(sway * 0.5 + 2.0) * 0.10;
+  vec2 dir2 = normalize(vec2(cos(angle2), sin(angle2)));
+  vec2 origin2 = vec2(0.15 * aspect, 0.72);
+  float beam2 = lightBeam(p, origin2, dir2, 0.065, 0.45, 1.6);
+
+  // Beam 3: From upper right, angling down-left — narrower, accent beam
+  float angle3 = -2.0 + sin(sway * 0.6 + 4.5) * 0.08;
+  vec2 dir3 = normalize(vec2(cos(angle3), sin(angle3)));
+  vec2 origin3 = vec2(0.42 * aspect, 0.60);
+  float beam3 = lightBeam(p, origin3, dir3, 0.05, 0.5, 1.4);
+
+  // Total beam light at this point
+  float beamLight = (beam1 * 1.0 + beam2 * 0.75 + beam3 * 0.5) * u_beamIntensity;
+
+  // ── Start with dark void ──
+  vec3 col = vec3(0.01, 0.008, 0.005);
+
+  // ── Palette ──
+  vec3 smokeShadow   = vec3(0.04, 0.03, 0.02);
+  vec3 litSmoke      = vec3(0.30, 0.22, 0.10);
+  vec3 beamCore      = vec3(0.78, 0.58, 0.24);
+  vec3 beamBright    = vec3(1.0, 0.82, 0.55);
+  vec3 smokeHighlight = vec3(0.50, 0.38, 0.18);
+
+  // ── Smoke in shadow — barely visible, dark warm tones ──
+  float inShadow = 1.0 - clamp(beamLight * 4.0, 0.0, 1.0);
+  col += smokeShadow * smokeFinal * inShadow * 0.6;
+
+  // ── Atmospheric beam glow (even without smoke, beams are faintly visible) ──
+  col += beamCore * beamLight * 0.06;
+
+  // ── Volumetric interaction: smoke lit by beams ──
+  float volumetric = smokeFinal * beamLight;
+
+  // Primary illumination — warm amber
+  col += litSmoke * volumetric * 1.2;
+
+  // Brighter core where beam is strongest
+  col += beamCore * pow(volumetric, 1.3) * 0.8;
+
+  // Hot highlights at peak intensity
+  col += beamBright * pow(volumetric, 2.0) * 0.5;
+
+  // Extra highlight bloom on the brightest wisps
+  col += smokeHighlight * pow(volumetric, 2.5) * 0.4;
+
+  // ── God rays: directional scattering along beam axes ──
+  // Each beam scatters light forward along its path
+
+  // Beam 1 god ray
+  vec2 toP1 = p - origin1;
+  float along1 = max(dot(toP1, dir1), 0.0);
+  float perp1 = abs(dot(toP1, vec2(-dir1.y, dir1.x)));
+  float godRay1 = exp(-perp1 * perp1 / 0.025) * smoothstep(0.0, 0.3, along1) * smoothstep(1.8, 0.5, along1);
+  godRay1 *= smokeFinal * 0.15;
+
+  // Beam 2 god ray
+  vec2 toP2 = p - origin2;
+  float along2 = max(dot(toP2, dir2), 0.0);
+  float perp2 = abs(dot(toP2, vec2(-dir2.y, dir2.x)));
+  float godRay2 = exp(-perp2 * perp2 / 0.020) * smoothstep(0.0, 0.25, along2) * smoothstep(1.6, 0.4, along2);
+  godRay2 *= smokeFinal * 0.12;
+
+  // Beam 3 god ray
+  vec2 toP3 = p - origin3;
+  float along3 = max(dot(toP3, dir3), 0.0);
+  float perp3 = abs(dot(toP3, vec2(-dir3.y, dir3.x)));
+  float godRay3 = exp(-perp3 * perp3 / 0.015) * smoothstep(0.0, 0.2, along3) * smoothstep(1.4, 0.3, along3);
+  godRay3 *= smokeFinal * 0.10;
+
+  float godRays = (godRay1 + godRay2 + godRay3) * u_beamIntensity;
+  col += beamBright * godRays;
+
+  // ── Proximity glow: smoke near beam sources glows brighter ──
+  float prox1 = exp(-length(p - origin1) * 2.5);
+  float prox2 = exp(-length(p - origin2) * 2.5);
+  float prox3 = exp(-length(p - origin3) * 2.5);
+  float proxGlow = (prox1 + prox2 * 0.75 + prox3 * 0.5) * u_beamIntensity;
+  col += beamCore * proxGlow * smokeFinal * 0.15;
+
+  // ── Dust motes drifting through beams ──
+  float dust = 0.0;
+  for (int i = 0; i < 4; i++) {
+    float fi = float(i);
+    vec2 dp = p * (35.0 + fi * 20.0);
+    dp.y += t * (0.02 + fi * 0.01) / u_smokeSpeed * 0.3;
+    dp.x += sin(t * 0.1 / u_smokeSpeed * 0.3 + fi * 3.14) * 2.0;
+    float n = noise(dp + fi * 173.0);
+    dust += smoothstep(0.87, 0.97, n) * (0.06 - fi * 0.012);
+  }
+  col += beamBright * dust * beamLight * 0.4;
+
+  // ── Heavy cinematic vignette ──
+  vec2 vig = uv * 2.0 - 1.0;
+  float vignette = 1.0 - dot(vig * vec2(0.50, 0.40), vig * vec2(0.50, 0.40));
+  vignette = smoothstep(0.0, 0.6, vignette);
+  col *= vignette;
+
+  // ── Film grain ──
+  float grain = (hash(gl_FragCoord.xy + fract(t * 60.0) * 1000.0) - 0.5) * 0.018;
+  col += grain;
+
+  // ── Tone mapping ──
+  col = max(col, 0.0);
+  col = col / (col + vec3(0.45));
+  col *= 1.35;
+
+  // Warm push in the shadows
+  float lum = dot(col, vec3(0.299, 0.587, 0.114));
+  col = mix(col, col * vec3(1.08, 0.96, 0.88), smoothstep(0.08, 0.0, lum) * 0.4);
+
+  gl_FragColor = vec4(col, 1.0);
+}
+`;
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error('Shader compile error:', gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error('Program link error:', gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uSmokeSpeed = gl.getUniformLocation(prog, 'u_smokeSpeed');
+  var uBeamIntensity = gl.getUniformLocation(prog, 'u_beamIntensity');
+
+  var smokeSpeedVal = 0.3;
+  var beamIntensityVal = 1.0;
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  function resize() {
+    var scale = 1.0 / pixelScale;
+    var w = Math.round(canvas.clientWidth * dpr * scale);
+    var h = Math.round(canvas.clientHeight * dpr * scale);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  var running = true;
+
+  function render(now) {
+    if (!running) { requestAnimationFrame(render); return; }
+    resize();
+    gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uSmokeSpeed, smokeSpeedVal);
+    gl.uniform1f(uBeamIntensity, beamIntensityVal);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  // ── Pause when offscreen ──
+  document.addEventListener('visibilitychange', function () {
+    running = !document.hidden;
+  });
+
+  // ── PostMessage API ──
+  window.addEventListener('message', function (e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'SMOKE_SPEED': smokeSpeedVal = e.data.value; break;
+        case 'BEAM_INTENSITY': beamIntensityVal = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

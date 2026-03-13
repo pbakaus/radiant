@@ -91,6 +91,16 @@
 			</div>
 			{/if}
 
+			{#if shader.credit}
+			<div class="sidebar-section credit-section">
+				{#if shader.creditUrl}
+					<a class="credit-link" href={shader.creditUrl} target="_blank" rel="noopener noreferrer">{shader.credit}</a>
+				{:else}
+					<div class="credit-text">{shader.credit}</div>
+				{/if}
+			</div>
+			{/if}
+
 			<div class="sidebar-section">
 				<span class="sidebar-label">Layout</span>
 				<div class="sidebar-buttons">
@@ -250,6 +260,22 @@
 		font-weight: 500;
 		color: #c8956c;
 		font-style: italic;
+	}
+
+	/* Credit */
+	.credit-link,
+	.credit-text {
+		font-size: 0.7rem;
+		color: rgba(232, 224, 216, 0.4);
+		font-style: italic;
+		line-height: 1.4;
+	}
+	.credit-link {
+		text-decoration: none;
+		transition: color 0.2s;
+	}
+	.credit-link:hover {
+		color: #c8956c;
 	}
 
 	/* Sidebar sections */

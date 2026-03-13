@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mirror Ball</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Mirror Ball</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// Mirror Ball — Rotating disco mirror ball with sweeping light reflections
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var urlParams = new URLSearchParams(window.location.search);
+  var pixelScale = parseFloat(urlParams.get('p')) || 1;
+
+  var gl = canvas.getContext('webgl', { alpha: true, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  var vertSrc = [
+    'attribute vec2 a_pos;',
+    'void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }'
+  ].join('\n');
+
+  var fragSrc = [
+    'precision highp float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform float u_rotSpeed;',
+    'uniform float u_spotBright;',
+    '',
+    '#define PI 3.14159265359',
+    '#define TAU 6.28318530718',
+    'uniform float u_ballSize;',
+    '#define BALL_RADIUS u_ballSize',
+    '#define FACET_COUNT 16.0',
+    '',
+    '// ── Hash functions ──',
+    'float hash(vec2 p) {',
+    '  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);',
+    '}',
+    '',
+    'float hash3(vec3 p) {',
+    '  return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453);',
+    '}',
+    '',
+    '// ── Rotation matrix ──',
+    'mat2 rot2(float a) {',
+    '  float c = cos(a), s = sin(a);',
+    '  return mat2(c, -s, s, c);',
+    '}',
+    '',
+    '// ── Sphere intersection ──',
+    'float sphereHit(vec3 ro, vec3 rd, float radius) {',
+    '  float b = dot(ro, rd);',
+    '  float c = dot(ro, ro) - radius * radius;',
+    '  float disc = b * b - c;',
+    '  if (disc < 0.0) return -1.0;',
+    '  return -b - sqrt(disc);',
+    '}',
+    '',
+    '// ── Faceted normal: quantize sphere normal into flat mirror tiles ──',
+    'vec3 facetNormal(vec3 n) {',
+    '  float theta = acos(clamp(n.y, -1.0, 1.0));',
+    '  float phi = atan(n.z, n.x);',
+    '  float thetaQ = floor(theta * FACET_COUNT / PI + 0.5) * PI / FACET_COUNT;',
+    '  float ringC = sin(thetaQ);',
+    '  float tiles = max(floor(FACET_COUNT * 2.0 * ringC + 0.5), 1.0);',
+    '  float phiQ = floor(phi * tiles / TAU + 0.5) * TAU / tiles;',
+    '  float st = sin(thetaQ);',
+    '  return normalize(vec3(st * cos(phiQ), cos(thetaQ), st * sin(phiQ)));',
+    '}',
+    '',
+    '// ── Prismatic tint: subtle warm/cool shifts for reflected spots ──',
+    'vec3 spotTint(float id) {',
+    '  float h = fract(id * 0.618033988 + 0.1);',
+    '  vec3 warm = vec3(1.0, 0.93, 0.85);',
+    '  vec3 pink = vec3(1.0, 0.82, 0.88);',
+    '  vec3 blue = vec3(0.84, 0.91, 1.0);',
+    '  vec3 gold = vec3(1.0, 0.95, 0.78);',
+    '  vec3 c = warm;',
+    '  c = mix(c, pink, smoothstep(0.0, 0.33, h));',
+    '  c = mix(c, blue, smoothstep(0.33, 0.66, h));',
+    '  c = mix(c, gold, smoothstep(0.66, 1.0, h));',
+    '  return c;',
+    '}',
+    '',
+    'void main() {',
+    '  vec2 uv = (gl_FragCoord.xy - u_res * 0.5) / min(u_res.x, u_res.y);',
+    '  float t = u_time;',
+    '  float rotSpeed = u_rotSpeed;',
+    '  float spotBright = u_spotBright;',
+    '',
+    '  // Ball rotation',
+    '  float rotA = t * rotSpeed;',
+    '  float tiltA = sin(t * rotSpeed * 0.21) * 0.12;',
+    '',
+    '  // ── Background: near black with subtle depth ──',
+    '  vec3 col = vec3(0.01, 0.007, 0.016);',
+    '  col += vec3(0.008, 0.005, 0.012) * (1.0 - smoothstep(0.0, 1.3, length(uv)));',
+    '',
+    '  // ─────────────────────────────────────────',
+    '  // REFLECTED LIGHT SPOTS',
+    '  // ─────────────────────────────────────────',
+    '  // Each spot represents a reflected light square from a mirror facet.',
+    '  // Spots orbit around the ball in elliptical paths that sweep as',
+    '  // the ball rotates. Multiple layers at different distances.',
+    '',
+    '  float uvLen = length(uv);',
+    '',
+    '  // Compute apparent ball radius on screen (from camera perspective)',
+    '  // Camera is at z=2.5, sphere at origin with radius BALL_RADIUS',
+    '  // Visual radius in UV space: R / sqrt(camZ^2 - R^2)',
+    '  float camZ = 2.5;',
+    '  float visualRadius = BALL_RADIUS / sqrt(camZ * camZ - BALL_RADIUS * BALL_RADIUS);',
+    '',
+    '  for (int i = 0; i < 120; i++) {',
+    '    float fi = float(i);',
+    '',
+    '    // Deterministic random properties per spot',
+    '    float r1 = hash(vec2(fi * 1.17, 0.31));',
+    '    float r2 = hash(vec2(fi * 2.31, 7.13));',
+    '    float r3 = hash(vec2(fi * 0.73, 13.37));',
+    '    float r4 = hash(vec2(fi * 3.91, 23.71));',
+    '    float r5 = hash(vec2(fi * 5.23, 41.07));',
+    '',
+    '    // Orbit parameters: spots at varying distances from ball center',
+    '    // Inner spots (near ball): r2 < 0.3, orbit radius ~0.25-0.45',
+    '    // Middle spots: r2 0.3-0.7, orbit radius ~0.35-0.65',
+    '    // Outer spots: r2 > 0.7, orbit radius ~0.5-0.95',
+    '    // Non-uniform: pow biases toward 0, placing more spots near ball',
+    '    float baseRadius = visualRadius + 0.02 + pow(r2, 1.3) * 0.85;',
+    '',
+    '    // Orbit speed tied to ball rotation',
+    '    float orbitSpeed = (0.12 + r1 * 0.55) * rotSpeed;',
+    '',
+    '    // Elliptical orbit with varying eccentricity',
+    '    float eccen = 0.6 + r3 * 0.4;',
+    '',
+    '    // Phase offset so spots are distributed around the ball',
+    '    float phase = r1 * TAU + t * orbitSpeed;',
+    '    float yPhase = r4 * TAU + t * orbitSpeed * (0.3 + r3 * 0.6);',
+    '',
+    '    // Orbit tilt gives each spot a unique orbit plane',
+    '    float orbitTilt = r4 * PI;',
+    '',
+    '    vec2 spotCenter = vec2(',
+    '      cos(phase) * baseRadius * eccen,',
+    '      sin(yPhase) * baseRadius',
+    '    );',
+    '    spotCenter = rot2(orbitTilt) * spotCenter;',
+    '',
+    '    // Distance from pixel to spot center',
+    '    float d = length(uv - spotCenter);',
+    '',
+    '    // Spot size: inner spots slightly larger to fill the near-ball area',
+    '    float innerBoost = smoothstep(0.45, visualRadius + 0.03, baseRadius) * 0.008;',
+    '    float spotSize = 0.007 + r3 * 0.013 + innerBoost;',
+    '',
+    '    // Soft glow + bright core',
+    '    float glow = exp(-d * d / (spotSize * spotSize * 3.0));',
+    '    float core = exp(-d * d / (spotSize * spotSize * 0.2));',
+    '',
+    '    // Prismatic tint',
+    '    vec3 tint = spotTint(fi * 0.37 + t * 0.008);',
+    '',
+    '    // Brightness variation',
+    '    float bright = (0.2 + 0.8 * r2) * spotBright;',
+    '',
+    '    // Only fade spots whose glow would visibly overlap the ball disc',
+    '    float pixelBallDist = uvLen - visualRadius;',
+    '    float ballFade = smoothstep(-0.01, 0.03, pixelBallDist);',
+    '',
+    '    // Twinkle / shimmer',
+    '    float twinkle = 0.65 + 0.35 * sin(t * (1.5 + r1 * 5.0) + fi * 4.7);',
+    '',
+    '    col += tint * (glow * 0.15 + core * 0.45) * bright * ballFade * twinkle;',
+    '  }',
+    '',
+    '  // ─────────────────────────────────────────',
+    '  // MIRROR BALL (raytraced sphere with faceted normals)',
+    '  // ─────────────────────────────────────────',
+    '  vec3 camPos = vec3(0.0, 0.0, 2.5);',
+    '  vec3 rd = normalize(vec3(uv, -1.0));',
+    '',
+    '  // Light source: above and to the side, slowly drifting',
+    '  vec3 lightPos = normalize(vec3(',
+    '    0.5 + 0.2 * sin(t * 0.07),',
+    '    1.2,',
+    '    0.3 + 0.15 * cos(t * 0.09)',
+    '  )) * 5.0;',
+    '',
+    '  float hitT = sphereHit(camPos, rd, BALL_RADIUS);',
+    '',
+    '  if (hitT > 0.0) {',
+    '    vec3 hitPos = camPos + rd * hitT;',
+    '    vec3 normal = normalize(hitPos);',
+    '',
+    '    // Un-rotate to get local coordinates for faceting',
+    '    vec3 localN = normal;',
+    '    localN.yz = rot2(-tiltA) * localN.yz;',
+    '    localN.xz = rot2(-rotA) * localN.xz;',
+    '',
+    '    // Faceted normal in local space, then rotate back',
+    '    vec3 fNlocal = facetNormal(localN);',
+    '    vec3 fN = fNlocal;',
+    '    fN.xz = rot2(rotA) * fN.xz;',
+    '    fN.yz = rot2(tiltA) * fN.yz;',
+    '',
+    '    // ── Edge detection between facets ──',
+    '    float edgeDist = length(localN - fNlocal);',
+    '    float edge = smoothstep(0.02, 0.06, edgeDist);',
+    '',
+    '    // ── Chrome / metallic shading ──',
+    '    vec3 viewDir = normalize(hitPos - camPos);',
+    '    vec3 refl = reflect(viewDir, fN);',
+    '',
+    '    // Fresnel',
+    '    float fresnel = pow(1.0 - max(dot(-viewDir, fN), 0.0), 3.0);',
+    '',
+    '    // Procedural environment reflection',
+    '    float envY = refl.y * 0.5 + 0.5;',
+    '    vec3 envCol = mix(',
+    '      vec3(0.02, 0.015, 0.03),',
+    '      vec3(0.22, 0.2, 0.28),',
+    '      envY * envY',
+    '    );',
+    '    // Reflected spots visible on ball surface',
+    '    float envNoise = hash(floor(refl.xz * 3.0 + 0.5));',
+    '    envCol += vec3(0.06, 0.05, 0.07) * envNoise;',
+    '',
+    '    // Specular highlight from main light',
+    '    vec3 toLightDir = normalize(lightPos - hitPos);',
+    '    float specular = pow(max(dot(refl, toLightDir), 0.0), 120.0);',
+    '    float diffuse = max(dot(fN, toLightDir), 0.0);',
+    '',
+    '    // Chrome base color with per-facet variation',
+    '    vec3 chrome = vec3(0.72, 0.72, 0.78);',
+    '    float facetId = hash3(fNlocal * 100.0);',
+    '    chrome += vec3(facetId * 0.1 - 0.05, facetId * 0.06 - 0.03, facetId * 0.12 - 0.06);',
+    '',
+    '    // Combine ball shading',
+    '    vec3 ballCol = chrome * (0.15 + diffuse * 0.6);',
+    '    ballCol += envCol * (0.2 + fresnel * 0.65);',
+    '    ballCol += vec3(1.0, 0.97, 0.92) * specular * 4.0;',
+    '',
+    '    // Darken at facet edges (gap between mirrors)',
+    '    ballCol *= 0.4 + 0.6 * (1.0 - edge * 0.65);',
+    '',
+    '    // Bright edge highlight line (thin bright border at facet seams)',
+    '    float edgeLine = smoothstep(0.035, 0.045, edgeDist) * smoothstep(0.065, 0.05, edgeDist);',
+    '    ballCol += vec3(0.3, 0.27, 0.38) * edgeLine * (0.3 + fresnel * 0.5);',
+    '',
+    '    // Rim light',
+    '    float rim = pow(1.0 - max(dot(-viewDir, normal), 0.0), 4.0);',
+    '    ballCol += vec3(0.3, 0.25, 0.4) * rim * 0.6;',
+    '',
+    '    col = ballCol;',
+    '  }',
+    '',
+    '  // ── Soft glow halo around the ball ──',
+    '  // Wide glow simulating ambient light cast by the ball onto nearby surfaces',
+    '  float ballDist = uvLen - visualRadius;',
+    '  if (ballDist > 0.0) {',
+    '    float haloWide = exp(-ballDist * 2.5) * 0.08;',
+    '    float haloMid = exp(-ballDist * 7.0) * 0.14;',
+    '    float haloInner = exp(-ballDist * 20.0) * 0.12;',
+    '    vec3 haloCol = vec3(0.35, 0.32, 0.45) * haloWide',
+    '                 + vec3(0.45, 0.4, 0.55) * haloMid',
+    '                 + vec3(0.6, 0.55, 0.7) * haloInner;',
+    '    col += haloCol;',
+    '  }',
+    '',
+    '  // ── Tone mapping ──',
+    '  col = col / (1.0 + col * 0.3);',
+    '  col = pow(max(col, vec3(0.0)), vec3(0.92));',
+    '',
+    '  // ── Vignette ──',
+    '  float vig = 1.0 - dot(uv * 0.6, uv * 0.6) * 0.5;',
+    '  col *= max(vig, 0.0);',
+    '',
+    '  gl_FragColor = vec4(col, 1.0);',
+    '}'
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error('Shader compile error:', gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error('Program link error:', gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uRotSpeed = gl.getUniformLocation(prog, 'u_rotSpeed');
+  var uSpotBright = gl.getUniformLocation(prog, 'u_spotBright');
+  var uBallSize = gl.getUniformLocation(prog, 'u_ballSize');
+
+  var rotSpeedVal = 0.5;
+  var spotBrightVal = 1.0;
+  var ballSizeVal = 0.22;
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2) * pixelScale;
+  var running = true;
+
+  function resize() {
+    var w = Math.round(canvas.clientWidth * dpr);
+    var h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  function render(now) {
+    if (!running) return;
+    resize();
+    gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uRotSpeed, rotSpeedVal);
+    gl.uniform1f(uSpotBright, spotBrightVal);
+    gl.uniform1f(uBallSize, ballSizeVal);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  document.addEventListener('visibilitychange', function() {
+    if (document.hidden) {
+      running = false;
+    } else {
+      running = true;
+      requestAnimationFrame(render);
+    }
+  });
+
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'ROTATION_SPEED': rotSpeedVal = e.data.value; break;
+        case 'SPOT_BRIGHTNESS': spotBrightVal = e.data.value; break;
+        case 'BALL_SIZE': ballSizeVal = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

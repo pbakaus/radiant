@@ -1,0 +1,1065 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rain on Umbrella</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; position: absolute; top: 0; left: 0; }
+  #canvas { width: 100vw; height: 100vh; z-index: 1; }
+  .label {
+    position: fixed; top: 20px; left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px; letter-spacing: 0.15em; text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.4); z-index: 10; pointer-events: none; user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Rain on Umbrella</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// 61 · Rain on Umbrella — Canvas-stamp refraction
+// Procedurally generated drop bitmaps + WebGL refraction shader
+// ─────────────────────────────────────────────
+(function () {
+  'use strict';
+
+  var canvas = document.getElementById('canvas');
+
+  // ── Tunables (via postMessage) ──
+  var RAIN_AMOUNT = 1.0;
+  var REFRACTION = 1.0;
+  var WALK_SPEED = 1.0;
+
+  // ── DPR ──
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  // ── Pause / reduced motion ──
+  var paused = false;
+  var reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  document.addEventListener('visibilitychange', function () {
+    paused = document.hidden;
+  });
+
+  window.addEventListener('message', function (e) {
+    if (!e.data) return;
+    if (e.data.type === 'param') {
+      if (e.data.name === 'RAIN_AMOUNT') RAIN_AMOUNT = parseFloat(e.data.value) || 1.0;
+      if (e.data.name === 'REFRACTION') REFRACTION = parseFloat(e.data.value) || 1.0;
+      if (e.data.name === 'WALK_SPEED') WALK_SPEED = parseFloat(e.data.value);
+    }
+    if (e.data.RAIN_AMOUNT !== undefined) RAIN_AMOUNT = parseFloat(e.data.RAIN_AMOUNT);
+    if (e.data.REFRACTION !== undefined) REFRACTION = parseFloat(e.data.REFRACTION);
+    if (e.data.WALK_SPEED !== undefined) WALK_SPEED = parseFloat(e.data.WALK_SPEED);
+  });
+
+  // ═══════════════════════════════════════════════
+  // HELPERS
+  // ═══════════════════════════════════════════════
+
+  function random(from, to, interp) {
+    if (from == null) { from = 0; to = 1; }
+    else if (to == null) { to = from; from = 0; }
+    if (typeof to === 'function') { interp = to; to = from; from = 0; }
+    var delta = to - from;
+    if (!interp) interp = function(n) { return n; };
+    return from + (interp(Math.random()) * delta);
+  }
+
+  function chance(c) { return Math.random() <= c; }
+
+  function createCanvas(w, h) {
+    var c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    return c;
+  }
+
+  function times(n, f) {
+    for (var i = 0; i < n; i++) f(i);
+  }
+
+  // ═══════════════════════════════════════════════
+  // PROCEDURAL DROP TEXTURE GENERATION
+  // Two separate textures:
+  //   Alpha: drop shape mask (white + varying alpha)
+  //   Color: refraction normal map (full opacity RGB)
+  //     R = vertical refraction offset (128 = neutral)
+  //     G = horizontal refraction offset (128 = neutral)
+  //     B = depth/distance (higher = deeper into drop)
+  //     A = 255 (always fully opaque — critical for screen-blend)
+  // ═══════════════════════════════════════════════
+
+  var dropSize = 64;
+
+  // Drop shape mask — defines where the drop is visible
+  function generateDropAlpha(size) {
+    var c = document.createElement('canvas');
+    c.width = c.height = size;
+    var ctx = c.getContext('2d');
+    var imgData = ctx.createImageData(size, size);
+    var d = imgData.data;
+    var cx = size / 2, cy = size / 2;
+
+    for (var py = 0; py < size; py++) {
+      for (var px = 0; px < size; px++) {
+        var dx = (px - cx) / cx;
+        var dy = (py - cy) / cy;
+        dy *= 1.0 + dy * 0.15;
+        var dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > 1.0) continue;
+
+        // Very compact alpha: only inner ~30% of drawn radius visible
+        // after shader threshold (a*6-3). Micro-droplets become specks,
+        // trail drops are tiny, only large drops are clearly visible.
+        var alpha = Math.max(0, 1.0 - Math.pow(dist / 0.35, 6)) * 255;
+
+        var idx = (py * size + px) * 4;
+        d[idx] = d[idx + 1] = d[idx + 2] = 255;
+        d[idx + 3] = Math.round(Math.min(255, Math.max(0, alpha)));
+      }
+    }
+    ctx.putImageData(imgData, 0, 0);
+    return c;
+  }
+
+  // Refraction normal map — encodes lens-like light bending
+  function generateDropColor(size) {
+    var c = document.createElement('canvas');
+    c.width = c.height = size;
+    var ctx = c.getContext('2d');
+    var imgData = ctx.createImageData(size, size);
+    var d = imgData.data;
+    var cx = size / 2, cy = size / 2;
+
+    for (var py = 0; py < size; py++) {
+      for (var px = 0; px < size; px++) {
+        var dx = (px - cx) / cx;
+        var dy = (py - cy) / cy;
+        dy *= 1.0 + dy * 0.15;
+        var dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > 1.0) continue;
+
+        var nx = dist > 0.001 ? dx / dist : 0;
+        var ny = dist > 0.001 ? dy / dist : 0;
+
+        // Refraction strength: increases toward edges (lens effect)
+        // Capped at 60 for subtle, soft distortion — micro-droplets
+        // barely refract while larger drops still show clear lensing
+        var strength = dist;
+
+        var r = Math.round(ny * 60 * strength + 128);
+        var g = Math.round(nx * 60 * strength + 128);
+        var depth = Math.sqrt(Math.max(0, 1.0 - dist * dist)) * 255;
+
+        var idx = (py * size + px) * 4;
+        d[idx] = Math.max(0, Math.min(255, r));
+        d[idx + 1] = Math.max(0, Math.min(255, g));
+        d[idx + 2] = Math.round(depth);
+        d[idx + 3] = 255; // Fully opaque — prevents premultiply corruption
+      }
+    }
+    ctx.putImageData(imgData, 0, 0);
+    return c;
+  }
+
+  var dropAlphaTex = generateDropAlpha(dropSize);
+  var dropColorTex = generateDropColor(dropSize);
+
+  // ═══════════════════════════════════════════════
+  // SKY-THROUGH-UMBRELLA BACKGROUND
+  // ═══════════════════════════════════════════════
+
+  var bgSeed = 42;
+  function srand() {
+    bgSeed = (bgSeed * 16807 + 0) % 2147483647;
+    return (bgSeed - 1) / 2147483646;
+  }
+
+  function generateSkyBg(w, h, blurPx) {
+    // Draw onto 3x-wide canvas, blur, then crop center for seamless horizontal tiling
+    var ww = w * 3;
+    var c = createCanvas(ww, h);
+    var ctx = c.getContext('2d');
+    bgSeed = 42;
+
+    // Helper: draw element at x and also at x±w so it tiles seamlessly
+    function tileX(x, fn) { fn(x - w); fn(x); fn(x + w); }
+
+    // Warm dark base — not pure black, slightly warm
+    ctx.fillStyle = '#0a0812';
+    ctx.fillRect(0, 0, ww, h);
+
+    // Warm ambient washes — the overall glow of a lit city seen through fabric
+    // Biased upward (lights are above us) but spread everywhere
+    for (var i = 0; i < 10; i++) {
+      var awx = srand() * w + w;
+      var awy = h * 0.1 + srand() * h * 0.7;
+      var awr = w * 0.2 + srand() * w * 0.45;
+      var awSel = srand();
+      var awHue = awSel > 0.55 ? (20 + srand() * 25) : awSel > 0.25 ? (260 + srand() * 50) : (310 + srand() * 30);
+      tileX(awx, function(xx) {
+        var g = ctx.createRadialGradient(xx, awy, 0, xx, awy, awr);
+        g.addColorStop(0, 'hsla(' + awHue + ',50%,24%,0.35)');
+        g.addColorStop(0.35, 'hsla(' + awHue + ',40%,16%,0.18)');
+        g.addColorStop(0.7, 'hsla(' + awHue + ',28%,10%,0.06)');
+        g.addColorStop(1, 'hsla(' + awHue + ',20%,7%,0)');
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(xx, awy, awr, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+
+    // Large vibrant bokeh — the main visual feature
+    // Big soft glows representing out-of-focus city lights through umbrella
+    for (var i = 0; i < 30; i++) {
+      var bkx = srand() * w + w;
+      var bky = srand() * h;
+      var szRng = srand();
+      var bkr;
+      if (szRng < 0.35) bkr = w * 0.08 + srand() * w * 0.18;      // large
+      else if (szRng < 0.7) bkr = w * 0.04 + srand() * w * 0.08;   // medium
+      else bkr = w * 0.015 + srand() * w * 0.03;                    // small
+
+      var rndC = srand();
+      var hue, sat, lit, alpha;
+      if (rndC < 0.35) { hue = 22 + srand() * 22; sat = 75 + srand() * 25; lit = 55 + srand() * 35; alpha = 0.2 + srand() * 0.35; }
+      else if (rndC < 0.55) { hue = 8 + srand() * 14; sat = 80 + srand() * 20; lit = 48 + srand() * 38; alpha = 0.18 + srand() * 0.3; }
+      else if (rndC < 0.7) { hue = 38 + srand() * 20; sat = 70 + srand() * 30; lit = 50 + srand() * 35; alpha = 0.15 + srand() * 0.3; }
+      else if (rndC < 0.85) { hue = 200 + srand() * 40; sat = 50 + srand() * 35; lit = 45 + srand() * 40; alpha = 0.12 + srand() * 0.25; }
+      else { hue = 310 + srand() * 40; sat = 50 + srand() * 35; lit = 50 + srand() * 30; alpha = 0.12 + srand() * 0.22; }
+
+      // Bias larger bokeh toward upper half (overhead lights)
+      if (bkr > w * 0.08) bky = bky * 0.6 + h * 0.05;
+
+      tileX(bkx, function(xx) {
+        var g = ctx.createRadialGradient(xx, bky, 0, xx, bky, bkr);
+        // Solid bright center fading out — NOT ring-shaped
+        g.addColorStop(0, 'hsla(' + hue + ',' + sat + '%,' + lit + '%,' + alpha + ')');
+        g.addColorStop(0.3, 'hsla(' + hue + ',' + sat + '%,' + lit + '%,' + (alpha * 0.6) + ')');
+        g.addColorStop(0.6, 'hsla(' + hue + ',' + sat + '%,' + (lit * 0.75) + '%,' + (alpha * 0.2) + ')');
+        g.addColorStop(1, 'hsla(' + hue + ',' + sat + '%,' + (lit * 0.5) + '%,0)');
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(xx, bky, bkr, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+
+    // Streetlight cores — bright hot points with large halos
+    for (var i = 0; i < 8; i++) {
+      var lx = srand() * w + w;
+      var ly = h * 0.05 + srand() * h * 0.5;
+      var lr = w * 0.01 + srand() * w * 0.03;
+      var lH = srand() > 0.25 ? (20 + srand() * 25) : (190 + srand() * 30);
+      tileX(lx, function(xx) {
+        // Bright core
+        var pg = ctx.createRadialGradient(xx, ly, 0, xx, ly, lr);
+        pg.addColorStop(0, 'hsla(' + lH + ',95%,96%,0.9)');
+        pg.addColorStop(0.12, 'hsla(' + lH + ',90%,85%,0.7)');
+        pg.addColorStop(0.35, 'hsla(' + lH + ',85%,65%,0.2)');
+        pg.addColorStop(1, 'hsla(' + lH + ',75%,50%,0)');
+        ctx.fillStyle = pg;
+        ctx.beginPath();
+        ctx.arc(xx, ly, lr, 0, Math.PI * 2);
+        ctx.fill();
+        // Wide warm halo
+        var haloR = lr * 5;
+        var hg = ctx.createRadialGradient(xx, ly, 0, xx, ly, haloR);
+        hg.addColorStop(0, 'hsla(' + lH + ',70%,60%,0.12)');
+        hg.addColorStop(0.3, 'hsla(' + lH + ',60%,45%,0.05)');
+        hg.addColorStop(1, 'hsla(' + lH + ',50%,35%,0)');
+        ctx.fillStyle = hg;
+        ctx.beginPath();
+        ctx.arc(xx, ly, haloR, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+
+    // Neon accents — splashes of pink/teal/red
+    for (var i = 0; i < 6; i++) {
+      var nx = srand() * w + w;
+      var ny = h * 0.2 + srand() * h * 0.55;
+      var nr = w * 0.03 + srand() * w * 0.07;
+      var nSel = srand();
+      var nH = nSel > 0.6 ? (335 + srand() * 35) : nSel > 0.3 ? (175 + srand() * 40) : (5 + srand() * 15);
+      var nAlpha = 0.15 + srand() * 0.25;
+      tileX(nx, function(xx) {
+        var g = ctx.createRadialGradient(xx, ny, 0, xx, ny, nr);
+        g.addColorStop(0, 'hsla(' + nH + ',80%,60%,' + nAlpha + ')');
+        g.addColorStop(0.4, 'hsla(' + nH + ',65%,45%,' + (nAlpha * 0.4) + ')');
+        g.addColorStop(1, 'hsla(' + nH + ',50%,30%,0)');
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(xx, ny, nr, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+
+    // Warm ambient lift — overall scene shouldn't be too dark
+    ctx.fillStyle = 'rgba(30, 18, 10, 0.06)';
+    ctx.fillRect(0, 0, ww, h);
+
+    // Apply blur to the 3x-wide canvas
+    if (blurPx > 0) {
+      var tmp = createCanvas(ww, h);
+      var tctx = tmp.getContext('2d');
+      tctx.drawImage(c, 0, 0);
+      ctx.clearRect(0, 0, ww, h);
+      ctx.filter = 'blur(' + blurPx + 'px)';
+      ctx.drawImage(tmp, 0, 0);
+      ctx.filter = 'none';
+    }
+
+    // Crop center third — seamless tile
+    var out = createCanvas(w, h);
+    var octx = out.getContext('2d');
+    octx.drawImage(c, w, 0, w, h, 0, 0, w, h);
+    return out;
+  }
+
+  // ═══════════════════════════════════════════════
+  // MAIN INIT
+  // ═══════════════════════════════════════════════
+
+  // Background textures (fg = sharp through drops, bg = blurred between drops)
+  // POT sizes required for GL_REPEAT wrapping in WebGL1
+  var textureFgCanvas = generateSkyBg(256, 128, 1);
+  var textureBgCanvas = generateSkyBg(1024, 512, 4);
+
+  // ═══════════════════════════════════════════════
+  // DROP GRAPHICS — Canvas-stamp approach
+  // Pre-render 255 depth-variant drop bitmaps
+  // ═══════════════════════════════════════════════
+
+  var dropsGfx = [];
+  var clearDropletsGfx = null;
+
+  function renderDropsGfx() {
+    var dropBuffer = createCanvas(dropSize, dropSize);
+    var dropBufferCtx = dropBuffer.getContext('2d');
+    dropsGfx = [];
+
+    for (var i = 0; i < 255; i++) {
+      var drop = createCanvas(dropSize, dropSize);
+      var dropCtx = drop.getContext('2d');
+      dropBufferCtx.clearRect(0, 0, dropSize, dropSize);
+
+      // Draw the COLOR texture (refraction RGB with full opacity)
+      dropBufferCtx.globalCompositeOperation = 'source-over';
+      dropBufferCtx.drawImage(dropColorTex, 0, 0, dropSize, dropSize);
+
+      // Screen-blend with blue to vary depth/refraction strength
+      dropBufferCtx.globalCompositeOperation = 'screen';
+      dropBufferCtx.fillStyle = 'rgba(0,0,' + i + ',1)';
+      dropBufferCtx.fillRect(0, 0, dropSize, dropSize);
+
+      // Use the ALPHA texture as shape mask (source-in clips refraction to drop shape)
+      dropCtx.globalCompositeOperation = 'source-over';
+      dropCtx.drawImage(dropAlphaTex, 0, 0, dropSize, dropSize);
+
+      dropCtx.globalCompositeOperation = 'source-in';
+      dropCtx.drawImage(dropBuffer, 0, 0, dropSize, dropSize);
+
+      dropsGfx.push(drop);
+    }
+
+    // Clearing stamp for droplets layer
+    clearDropletsGfx = createCanvas(128, 128);
+    var clearCtx = clearDropletsGfx.getContext('2d');
+    clearCtx.fillStyle = '#000';
+    clearCtx.beginPath();
+    clearCtx.arc(64, 64, 64, 0, Math.PI * 2);
+    clearCtx.fill();
+  }
+
+  // ═══════════════════════════════════════════════
+  // RAINDROPS — Physics model
+  // ═══════════════════════════════════════════════
+
+  var Drop = {
+    x: 0, y: 0, r: 0,
+    angle: 0, // radial direction from center
+    spreadX: 0, spreadY: 0,
+    warpX: 1, warpY: 1, // persistent per-drop shape variation
+    momentum: 0, momentumX: 0,
+    lastSpawn: 0, nextSpawn: 0,
+    parent: null, isNew: true,
+    killed: false, shrink: 0
+  };
+
+  // Defaults + rain weather overrides
+  var options = {
+    minR: 10,
+    maxR: 32,
+    maxDrops: 1800,
+    rainChance: 0.5,
+    rainLimit: 10,
+    dropletsRate: 250,
+    dropletsSize: [2, 6],
+    dropletsCleaningRadiusMultiplier: 0.28,
+    raining: true,
+    globalTimeScale: 1,
+    trailRate: 0.8,
+    autoShrink: true,
+    spawnArea: [-0.1, 0.95],
+    trailScaleRange: [0.25, 0.35],
+    collisionRadius: 0.5,
+    collisionRadiusIncrease: 0.0002,
+    dropFallMultiplier: 1,
+    collisionBoostMultiplier: 0.05,
+    collisionBoost: 1
+  };
+
+  var rdWidth = 0, rdHeight = 0, rdScale = 1;
+  var rdCanvas, rdCtx;
+  var dropletsCanvas, dropletsCtx;
+  var dropletsPixelDensity = 1;
+  var dropletsCounter = 0;
+  var drops = [];
+  var textureCleaningIterations = 0;
+  var rdLastRender = null;
+
+  function deltaR() { return options.maxR - options.minR; }
+  function area() { return (rdWidth * rdHeight) / rdScale; }
+  function areaMultiplier() { return Math.sqrt(area() / (1024 * 768)); }
+
+  function drawDrop(ctx, drop) {
+    if (dropsGfx.length <= 0) return;
+    var x = drop.x, y = drop.y, r = drop.r;
+    var spreadX = drop.spreadX, spreadY = drop.spreadY;
+    // Per-drop shape: base warp + slight stretch when moving
+    var scaleX = drop.warpX || 1;
+    var scaleY = (drop.warpY || 1) + Math.min(0.25, drop.momentum * 0.012);
+
+    var d = Math.max(0, Math.min(1, ((r - options.minR) / deltaR()) * 0.9));
+    d *= 1 / (((spreadX + spreadY) * 0.5) + 1);
+    d = Math.floor(d * (dropsGfx.length - 1));
+
+    var drawW = (r * 2 * scaleX * (spreadX + 1)) * rdScale;
+    var drawH = (r * 2 * scaleY * (spreadY + 1)) * rdScale;
+
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+
+    if (drop.angle != null) {
+      // Rotate elongation to align with radial direction
+      ctx.save();
+      ctx.translate(x * rdScale, y * rdScale);
+      ctx.rotate(drop.angle - Math.PI / 2);
+      ctx.drawImage(dropsGfx[d], -drawW / 2, -drawH / 2, drawW, drawH);
+      ctx.restore();
+    } else {
+      ctx.drawImage(
+        dropsGfx[d],
+        (x - (r * scaleX * (spreadX + 1))) * rdScale,
+        (y - (r * scaleY * (spreadY + 1))) * rdScale,
+        drawW, drawH
+      );
+    }
+  }
+
+  function drawDroplet(x, y, r) {
+    drawDrop(dropletsCtx, {
+      x: x * dropletsPixelDensity,
+      y: y * dropletsPixelDensity,
+      r: r * dropletsPixelDensity,
+      spreadX: 0, spreadY: 0
+    });
+  }
+
+  function clearDroplets(x, y, r) {
+    if (!r) r = 30;
+    dropletsCtx.globalCompositeOperation = 'destination-out';
+    dropletsCtx.drawImage(
+      clearDropletsGfx,
+      (x - r) * dropletsPixelDensity * rdScale,
+      (y - r) * dropletsPixelDensity * rdScale,
+      (r * 2) * dropletsPixelDensity * rdScale,
+      (r * 2) * dropletsPixelDensity * rdScale * 1.5
+    );
+  }
+
+  function rdCreateDrop(opts) {
+    if (drops.length >= options.maxDrops * areaMultiplier()) return null;
+    var d = {};
+    for (var k in Drop) { if (Drop.hasOwnProperty(k)) d[k] = Drop[k]; }
+    for (var k2 in opts) { if (opts.hasOwnProperty(k2)) d[k2] = opts[k2]; }
+    return d;
+  }
+
+  function updateRain(timeScale) {
+    var rainDrops = [];
+    if (options.raining) {
+      var limit = options.rainLimit * timeScale * areaMultiplier() * RAIN_AMOUNT;
+      var count = 0;
+      var centerX = (rdWidth / rdScale) / 2;
+      var centerY = (rdHeight / rdScale) / 2;
+      var viewW = rdWidth / rdScale;
+      var viewH = rdHeight / rdScale;
+      var maxDist = Math.sqrt(centerX * centerX + centerY * centerY);
+      while (chance(options.rainChance * timeScale * areaMultiplier() * RAIN_AMOUNT) && count < limit) {
+        count++;
+        var r = random(options.minR, options.maxR, function(n) { return Math.pow(n, 3); });
+        // Spawn anywhere on the umbrella surface
+        var sx = random(r, viewW - r);
+        var sy = random(r, viewH - r);
+        var dx = sx - centerX;
+        var dy = sy - centerY;
+        var dist = Math.sqrt(dx * dx + dy * dy);
+        // Angle: radial direction from center (water flows down the dome)
+        var angle = dist > 0.5 ? Math.atan2(dy, dx) : Math.random() * Math.PI * 2;
+        // Dome curvature drives initial momentum
+        var curvature = Math.min(1, dist / maxDist);
+        var startMomentum = 0.2 + curvature * curvature * 2.0 + ((r - options.minR) * 0.08) + random(0.5);
+        // Per-drop shape variation — each drop is slightly different
+        var wx = 0.8 + Math.random() * 0.4;  // 0.8 – 1.2
+        var wy = 0.85 + Math.random() * 0.35; // 0.85 – 1.2
+        var rd = rdCreateDrop({
+          x: sx,
+          y: sy,
+          r: r,
+          angle: angle,
+          momentum: startMomentum,
+          warpX: wx, warpY: wy,
+          spreadX: 1.2, spreadY: 1.2
+        });
+        if (rd != null) rainDrops.push(rd);
+      }
+    }
+    return rainDrops;
+  }
+
+  function updateDroplets(timeScale) {
+    if (textureCleaningIterations > 0) {
+      textureCleaningIterations -= 1 * timeScale;
+      dropletsCtx.globalCompositeOperation = 'destination-out';
+      dropletsCtx.fillStyle = 'rgba(0,0,0,' + (0.05 * timeScale) + ')';
+      dropletsCtx.fillRect(0, 0, rdWidth * dropletsPixelDensity, rdHeight * dropletsPixelDensity);
+    }
+    if (options.raining) {
+      dropletsCounter += options.dropletsRate * timeScale * areaMultiplier() * RAIN_AMOUNT;
+      var totalToSpawn = Math.floor(dropletsCounter);
+      dropletsCounter -= totalToSpawn;
+
+      // Cluster-based spawning: group micro-droplets into natural clusters
+      // ~80% of droplets spawn in clusters of 4-8, rest are scattered
+      while (totalToSpawn > 0) {
+        if (chance(0.8) && totalToSpawn >= 4) {
+          // Spawn a cluster
+          var clusterSize = Math.min(totalToSpawn, 4 + Math.floor(Math.random() * 5)); // 4-8
+          var cx = random(rdWidth / rdScale);
+          var cy = random(rdHeight / rdScale);
+          var clusterSpread = 4 + Math.random() * 8; // 4-12px tight spread
+          for (var ci = 0; ci < clusterSize; ci++) {
+            var angle = Math.random() * Math.PI * 2;
+            var dist = Math.random() * clusterSpread;
+            drawDroplet(
+              cx + Math.cos(angle) * dist,
+              cy + Math.sin(angle) * dist,
+              random(options.dropletsSize[0], options.dropletsSize[1], function(n) { return n * n; })
+            );
+          }
+          totalToSpawn -= clusterSize;
+        } else {
+          // Scatter a single droplet
+          drawDroplet(
+            random(rdWidth / rdScale),
+            random(rdHeight / rdScale),
+            random(options.dropletsSize[0], options.dropletsSize[1], function(n) { return n * n; })
+          );
+          totalToSpawn--;
+        }
+      }
+    }
+    rdCtx.drawImage(dropletsCanvas, 0, 0, rdWidth, rdHeight);
+  }
+
+  function updateDrops(timeScale) {
+    var newDrops = [];
+    updateDroplets(timeScale);
+    var rainDrops = updateRain(timeScale);
+    newDrops = newDrops.concat(rainDrops);
+
+    drops.sort(function(a, b) {
+      var va = (a.y * (rdWidth / rdScale)) + a.x;
+      var vb = (b.y * (rdWidth / rdScale)) + b.x;
+      return va > vb ? 1 : va === vb ? 0 : -1;
+    });
+
+    // Umbrella dome curvature constants
+    var centerX = (rdWidth / rdScale) / 2;
+    var centerY = (rdHeight / rdScale) / 2;
+    var maxDist = Math.sqrt(centerX * centerX + centerY * centerY);
+
+    for (var i = 0; i < drops.length; i++) {
+      var drop = drops[i];
+      if (drop.killed) continue;
+
+      // Random momentum bursts
+      if (chance((drop.r - (options.minR * options.dropFallMultiplier)) * (0.1 / deltaR()) * timeScale)) {
+        drop.momentum += random((drop.r / options.maxR) * 4);
+      }
+      // Auto-shrink small stationary drops
+      if (options.autoShrink && drop.r <= options.minR && chance(0.05 * timeScale)) {
+        drop.shrink += 0.01;
+      }
+      drop.r -= drop.shrink * timeScale;
+      if (drop.r <= 0) { drop.killed = true; continue; }
+
+      // Trail spawning
+      if (options.raining) {
+        drop.lastSpawn += drop.momentum * timeScale * options.trailRate;
+        if (drop.lastSpawn > drop.nextSpawn) {
+          var trailDrop = rdCreateDrop({
+            x: drop.x - Math.cos(drop.angle) * (drop.r * 0.01) + (random(-drop.r, drop.r) * 0.1),
+            y: drop.y - Math.sin(drop.angle) * (drop.r * 0.01) + (random(-drop.r, drop.r) * 0.1),
+            r: drop.r * random(options.trailScaleRange[0], options.trailScaleRange[1]),
+            angle: drop.angle,
+            warpX: 0.8 + Math.random() * 0.4,
+            warpY: 0.85 + Math.random() * 0.35,
+            spreadY: drop.momentum * 0.1,
+            parent: drop
+          });
+          if (trailDrop != null) {
+            newDrops.push(trailDrop);
+            drop.r *= Math.pow(0.97, timeScale);
+            drop.lastSpawn = 0;
+            drop.nextSpawn = random(options.minR, options.maxR) - (drop.momentum * 2 * options.trailRate) + (options.maxR - drop.r);
+          }
+        }
+      }
+
+      // Decay spread
+      drop.spreadX *= Math.pow(0.4, timeScale);
+      drop.spreadY *= Math.pow(0.7, timeScale);
+
+      // Curvature acceleration: dome slope increases toward edges
+      var cdx = drop.x - centerX;
+      var cdy = drop.y - centerY;
+      var distFromCenter = Math.sqrt(cdx * cdx + cdy * cdy);
+      var curvature = Math.min(1, distFromCenter / maxDist);
+      drop.momentum += curvature * curvature * 0.2 * timeScale;
+
+      // Movement — radial outward from center
+      var moved = drop.momentum > 0;
+      if (moved && !drop.killed) {
+        drop.x += Math.cos(drop.angle) * drop.momentum * options.globalTimeScale;
+        drop.y += Math.sin(drop.angle) * drop.momentum * options.globalTimeScale;
+        if (drop.x < -drop.r || drop.x > (rdWidth / rdScale) + drop.r ||
+            drop.y < -drop.r || drop.y > (rdHeight / rdScale) + drop.r) {
+          drop.killed = true;
+        }
+      }
+
+      // Collision detection
+      var checkCollision = (moved || drop.isNew) && !drop.killed;
+      drop.isNew = false;
+
+      if (checkCollision) {
+        var end = Math.min(i + 70, drops.length);
+        for (var j = i + 1; j < end; j++) {
+          var drop2 = drops[j];
+          if (drop === drop2 || drop.r <= drop2.r || drop.parent === drop2 || drop2.parent === drop || drop2.killed) continue;
+          var dx = drop2.x - drop.x;
+          var dy = drop2.y - drop.y;
+          var dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < (drop.r + drop2.r) * (options.collisionRadius + (drop.momentum * options.collisionRadiusIncrease * timeScale))) {
+            var r1 = drop.r, r2 = drop2.r;
+            var a1 = Math.PI * r1 * r1;
+            var a2 = Math.PI * r2 * r2;
+            var targetR = Math.sqrt((a1 + (a2 * 0.8)) / Math.PI);
+            if (targetR > options.maxR) targetR = options.maxR;
+            drop.r = targetR;
+            drop.momentumX += dx * 0.1;
+            drop.spreadX = 0;
+            drop.spreadY = 0;
+            drop2.killed = true;
+            drop.momentum = Math.max(drop2.momentum, Math.min(40, drop.momentum + (targetR * options.collisionBoostMultiplier) + options.collisionBoost));
+          }
+        }
+      }
+
+      // Momentum decay
+      drop.momentum -= Math.max(1, (options.minR * 0.5) - drop.momentum) * 0.1 * timeScale;
+      if (drop.momentum < 0) drop.momentum = 0;
+      drop.momentumX *= Math.pow(0.7, timeScale);
+
+      if (!drop.killed) {
+        newDrops.push(drop);
+        if (moved && options.dropletsRate > 0) clearDroplets(drop.x, drop.y, drop.r * options.dropletsCleaningRadiusMultiplier);
+        drawDrop(rdCtx, drop);
+      }
+    }
+
+    drops = newDrops;
+  }
+
+  function rdUpdate() {
+    rdCtx.clearRect(0, 0, rdWidth, rdHeight);
+    var now = Date.now();
+    if (rdLastRender == null) rdLastRender = now;
+    var deltaT = now - rdLastRender;
+    var timeScale = deltaT / ((1 / 60) * 1000);
+    if (timeScale > 1.1) timeScale = 1.1;
+    timeScale *= options.globalTimeScale;
+    rdLastRender = now;
+    updateDrops(timeScale);
+  }
+
+  function initRaindrops(width, height, scale) {
+    rdWidth = width;
+    rdHeight = height;
+    rdScale = scale;
+    rdCanvas = createCanvas(rdWidth, rdHeight);
+    rdCtx = rdCanvas.getContext('2d');
+    dropletsCanvas = createCanvas(rdWidth * dropletsPixelDensity, rdHeight * dropletsPixelDensity);
+    dropletsCtx = dropletsCanvas.getContext('2d');
+    drops = [];
+    dropletsCounter = 0;
+    rdLastRender = null;
+    renderDropsGfx();
+  }
+
+  // ═══════════════════════════════════════════════
+  // WEBGL RENDERER — Refraction shader
+  // ═══════════════════════════════════════════════
+
+  var gl = canvas.getContext('webgl', { alpha: false, antialias: false });
+  if (!gl) return;
+
+  // Vertex shader
+  var vertSrc = [
+    'precision mediump float;',
+    'attribute vec2 a_position;',
+    'void main() {',
+    '  gl_Position = vec4(a_position, 0.0, 1.0);',
+    '}'
+  ].join('\n');
+
+  // Fragment shader — water refraction
+  var fragSrc = [
+    'precision mediump float;',
+    '',
+    'uniform sampler2D u_waterMap;',
+    'uniform sampler2D u_textureShine;',
+    'uniform sampler2D u_textureFg;',
+    'uniform sampler2D u_textureBg;',
+    '',
+    'uniform vec2 u_resolution;',
+    'uniform vec2 u_parallax;',
+    'uniform float u_parallaxFg;',
+    'uniform float u_parallaxBg;',
+    'uniform float u_textureRatio;',
+    'uniform bool u_renderShine;',
+    'uniform bool u_renderShadow;',
+    'uniform float u_minRefraction;',
+    'uniform float u_refractionDelta;',
+    'uniform float u_brightness;',
+    'uniform float u_alphaMultiply;',
+    'uniform float u_alphaSubtract;',
+    'uniform float u_time;',
+    '',
+    'vec4 blend(vec4 bg, vec4 fg) {',
+    '  vec3 bgm = bg.rgb * bg.a;',
+    '  vec3 fgm = fg.rgb * fg.a;',
+    '  float ia = 1.0 - fg.a;',
+    '  float a = (fg.a + bg.a * ia);',
+    '  vec3 rgb;',
+    '  if (a != 0.0) {',
+    '    rgb = (fgm + bgm * ia) / a;',
+    '  } else {',
+    '    rgb = vec3(0.0, 0.0, 0.0);',
+    '  }',
+    '  return vec4(rgb, a);',
+    '}',
+    '',
+    'vec2 pixel() {',
+    '  return vec2(1.0, 1.0) / u_resolution;',
+    '}',
+    '',
+    'vec2 parallax(float v) {',
+    '  return u_parallax * pixel() * v;',
+    '}',
+    '',
+    'vec2 texCoord() {',
+    '  return vec2(gl_FragCoord.x, u_resolution.y - gl_FragCoord.y) / u_resolution;',
+    '}',
+    '',
+    'vec2 scaledTexCoord() {',
+    '  float ratio = u_resolution.x / u_resolution.y;',
+    '  vec2 scale = vec2(1.0, 1.0);',
+    '  vec2 offset = vec2(0.0, 0.0);',
+    '  float ratioDelta = ratio - u_textureRatio;',
+    '  if (ratioDelta >= 0.0) {',
+    '    scale.y = (1.0 + ratioDelta);',
+    '    offset.y = ratioDelta / 2.0;',
+    '  } else {',
+    '    scale.x = (1.0 - ratioDelta);',
+    '    offset.x = -ratioDelta / 2.0;',
+    '  }',
+    '  return (texCoord() + offset) / scale;',
+    '}',
+    '',
+    'vec4 fgColor(float x, float y) {',
+    '  float p2 = u_parallaxFg * 2.0;',
+    '  vec2 scale = vec2(',
+    '    (u_resolution.x + p2) / u_resolution.x,',
+    '    (u_resolution.y + p2) / u_resolution.y',
+    '  );',
+    '  vec2 scaledTC = texCoord() / scale;',
+    '  vec2 offset = vec2(',
+    '    (1.0 - (1.0 / scale.x)) / 2.0,',
+    '    (1.0 - (1.0 / scale.y)) / 2.0',
+    '  );',
+    '  return texture2D(u_waterMap,',
+    '    (scaledTC + offset) + (pixel() * vec2(x, y)) + parallax(u_parallaxFg)',
+    '  );',
+    '}',
+    '',
+    '// ── Umbrella structure: ribs, panels, dome curvature ──',
+    'vec3 applyUmbrellaRibs(vec3 color, vec2 pos) {',
+    '  vec2 center = vec2(0.5, 0.5);',
+    '  vec2 dir = pos - center;',
+    '  float aspect = u_resolution.x / u_resolution.y;',
+    '  dir.x *= aspect;',
+    '  float dist = length(dir);',
+    '  float ang = atan(dir.y, dir.x);',
+    '',
+    '  float PI = 3.14159265;',
+    '  float NUM_RIBS = 8.0;',
+    '  float SECTOR = PI * 2.0 / NUM_RIBS;',
+    '',
+    '  // Angular distance to nearest rib',
+    '  float secAng = mod(ang + SECTOR * 0.5, SECTOR) - SECTOR * 0.5;',
+    '',
+    '  // Organic wobble — ribs flex under fabric tension + per-rib variation',
+    '  float ribIdx = floor((ang + PI) / SECTOR);',
+    '  float wobble = sin(dist * 16.0 + ribIdx * 4.7) * 0.018 * dist;',
+    '  wobble += sin(dist * 37.0 - ribIdx * 2.3) * 0.008 * dist;',
+    '  wobble *= smoothstep(0.0, 0.1, dist);',
+    '  secAng += wobble;',
+    '',
+    '  float angDist = abs(secAng);',
+    '  float screenDist = angDist * dist;',
+    '',
+    '  // Rib width: thicker near hub, tapers toward tips',
+    '  float ribW = mix(0.006, 0.0008, smoothstep(0.0, 0.55, dist));',
+    '  float rib = 1.0 - smoothstep(ribW * 0.15, ribW, screenDist);',
+    '',
+    '  // Rib fades out near the very edge (tips are thinner)',
+    '  rib *= 1.0 - smoothstep(0.55, 0.75, dist);',
+    '',
+    '  // 3D depth: highlight on one side, shadow on the other',
+    '  float side = step(0.0, secAng) * 2.0 - 1.0;',
+    '  float highlight = rib * 0.06 * max(0.0, side);',
+    '  float shadow = rib * 0.14;',
+    '',
+    '  // Panel billowing: fabric sags between ribs creating curved shadow',
+    '  float panelEdge = smoothstep(0.0, SECTOR * 0.35 * max(0.01, dist), screenDist);',
+    '  float panelShade = (1.0 - panelEdge * panelEdge) * 0.025 * smoothstep(0.03, 0.25, dist);',
+    '',
+    '  // Alternating panel tint (slightly warmer / cooler)',
+    '  float panelIdx = floor((ang + PI) / SECTOR);',
+    '  float panelTint = mod(panelIdx, 2.0) * 0.012 - 0.006;',
+    '',
+    '  // Center cap / hub',
+    '  float cap = (1.0 - smoothstep(0.008, 0.016, dist)) * 0.18;',
+    '  // Small ring around cap',
+    '  float ring = (1.0 - abs(dist - 0.02) / 0.004);',
+    '  ring = max(0.0, ring) * 0.06;',
+    '',
+    '  // Dome vignette: edges darker from steeper viewing angle',
+    '  float vig = smoothstep(0.05, 0.7, dist);',
+    '  vig = vig * vig * 0.14;',
+    '',
+    '  float darken = shadow + panelShade + cap + ring + vig;',
+    '  color = color * (1.0 - darken) + vec3(highlight + panelTint);',
+    '',
+    '  return color;',
+    '}',
+    '',
+    'void main() {',
+    '  vec2 walkOffset = vec2(u_time * 0.03, sin(u_time * 0.5) * 0.003);',
+    '  vec4 bg = texture2D(u_textureBg, scaledTexCoord() + walkOffset);',
+    '',
+    '  vec4 cur = fgColor(0.0, 0.0);',
+    '',
+    '  float d = cur.b;',
+    '  float x = cur.g;',
+    '  float y = cur.r;',
+    '',
+    '  float a = clamp(cur.a * u_alphaMultiply - u_alphaSubtract, 0.0, 1.0);',
+    '',
+    '  vec2 refraction = (vec2(x, y) - 0.5) * 2.0;',
+    '  vec2 refractionParallax = parallax(u_parallaxBg - u_parallaxFg);',
+    '  vec2 refractionPos = scaledTexCoord()',
+    '    + (pixel() * refraction * (u_minRefraction + (d * u_refractionDelta)))',
+    '    + refractionParallax;',
+    '',
+    '  vec4 tex = texture2D(u_textureFg, refractionPos + walkOffset);',
+    '',
+    '  if (u_renderShine) {',
+    '    float maxShine = 490.0;',
+    '    float minShine = maxShine * 0.18;',
+    '    vec2 shinePos = vec2(0.5, 0.5) + ((1.0 / 512.0) * refraction) * -(minShine + ((maxShine - minShine) * d));',
+    '    vec4 shine = texture2D(u_textureShine, shinePos);',
+    '    tex = blend(tex, shine);',
+    '  }',
+    '',
+    '  vec4 fg = vec4(tex.rgb * u_brightness, a);',
+    '',
+    '  if (u_renderShadow) {',
+    '    float borderAlpha = fgColor(0.0, 0.0 - (d * 6.0)).a;',
+    '    borderAlpha = borderAlpha * u_alphaMultiply - (u_alphaSubtract + 0.5);',
+    '    borderAlpha = clamp(borderAlpha, 0.0, 1.0);',
+    '    borderAlpha *= 0.2;',
+    '    vec4 border = vec4(0.0, 0.0, 0.0, borderAlpha);',
+    '    fg = blend(border, fg);',
+    '  }',
+    '',
+    '  vec4 result = blend(bg, fg);',
+    '  result.rgb = applyUmbrellaRibs(result.rgb, texCoord());',
+    '  gl_FragColor = result;',
+    '}'
+  ].join('\n');
+
+  function compileShader(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error('Shader compile error:', gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compileShader(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compileShader(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error('Program link error:', gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  // Fullscreen quad buffer
+  var posBuffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, posBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+    -1.0, -1.0,  1.0, -1.0,  -1.0, 1.0,
+    -1.0,  1.0,  1.0, -1.0,   1.0, 1.0
+  ]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_position');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  // Uniform setter
+  function setUniform(type, name) {
+    var loc = gl.getUniformLocation(prog, 'u_' + name);
+    var args = Array.prototype.slice.call(arguments, 2);
+    gl['uniform' + type].apply(gl, [loc].concat(args));
+  }
+
+  // Texture ratio from background
+  var bgRatio = textureBgCanvas.width / textureBgCanvas.height;
+
+  // Textures: 0=waterMap, 1=shine(blank), 2=fg, 3=bg
+  function initTexture(unit, source) {
+    var tex = gl.createTexture();
+    gl.activeTexture(gl['TEXTURE' + unit]);
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    if (source) {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+    }
+    return tex;
+  }
+
+  var waterTex = initTexture(0, null);
+  var shineTex = initTexture(1, createCanvas(2, 2)); // blank shine
+  var fgTex = initTexture(2, textureFgCanvas);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+  var bgTex = initTexture(3, textureBgCanvas);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+
+  // ═══════════════════════════════════════════════
+  // RESIZE
+  // ═══════════════════════════════════════════════
+
+  function resize() {
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+    canvas.style.width = w + 'px';
+    canvas.style.height = h + 'px';
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    initRaindrops(canvas.width, canvas.height, dpr);
+  }
+
+  var startTime = Date.now();
+
+  window.addEventListener('resize', resize);
+  resize();
+
+  // ═══════════════════════════════════════════════
+  // RENDER LOOP
+  // ═══════════════════════════════════════════════
+
+  function render() {
+    requestAnimationFrame(render);
+    if (paused || reducedMotion) return;
+
+    rdUpdate();
+
+    // Upload water map
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, waterTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, rdCanvas);
+
+    // Set uniforms
+    gl.useProgram(prog);
+    setUniform('2f', 'resolution', canvas.width, canvas.height);
+    setUniform('1f', 'textureRatio', bgRatio);
+    setUniform('1i', 'renderShine', 0);
+    setUniform('1i', 'renderShadow', 0);
+    setUniform('1f', 'minRefraction', 256.0 * REFRACTION);
+    setUniform('1f', 'refractionDelta', 256.0 * REFRACTION);
+    setUniform('1f', 'brightness', 1.04);
+    setUniform('1f', 'alphaMultiply', 6.0);
+    setUniform('1f', 'alphaSubtract', 3.0);
+    setUniform('1f', 'parallaxBg', 5.0);
+    setUniform('1f', 'parallaxFg', 0.0);
+    setUniform('2f', 'parallax', 0.0, 0.0);
+    setUniform('1f', 'time', (Date.now() - startTime) * 0.001 * WALK_SPEED);
+
+    // Bind texture units
+    setUniform('1i', 'waterMap', 0);
+    setUniform('1i', 'textureShine', 1);
+    setUniform('1i', 'textureFg', 2);
+    setUniform('1i', 'textureBg', 3);
+
+    // Draw fullscreen quad
+    gl.bindBuffer(gl.ARRAY_BUFFER, posBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+      -1, -1,  1, -1,  -1, 1,
+      -1,  1,  1, -1,   1, 1
+    ]), gl.STATIC_DRAW);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+  }
+
+  requestAnimationFrame(render);
+})();
+</script>
+</body>
+</html>

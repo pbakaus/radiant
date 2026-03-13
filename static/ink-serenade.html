@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ink Serenade</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Ink Serenade</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// 11 · Ink Serenade — Ink drops diffusing in still water
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var params = new URLSearchParams(location.search);
+  var _p = parseFloat(params.get('p')) || 1;
+
+  var gl = canvas.getContext('webgl', { alpha: false, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  var vertSrc = 'attribute vec2 a_pos; void main(){gl_Position=vec4(a_pos,0,1);}';
+
+  var fragSrc = [
+    'precision highp float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform float u_speed;',
+    'uniform float u_intensity;',
+    '',
+    '// ── Hash ──',
+    'float hash(vec2 p){',
+    '  vec3 p3=fract(vec3(p.xyx)*0.1031);',
+    '  p3+=dot(p3,p3.yzx+33.33);',
+    '  return fract((p3.x+p3.y)*p3.z);',
+    '}',
+    '',
+    '// ── Simplex 2D noise ──',
+    'vec3 mod289(vec3 x){return x-floor(x*(1.0/289.0))*289.0;}',
+    'vec2 mod289v(vec2 x){return x-floor(x*(1.0/289.0))*289.0;}',
+    'vec3 permute(vec3 x){return mod289(((x*34.0)+1.0)*x);}',
+    'float snoise(vec2 v){',
+    '  const vec4 C=vec4(0.211324865405187,0.366025403784439,-0.577350269189626,0.024390243902439);',
+    '  vec2 i=floor(v+dot(v,C.yy));',
+    '  vec2 x0=v-i+dot(i,C.xx);',
+    '  vec2 i1=(x0.x>x0.y)?vec2(1,0):vec2(0,1);',
+    '  vec4 x12=x0.xyxy+C.xxzz; x12.xy-=i1;',
+    '  i=mod289v(i);',
+    '  vec3 p=permute(permute(i.y+vec3(0,i1.y,1))+i.x+vec3(0,i1.x,1));',
+    '  vec3 m=max(0.5-vec3(dot(x0,x0),dot(x12.xy,x12.xy),dot(x12.zw,x12.zw)),0.0);',
+    '  m=m*m; m=m*m;',
+    '  vec3 x=2.0*fract(p*C.www)-1.0;',
+    '  vec3 h=abs(x)-0.5;',
+    '  vec3 ox=floor(x+0.5);',
+    '  vec3 a0=x-ox;',
+    '  m*=1.79284291400159-0.85373472095314*(a0*a0+h*h);',
+    '  vec3 g;',
+    '  g.x=a0.x*x0.x+h.x*x0.y;',
+    '  g.yz=a0.yz*x12.xz+h.yz*x12.yw;',
+    '  return 130.0*dot(m,g);',
+    '}',
+    '',
+    '// ── Domain-warped FBM for organic diffusion ──',
+    'float warpedFBM(vec2 p, float t){',
+    '  vec2 q=vec2(snoise(p+t*0.015),snoise(p+vec2(5.2,1.3)+t*0.015));',
+    '  float v=0.0, a=0.5;',
+    '  mat2 rot=mat2(0.866,0.5,-0.5,0.866);',
+    '  vec2 pp=p+q*0.9;',
+    '  for(int i=0;i<5;i++){',
+    '    v+=a*snoise(pp);',
+    '    pp=rot*pp*2.1+vec2(50.0);',
+    '    a*=0.5;',
+    '  }',
+    '  return v;',
+    '}',
+    '',
+    '// ── Single ink drop diffusing in water ──',
+    'float inkDrop(vec2 uv, vec2 dc, float dropTime, float t, float seed){',
+    '  if(dropTime<0.0) return 0.0;',
+    '',
+    '  vec2 d=uv-dc;',
+    '  float dist=length(d);',
+    '  float angle=atan(d.y,d.x);',
+    '',
+    '  // Diffusion: radius grows with sqrt-like dynamics',
+    '  float maxR=0.18+0.06*hash(vec2(seed,seed*3.7));',
+    '  float growth=1.0-exp(-dropTime*0.45);',
+    '  float radius=maxR*growth;',
+    '',
+    '  if(dist>radius*2.2) return 0.0;',
+    '',
+    '  float nd=dist/max(radius,0.001);',
+    '',
+    '  // ── Angular tendrils — the key to the ink-in-water look ──',
+    '  // Multiple noise frequencies on the angle create branching fingers',
+    '  float n1=snoise(vec2(angle*2.5+seed*10.0, dist*14.0-dropTime*0.12));',
+    '  float n2=snoise(vec2(angle*6.0+seed*20.0, dist*22.0-dropTime*0.08));',
+    '  float n3=snoise(vec2(angle*13.0+seed*30.0, dist*35.0+seed));',
+    '',
+    '  // Tendrils are strongest at the diffusion front',
+    '  float frontZone=smoothstep(0.25,0.75,nd)*smoothstep(1.4,0.85,nd);',
+    '  float tendrils=0.0;',
+    '  tendrils+=max(0.0,n1)*0.45;',
+    '  tendrils+=max(0.0,n2)*0.35;',
+    '  tendrils+=max(0.0,n3)*0.2;',
+    '  tendrils*=frontZone;',
+    '',
+    '  // ── Domain-warped diffusion for organic shapes ──',
+    '  float diff=warpedFBM(d*6.0+vec2(seed*7.0),t);',
+    '  float wisps=smoothstep(-0.15,0.45,diff)*smoothstep(1.3,0.25,nd);',
+    '',
+    '  // ── Dense core — Gaussian falloff ──',
+    '  float core=exp(-dist*dist/(radius*radius*0.12));',
+    '  core*=mix(1.0,0.3,growth); // Core fades as ink disperses',
+    '',
+    '  // ── Bright edge ring at diffusion boundary ──',
+    '  float edgeRing=exp(-pow((dist-radius*0.7)/(radius*0.1+0.005),2.0));',
+    '  edgeRing*=growth*(0.5+0.5*sin(angle*7.0+n1*3.0));',
+    '',
+    '  // ── Fine micro-tendrils ──',
+    '  float microA=angle+n1*0.4+n2*0.2;',
+    '  float micro=sin(microA*21.0+dist*55.0)*0.5+0.5;',
+    '  micro=pow(micro,4.0)*smoothstep(0.5,0.95,nd)*smoothstep(1.6,1.0,nd)*0.25;',
+    '',
+    '  // ── Combine layers ──',
+    '  float ink=core*0.55+wisps*0.2+tendrils*0.4+edgeRing*0.2+micro;',
+    '',
+    '  // Organic boundary with noise erosion',
+    '  float bNoise=snoise(d*18.0+seed*3.0)*0.25;',
+    '  float mask=smoothstep(radius*2.0+bNoise*radius,radius*0.15,dist);',
+    '  ink*=mask;',
+    '',
+    '  // Fade with time as ink fully disperses',
+    '  ink*=mix(1.0,0.25,smoothstep(3.0,25.0,dropTime));',
+    '',
+    '  return clamp(ink,0.0,1.0);',
+    '}',
+    '',
+    '// ── Water caustics ──',
+    'float caustics(vec2 uv, float t){',
+    '  float n1=snoise(uv*6.0+t*0.1);',
+    '  float n2=snoise(uv*11.0+vec2(3.0)+t*0.08);',
+    '  float n3=snoise(uv*17.0+vec2(7.0,2.0)+t*0.06);',
+    '  return pow(abs(n1+n2*0.5+n3*0.3),4.0)*0.06;',
+    '}',
+    '',
+    '// ── Expanding ripple ring ──',
+    'float ripple(vec2 uv, vec2 center, float dropTime){',
+    '  if(dropTime<0.0) return 0.0;',
+    '  float dist=length(uv-center);',
+    '  float rr=dropTime*0.28;',
+    '  float w=0.005+dropTime*0.002;',
+    '  float r=smoothstep(w,0.0,abs(dist-rr))*exp(-dropTime*0.45);',
+    '  float rr2=rr*0.6;',
+    '  r+=smoothstep(w*0.6,0.0,abs(dist-rr2))*exp(-dropTime*0.65)*0.35;',
+    '  return r;',
+    '}',
+    '',
+    'void main(){',
+    '  vec2 uv=(gl_FragCoord.xy-u_res*0.5)/min(u_res.x,u_res.y);',
+    '  float t=u_time*u_speed;',
+    '',
+    '  // ═══ DARK WATER SURFACE ═══',
+    '  vec3 water=vec3(0.018,0.016,0.014);',
+    '  float wn=snoise(uv*3.0+t*0.02)*0.006;',
+    '  water+=wn;',
+    '',
+    '  // Subtle caustic shimmer',
+    '  float caust=caustics(uv,t);',
+    '  water+=vec3(caust*0.4,caust*0.3,caust*0.2);',
+    '',
+    '  // ═══ INK DROPS ═══',
+    '  float totalInk=0.0;',
+    '  float totalRipple=0.0;',
+    '  float dropInterval=7.0;',
+    '',
+    '  for(int i=0;i<5;i++){',
+    '    float fi=float(i);',
+    '    float seed=fi*7.31+1.0;',
+    '    float dropDelay=fi*dropInterval+hash(vec2(seed,0.0))*3.0;',
+    '',
+    '    float cyclePeriod=55.0;',
+    '    float localTime=mod(t-dropDelay,cyclePeriod);',
+    '    float dropTime=localTime;',
+    '',
+    '    // Drop positions: spread across the canvas',
+    '    float cycle=floor((t-dropDelay)/cyclePeriod);',
+    '    vec2 dc=vec2(',
+    '      snoise(vec2(seed*1.1,cycle*0.7+seed))*0.55,',
+    '      snoise(vec2(seed*2.3,cycle*0.7+10.0+seed))*0.42',
+    '    );',
+    '',
+    '    float ink=inkDrop(uv,dc,dropTime,t,seed)*u_intensity;',
+    '    totalInk+=ink;',
+    '    totalRipple+=ripple(uv,dc,dropTime);',
+    '  }',
+    '',
+    '  // ═══ INK COLOR ═══',
+    '  float density=clamp(totalInk,0.0,1.0);',
+    '',
+    '  // Ink is dark sepia — color variation comes from density/translucency',
+    '  vec3 inkBase=vec3(0.06,0.04,0.025);',
+    '  // Dense areas are nearly black, thinner areas warm slightly',
+    '  vec3 inkColor=mix(inkBase,vec3(0.14,0.09,0.045),smoothstep(0.6,0.05,density));',
+    '',
+    '  // Subtle internal variation',
+    '  float shift=snoise(uv*5.0+t*0.01)*0.02;',
+    '  inkColor+=vec3(shift*0.3,shift*0.15,shift*0.05);',
+    '',
+    '  // ═══ COMPOSE ═══',
+    '  // Ink opacity: density maps directly to how opaque the ink is',
+    '  float alpha=smoothstep(0.0,0.015,density)*min(density*3.0,1.0);',
+    '  vec3 col=mix(water,inkColor,alpha*0.95);',
+    '',
+    '  // Warm amber edge glow — only at the outermost translucent boundary',
+    '  float edgeGlow=smoothstep(0.0,0.06,density)*smoothstep(0.15,0.03,density);',
+    '  col+=vec3(0.22,0.15,0.07)*edgeGlow*0.45;',
+    '',
+    '  // Ripple highlights',
+    '  col+=vec3(0.05,0.04,0.025)*clamp(totalRipple,0.0,1.0);',
+    '',
+    '  // Faint surface light',
+    '  float sl=pow(snoise(uv*2.0+t*0.012)*0.5+0.5,6.0)*0.01;',
+    '  col+=vec3(sl*0.5,sl*0.4,sl*0.3);',
+    '',
+    '  // ═══ VIGNETTE ═══',
+    '  float vig=1.0-smoothstep(0.35,1.5,length(uv*vec2(0.75,1.0)));',
+    '  col*=0.55+0.45*vig;',
+    '  col+=vec3(0.005,0.002,0.0)*(1.0-vig);',
+    '',
+    '  col=pow(max(col,0.0),vec3(0.97));',
+    '  gl_FragColor=vec4(clamp(col,0.0,1.0),1.0);',
+    '}',
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error(gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uSpeed = gl.getUniformLocation(prog, 'u_speed');
+  var uIntensity = gl.getUniformLocation(prog, 'u_intensity');
+  var speedVal = 0.15;
+  var intensityVal = 1.0 * _p;
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  function resize() {
+    var w = Math.round(canvas.clientWidth * dpr);
+    var h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  var running = true;
+
+  function render(now) {
+    if (!running) return;
+    resize();
+    gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uSpeed, speedVal);
+    gl.uniform1f(uIntensity, intensityVal);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) {
+      running = false;
+    } else {
+      running = true;
+      requestAnimationFrame(render);
+    }
+  });
+
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'speed': speedVal = e.data.value; break;
+        case 'intensity': intensityVal = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

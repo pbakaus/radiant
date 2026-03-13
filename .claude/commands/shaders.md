@@ -26,12 +26,23 @@ Brainstorm 50 shader concepts inspired by this celebrity. Each idea should:
 - Have a clear connection to the celebrity's vibe (but abstract/artistic, not literal)
 - Be feasible as a single self-contained HTML file with Canvas 2D or WebGL
 - Have a evocative name (2-3 words)
+- **Have high sharability potential** — think about designers and developers who would want to embed these on their own websites, apps, landing pages, or portfolios. The best shaders are ones people see and immediately think "I need this on my site." Prioritize visual impact, versatility as a background/accent, and broad aesthetic appeal over niche or overly literal concepts.
 
-Sort all 50 by their potential (best first). Present the full ranked list with one-line descriptions.
+Present the full unranked list of 50 with one-line descriptions. Do NOT rank them yet.
+
+### Step 2b: Rank the Top 5
+
+Launch a sub-agent (using the Agent tool) whose sole job is to critically evaluate and rank the 50 ideas from Step 2. The agent should:
+- Consider technical feasibility, visual impact, sharability potential, distinctiveness from each other, and connection to the celebrity's vibe
+- Eliminate ideas that are too similar to existing shaders already in `shaders.ts`
+- Pick the **top 5** that are most distinct from each other and would make the strongest set
+- Return the ranked top 5 with a brief justification for each pick
+
+Wait for the agent to complete and use its top 5 selection for the next step. This separation ensures genuine critical reasoning rather than just sorting the same list that was brainstormed.
 
 ### Step 3: Build Top 5
 
-Build the top 5 shader ideas as complete, working HTML files. For each:
+Build the top 5 shader ideas (as selected by the ranking agent) as complete, working HTML files. For each:
 
 1. Create the HTML file in `static/` following the existing naming convention (use the existing file number prefix from `shaders.ts` since filenames are already set — if there's only one existing shader for this celeb, create the new ones with temporary filenames like `static/proposal-CELEB-1.html` through `static/proposal-CELEB-5.html`)
 2. Follow the project conventions exactly:
@@ -45,6 +56,8 @@ Build the top 5 shader ideas as complete, working HTML files. For each:
    - Canvas fills viewport, handles resize
 3. The animation must be **visually stunning and technically sophisticated**. No simple particle systems or basic noise. Think: interesting algorithms, emergent behavior, mathematical beauty.
 4. Each shader should look DISTINCT from the others — don't make 5 variations of the same idea.
+5. **Design for sharability**: Each shader should work beautifully as a website background, hero section, loading screen, or decorative element. It should look intentional and polished — something a designer would proudly ship. Avoid anything that looks like a tech demo or science experiment. The goal is generative *art* that doubles as a *design asset*.
+6. **Performance is critical**: Every shader must run at a smooth 60fps on normal laptops (e.g. a MacBook Air or mid-range Windows laptop). Optimize aggressively — minimize per-pixel work, avoid expensive loops, use efficient algorithms, cap particle counts, and prefer GPU-friendly approaches (WebGL fragment shaders) over CPU-heavy Canvas 2D when possible. A beautiful shader that stutters is worse than a simpler one that runs buttery smooth.
 
 ### Step 4: Visual QA via Browser
 
@@ -73,6 +86,8 @@ Then tell the user:
 ## Important Notes
 
 - Build all 5 shaders in parallel using agents when possible
-- The quality bar is HIGH — these should be portfolio-worthy generative art pieces
+- The quality bar is HIGH — these should be portfolio-worthy generative art pieces that designers and developers would want to use on their own sites
+- Think "sharable design asset" not "tech demo" — every shader should make someone think "I want this on my website"
 - If the existing shader for this celebrity is already good, say so and ask if the user still wants alternatives
+- **60fps or bust** — every shader must perform smoothly on normal laptops. Profile mentally before building: if the algorithm requires expensive per-pixel computation, use WebGL. Cap particle counts, avoid nested loops, and keep draw calls minimal.
 - Warm amber accent palette (rgba(200, 149, 108, ...)) is the project default but celebrity shaders can use their own palette if it fits the vibe

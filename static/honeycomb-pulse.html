@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Honeycomb Pulse</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Honeycomb Pulse</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// Honeycomb Pulse — Hexagonal grid with golden wave interference
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var gl = canvas.getContext('webgl', { alpha: false, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  var vertSrc = [
+    'attribute vec2 a_pos;',
+    'void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }'
+  ].join('\n');
+
+  var fragSrc = [
+    'precision highp float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform float u_waveSpeed;',
+    'uniform float u_cellSize;',
+    '',
+    '// ── Constants ──',
+    'const float PI = 3.141592653589793;',
+    'const float SQRT3 = 1.7320508075688772;',
+    '',
+    '// ── Hex grid utilities ──',
+    '// Convert cartesian to axial hex coordinates',
+    '// Returns the hex center in cartesian space and the fractional offset within the cell',
+    '',
+    'vec4 hexCoord(vec2 p, float size) {',
+    '  // Scale input',
+    '  vec2 s = p / size;',
+    '',
+    '  // Two candidate hex grids offset by half a cell',
+    '  // Grid A',
+    '  vec2 a1 = vec2(1.0, 1.0 / SQRT3) * 2.0;',
+    '  vec2 a2 = vec2(1.0, -1.0 / SQRT3) * 2.0;',
+    '  vec2 sa = vec2(dot(s, vec2(0.5, 0.5 * SQRT3)), dot(s, vec2(0.5, -0.5 * SQRT3)));',
+    '  vec2 fa = fract(sa) - 0.5;',
+    '',
+    '  // Grid B (offset)',
+    '  vec2 sb = vec2(dot(s - vec2(1.0, 1.0 / SQRT3), vec2(0.5, 0.5 * SQRT3)),',
+    '               dot(s - vec2(1.0, 1.0 / SQRT3), vec2(0.5, -0.5 * SQRT3)));',
+    '  vec2 fb = fract(sb) - 0.5;',
+    '',
+    '  // Pick the cell whose center is closer',
+    '  float da = dot(fa, fa);',
+    '  float db = dot(fb, fb);',
+    '',
+    '  // Return: xy = hex center in world space, zw = fractional offset',
+    '  if (da < db) {',
+    '    vec2 id = floor(sa);',
+    '    vec2 center = (id.x * a1 + id.y * a2) * 0.5 * size;',
+    '    return vec4(center, fa);',
+    '  } else {',
+    '    vec2 id = floor(sb);',
+    '    vec2 offset = vec2(1.0, 1.0 / SQRT3) * size;',
+    '    vec2 center = (id.x * a1 + id.y * a2) * 0.5 * size + offset;',
+    '    return vec4(center, fb);',
+    '  }',
+    '}',
+    '',
+    '// Hexagonal SDF in fractional space',
+    'float hexDist(vec2 p) {',
+    '  p = abs(p);',
+    '  return max(p.x + p.y * 0.5773502691896258, p.y * 1.1547005383792515);',
+    '}',
+    '',
+    '// ── Wave sources ──',
+    '// 4 wave sources that drift slowly around the screen',
+    '// Using if-chains instead of array indexing (macOS ANGLE limitation)',
+    '',
+    'vec2 waveSource(int idx, float t) {',
+    '  vec2 pos;',
+    '  if (idx == 0) {',
+    '    pos = vec2(',
+    '      sin(t * 0.13 + 0.0) * 0.35 + cos(t * 0.07 + 2.1) * 0.15,',
+    '      cos(t * 0.11 + 1.0) * 0.3 + sin(t * 0.09 + 0.5) * 0.1',
+    '    );',
+    '  } else if (idx == 1) {',
+    '    pos = vec2(',
+    '      cos(t * 0.10 + 3.5) * 0.4 + sin(t * 0.06 + 1.2) * 0.1,',
+    '      sin(t * 0.14 + 2.0) * 0.35 + cos(t * 0.08 + 4.0) * 0.15',
+    '    );',
+    '  } else if (idx == 2) {',
+    '    pos = vec2(',
+    '      sin(t * 0.09 + 5.0) * 0.3 + cos(t * 0.12 + 0.7) * 0.2,',
+    '      cos(t * 0.08 + 3.0) * 0.4 + sin(t * 0.05 + 2.5) * 0.1',
+    '    );',
+    '  } else {',
+    '    pos = vec2(',
+    '      cos(t * 0.11 + 1.7) * 0.25 + sin(t * 0.15 + 4.2) * 0.2,',
+    '      sin(t * 0.07 + 5.5) * 0.3 + cos(t * 0.13 + 1.0) * 0.15',
+    '    );',
+    '  }',
+    '  return pos;',
+    '}',
+    '',
+    '// Compute wave value at a point from a single source',
+    'float waveVal(vec2 p, vec2 src, float t, float speed) {',
+    '  float d = length(p - src);',
+    '  float wave = sin(d * 8.0 - t * speed * 4.0) * 0.5 + 0.5;',
+    '  // Attenuation with distance — gentle falloff',
+    '  float atten = 1.0 / (1.0 + d * d * 2.5);',
+    '  return wave * atten;',
+    '}',
+    '',
+    'void main() {',
+    '  vec2 uv = gl_FragCoord.xy / u_res;',
+    '  float aspect = u_res.x / u_res.y;',
+    '',
+    '  // Centered coordinates, aspect corrected',
+    '  vec2 p = (uv - 0.5) * vec2(aspect, 1.0);',
+    '',
+    '  float t = u_time;',
+    '  float speed = u_waveSpeed;',
+    '  float cellSz = u_cellSize * 0.06;',
+    '',
+    '  // ── Compute hex cell ──',
+    '  vec4 hex = hexCoord(p, cellSz);',
+    '  vec2 hexCenter = hex.xy;',
+    '  vec2 hexFrac = hex.zw;',
+    '',
+    '  // Hex SDF for border',
+    '  float hd = hexDist(hexFrac);',
+    '',
+    '  // ── Accumulate waves at hex center ──',
+    '  // Unrolled loop for 4 wave sources (no array indexing)',
+    '  float totalWave = 0.0;',
+    '',
+    '  vec2 src0 = waveSource(0, t);',
+    '  vec2 src1 = waveSource(1, t);',
+    '  vec2 src2 = waveSource(2, t);',
+    '  vec2 src3 = waveSource(3, t);',
+    '',
+    '  totalWave += waveVal(hexCenter, src0, t, speed);',
+    '  totalWave += waveVal(hexCenter, src1, t, speed * 1.1);',
+    '  totalWave += waveVal(hexCenter, src2, t, speed * 0.9);',
+    '  totalWave += waveVal(hexCenter, src3, t, speed * 1.05);',
+    '',
+    '  // Normalize and shape the wave intensity',
+    '  float intensity = totalWave * 0.55;',
+    '  intensity = smoothstep(0.05, 0.85, intensity);',
+    '',
+    '  // Secondary slow pulsation per cell for organic feel',
+    '  float cellPulse = sin(hexCenter.x * 37.0 + hexCenter.y * 53.0 + t * 0.7) * 0.5 + 0.5;',
+    '  intensity = intensity * (0.85 + 0.15 * cellPulse);',
+    '',
+    '  // ── Color mapping ──',
+    '  // Dark: (0.02, 0.015, 0.01)',
+    '  // Dim:  (0.08, 0.06, 0.03)',
+    '  // Lit:  (0.78, 0.58, 0.24)',
+    '  // Bright: (1.0, 0.82, 0.55)',
+    '  // Hot core: (1.0, 0.92, 0.72)',
+    '',
+    '  vec3 dark = vec3(0.02, 0.015, 0.01);',
+    '  vec3 dim = vec3(0.08, 0.06, 0.03);',
+    '  vec3 lit = vec3(0.78, 0.58, 0.24);',
+    '  vec3 bright = vec3(1.0, 0.82, 0.55);',
+    '  vec3 hot = vec3(1.0, 0.92, 0.72);',
+    '',
+    '  // Multi-stop gradient based on intensity',
+    '  vec3 cellColor;',
+    '  if (intensity < 0.15) {',
+    '    cellColor = mix(dark, dim, intensity / 0.15);',
+    '  } else if (intensity < 0.5) {',
+    '    cellColor = mix(dim, lit, (intensity - 0.15) / 0.35);',
+    '  } else if (intensity < 0.8) {',
+    '    cellColor = mix(lit, bright, (intensity - 0.5) / 0.3);',
+    '  } else {',
+    '    cellColor = mix(bright, hot, (intensity - 0.8) / 0.2);',
+    '  }',
+    '',
+    '  // ── Hex border lines ──',
+    '  vec3 borderColor = vec3(0.15, 0.10, 0.06);',
+    '  // Sharper border that gets brighter when cell is lit',
+    '  float borderMask = smoothstep(0.47, 0.50, hd);',
+    '  vec3 litBorder = mix(borderColor, lit * 0.4, intensity * 0.5);',
+    '  cellColor = mix(cellColor, litBorder, borderMask);',
+    '',
+    '  // ── Inner glow / bloom per cell ──',
+    '  // Brighten the center of each cell based on intensity',
+    '  float centerGlow = 1.0 - smoothstep(0.0, 0.35, hd);',
+    '  centerGlow = centerGlow * centerGlow;',
+    '  cellColor += hot * centerGlow * intensity * intensity * 0.4;',
+    '',
+    '  // ── Subtle additive bloom for very bright cells ──',
+    '  float bloom = max(intensity - 0.6, 0.0) * 2.5;',
+    '  bloom = bloom * bloom;',
+    '  float bloomMask = 1.0 - smoothstep(0.0, 0.4, hd);',
+    '  cellColor += vec3(0.25, 0.18, 0.08) * bloom * bloomMask;',
+    '',
+    '  // ── Vignette ──',
+    '  float vig = length(uv - 0.5) * 1.4;',
+    '  vig = smoothstep(0.2, 1.5, vig);',
+    '  cellColor *= 1.0 - vig * 0.55;',
+    '',
+    '  // ── Subtle film grain for texture ──',
+    '  float grain = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233)) + t) * 43758.5453);',
+    '  cellColor += (grain - 0.5) * 0.015;',
+    '',
+    '  // Clamp',
+    '  cellColor = clamp(cellColor, 0.0, 1.0);',
+    '',
+    '  // Gamma for warmth',
+    '  cellColor = pow(cellColor, vec3(0.95));',
+    '',
+    '  gl_FragColor = vec4(cellColor, 1.0);',
+    '}',
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error(gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uWaveSpeed = gl.getUniformLocation(prog, 'u_waveSpeed');
+  var uCellSize = gl.getUniformLocation(prog, 'u_cellSize');
+  var waveSpeedVal = 0.5;
+  var cellSizeVal = 1.0;
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  function resize() {
+    var w = Math.round(canvas.clientWidth * dpr);
+    var h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  var isVisible = true;
+
+  function render(now) {
+    if (!isVisible) return;
+    resize();
+    gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uWaveSpeed, waveSpeedVal);
+    gl.uniform1f(uCellSize, cellSizeVal);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  document.addEventListener('visibilitychange', function () {
+    isVisible = !document.hidden;
+    if (isVisible) {
+      requestAnimationFrame(render);
+    }
+  });
+
+  window.addEventListener('message', function (e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'WAVE_SPEED': waveSpeedVal = e.data.value; break;
+        case 'CELL_SIZE': cellSizeVal = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

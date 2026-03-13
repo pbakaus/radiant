@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Liquid Gold</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Liquid Gold</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// 41 · Liquid Gold — Molten metal flow with surface tension and golden reflections
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var urlParams = new URLSearchParams(window.location.search);
+  var pixelScale = parseFloat(urlParams.get('p')) || 1;
+
+  var gl = canvas.getContext('webgl', { alpha: true, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  var vertSrc = [
+    'attribute vec2 a_pos;',
+    'void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }'
+  ].join('\n');
+
+  var fragSrc = [
+    'precision highp float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform float u_flowSpeed;',
+    'uniform float u_viscosity;',
+    '',
+    '#define PI 3.14159265359',
+    '',
+    '// ── Hash for pseudo-random ──',
+    'float hash(vec2 p) {',
+    '  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);',
+    '}',
+    '',
+    '// ── Smooth value noise ──',
+    'float noise(vec2 p) {',
+    '  vec2 i = floor(p);',
+    '  vec2 f = fract(p);',
+    '  f = f * f * (3.0 - 2.0 * f);',
+    '  float a = hash(i);',
+    '  float b = hash(i + vec2(1.0, 0.0));',
+    '  float c = hash(i + vec2(0.0, 1.0));',
+    '  float d = hash(i + vec2(1.0, 1.0));',
+    '  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);',
+    '}',
+    '',
+    '// ── FBM with viscosity-controlled octave decay ──',
+    'float fbm(vec2 p, float t, float visc) {',
+    '  float val = 0.0;',
+    '  float amp = 0.5;',
+    '  float freq = 1.0;',
+    '  float decay = 0.45 + visc * 0.2;',
+    '  for (int i = 0; i < 6; i++) {',
+    '    val += amp * noise(p * freq + t);',
+    '    freq *= 2.0 + visc * 0.3;',
+    '    amp *= decay;',
+    '    p += vec2(1.7, 9.2);',
+    '  }',
+    '  return val;',
+    '}',
+    '',
+    '// ── Domain warping for viscous flow ──',
+    'float warpedField(vec2 p, float t, float visc) {',
+    '  // First warp layer — large slow currents',
+    '  vec2 q = vec2(',
+    '    fbm(p + vec2(0.0, 0.0), t * 0.5, visc),',
+    '    fbm(p + vec2(5.2, 1.3), t * 0.5, visc)',
+    '  );',
+    '  ',
+    '  // Second warp — medium flow detail',
+    '  vec2 r = vec2(',
+    '    fbm(p + 3.0 * q + vec2(1.7, 9.2), t * 0.7, visc),',
+    '    fbm(p + 3.0 * q + vec2(8.3, 2.8), t * 0.7, visc)',
+    '  );',
+    '  ',
+    '  // Third warp — fine ripples and tension effects',
+    '  float f = fbm(p + 2.5 * r, t * 0.4, visc);',
+    '  ',
+    '  // Combine warp magnitudes for surface detail',
+    '  return f + length(q) * 0.4 + length(r) * 0.3;',
+    '}',
+    '',
+    '// ── Metaball-like surface bumps ──',
+    'float metaballs(vec2 p, float t) {',
+    '  float val = 0.0;',
+    '  for (int i = 0; i < 7; i++) {',
+    '    float fi = float(i);',
+    '    vec2 center = vec2(',
+    '      sin(t * 0.3 + fi * 2.1) * 0.6 + cos(t * 0.2 + fi * 1.3) * 0.3,',
+    '      cos(t * 0.25 + fi * 1.7) * 0.6 + sin(t * 0.15 + fi * 2.5) * 0.3',
+    '    );',
+    '    float radius = 0.15 + 0.1 * sin(t * 0.4 + fi * 3.0);',
+    '    float d = length(p - center);',
+    '    val += radius / (d + 0.05);',
+    '  }',
+    '  return val;',
+    '}',
+    '',
+    '// ── Surface normal estimation for lighting ──',
+    'vec3 getNormal(vec2 p, float t, float visc) {',
+    '  float eps = 0.005;',
+    '  float hC = warpedField(p, t, visc) + metaballs(p, t) * 0.08;',
+    '  float hR = warpedField(p + vec2(eps, 0.0), t, visc) + metaballs(p + vec2(eps, 0.0), t) * 0.08;',
+    '  float hU = warpedField(p + vec2(0.0, eps), t, visc) + metaballs(p + vec2(0.0, eps), t) * 0.08;',
+    '  ',
+    '  vec3 n = normalize(vec3(',
+    '    (hC - hR) / eps,',
+    '    (hC - hU) / eps,',
+    '    1.0',
+    '  ));',
+    '  return n;',
+    '}',
+    '',
+    '// ── Fresnel approximation ──',
+    'float fresnel(float cosTheta, float f0) {',
+    '  return f0 + (1.0 - f0) * pow(1.0 - cosTheta, 5.0);',
+    '}',
+    '',
+    'void main() {',
+    '  vec2 uv = (gl_FragCoord.xy - u_res * 0.5) / min(u_res.x, u_res.y);',
+    '  vec2 screenUv = gl_FragCoord.xy / u_res;',
+    '  float t = u_time * u_flowSpeed;',
+    '  float visc = u_viscosity;',
+    '  ',
+    '  // ── Compute the height field (domain-warped + metaballs) ──',
+    '  float field = warpedField(uv * 2.0, t, visc);',
+    '  float meta = metaballs(uv, t);',
+    '  ',
+    '  // Surface height — combines warped noise and metaball bulges',
+    '  float height = field + meta * 0.08;',
+    '  ',
+    '  // ── Surface normal for lighting ──',
+    '  vec3 normal = getNormal(uv * 2.0, t, visc);',
+    '  ',
+    '  // ── View and light setup ──',
+    '  vec3 viewDir = normalize(vec3(0.0, 0.0, 1.0));',
+    '  vec3 lightDir1 = normalize(vec3(0.4, 0.5, 0.9));',
+    '  vec3 lightDir2 = normalize(vec3(-0.6, -0.3, 0.7));',
+    '  vec3 lightDir3 = normalize(vec3(0.0, 0.8, 0.5));',
+    '  ',
+    '  // ── Gold material properties ──',
+    '  vec3 goldBase = vec3(0.83, 0.61, 0.22);',
+    '  vec3 goldBright = vec3(1.0, 0.84, 0.45);',
+    '  vec3 goldDeep = vec3(0.55, 0.35, 0.08);',
+    '  vec3 goldShadow = vec3(0.18, 0.10, 0.02);',
+    '  vec3 whiteHot = vec3(1.0, 0.97, 0.88);',
+    '  ',
+    '  // Gold F0 (metallic reflectance at normal incidence)',
+    '  float f0 = 0.8;',
+    '  ',
+    '  // ── Diffuse-like term (metallic surfaces color their reflections) ──',
+    '  float NdotL1 = max(dot(normal, lightDir1), 0.0);',
+    '  float NdotL2 = max(dot(normal, lightDir2), 0.0);',
+    '  float NdotL3 = max(dot(normal, lightDir3), 0.0);',
+    '  ',
+    '  // ── Specular highlights (Blinn-Phong for each light) ──',
+    '  vec3 halfVec1 = normalize(lightDir1 + viewDir);',
+    '  vec3 halfVec2 = normalize(lightDir2 + viewDir);',
+    '  vec3 halfVec3 = normalize(lightDir3 + viewDir);',
+    '  ',
+    '  float spec1 = pow(max(dot(normal, halfVec1), 0.0), 120.0);',
+    '  float spec2 = pow(max(dot(normal, halfVec2), 0.0), 80.0);',
+    '  float spec3 = pow(max(dot(normal, halfVec3), 0.0), 200.0);',
+    '  ',
+    '  // ── Fresnel ──',
+    '  float NdotV = max(dot(normal, viewDir), 0.0);',
+    '  float fres = fresnel(NdotV, f0);',
+    '  ',
+    '  // ── Build the color ──',
+    '  ',
+    '  // Base gold tone varies with the surface field',
+    '  float fieldNorm = smoothstep(0.3, 1.8, field);',
+    '  vec3 baseColor = mix(goldShadow, goldDeep, smoothstep(0.0, 0.3, fieldNorm));',
+    '  baseColor = mix(baseColor, goldBase, smoothstep(0.3, 0.6, fieldNorm));',
+    '  baseColor = mix(baseColor, goldBright, smoothstep(0.6, 0.9, fieldNorm));',
+    '  ',
+    '  // Metallic diffuse: gold-tinted light response',
+    '  vec3 diffuse = baseColor * (NdotL1 * 0.5 + NdotL2 * 0.3 + NdotL3 * 0.2);',
+    '  ',
+    '  // Metallic specular: gold-tinted highlights with white-hot peaks',
+    '  vec3 specColor1 = mix(goldBright, whiteHot, spec1);',
+    '  vec3 specColor2 = mix(goldBright, whiteHot, spec2 * 0.5);',
+    '  vec3 specColor3 = mix(goldBright, whiteHot, spec3);',
+    '  ',
+    '  vec3 specular = specColor1 * spec1 * 1.2',
+    '                + specColor2 * spec2 * 0.6',
+    '                + specColor3 * spec3 * 1.5;',
+    '  ',
+    '  // ── Fake environment reflection ──',
+    '  // Gradient-based: reflects a warm gradient from a fake environment',
+    '  vec2 reflUv = normal.xy * 0.5 + 0.5;',
+    '  vec3 envRefl = mix(',
+    '    vec3(0.12, 0.07, 0.02),',
+    '    vec3(0.45, 0.30, 0.12),',
+    '    reflUv.y',
+    '  );',
+    '  envRefl = mix(envRefl, vec3(0.7, 0.55, 0.25), smoothstep(0.6, 1.0, reflUv.y));',
+    '  ',
+    '  // ── Combine lighting ──',
+    '  vec3 col = diffuse * 0.4 + specular * fres + envRefl * fres * 0.5;',
+    '  ',
+    '  // ── Ambient: warm gold fill light ──',
+    '  col += baseColor * 0.12;',
+    '  ',
+    '  // ── Surface tension ripples: bright edges where metaballs meet ──',
+    '  float metaGrad = abs(meta - 3.5);',
+    '  float tensionLine = smoothstep(0.5, 0.0, metaGrad) * 0.3;',
+    '  col += goldBright * tensionLine;',
+    '  ',
+    '  // ── Subtle ripple highlights from fine noise ──',
+    '  float ripple = noise(uv * 15.0 + t * 2.0);',
+    '  ripple = ripple * ripple;',
+    '  float rippleHighlight = smoothstep(0.6, 0.9, ripple) * 0.08;',
+    '  col += whiteHot * rippleHighlight * fres;',
+    '  ',
+    '  // ── Radial vignette: dark edges where gold thins, bright center ──',
+    '  float dist = length(uv);',
+    '  float vignette = 1.0 - smoothstep(0.3, 1.2, dist);',
+    '  col *= 0.35 + vignette * 0.65;',
+    '  ',
+    '  // ── Central pooling glow ──',
+    '  float poolGlow = smoothstep(0.8, 0.0, dist) * 0.15;',
+    '  col += goldBright * poolGlow;',
+    '  ',
+    '  // ── Tone mapping (ACES-like) ──',
+    '  col = col * (2.51 * col + 0.03) / (col * (2.43 * col + 0.59) + 0.14);',
+    '  ',
+    '  // ── Slight warmth push ──',
+    '  col = pow(col, vec3(0.95, 1.0, 1.08));',
+    '  ',
+    '  gl_FragColor = vec4(col, 1.0);',
+    '}'
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error('Shader compile error:', gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error('Program link error:', gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uFlowSpeed = gl.getUniformLocation(prog, 'u_flowSpeed');
+  var uViscosity = gl.getUniformLocation(prog, 'u_viscosity');
+
+  var flowSpeedVal = 0.4;
+  var viscosityVal = 0.6;
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2) * pixelScale;
+
+  function resize() {
+    var w = Math.round(canvas.clientWidth * dpr);
+    var h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  function render(now) {
+    resize();
+    gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uFlowSpeed, flowSpeedVal);
+    gl.uniform1f(uViscosity, viscosityVal);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'FLOW_SPEED': flowSpeedVal = e.data.value; break;
+        case 'VISCOSITY': viscosityVal = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

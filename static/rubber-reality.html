@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rubber Reality</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Rubber Reality</div>
+<canvas id="canvas"></canvas>
+<script>
+(function() {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var _pad = parseFloat(new URLSearchParams(location.search).get('p')) || 1;
+
+  var gl = canvas.getContext('webgl', { alpha: true, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  // Enable derivatives for fwidth()
+  gl.getExtension('OES_standard_derivatives');
+
+  // ── Tunable parameters ──
+  var speedVal = 0.12;
+  var amplitudeVal = 1.0;
+
+  // ── Shaders ──
+  var vertSrc = [
+    'attribute vec2 a_pos;',
+    'void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }'
+  ].join('\n');
+
+  var fragSrc = [
+    '#extension GL_OES_standard_derivatives : enable',
+    'precision highp float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform vec2 u_mouse;',
+    'uniform float u_mouseActive;',
+    'uniform float u_speed;',
+    'uniform float u_amplitude;',
+    '',
+    '// --- Simplex noise ---',
+    'vec3 mod289(vec3 x) { return x - floor(x * (1.0/289.0)) * 289.0; }',
+    'vec2 mod289v2(vec2 x) { return x - floor(x * (1.0/289.0)) * 289.0; }',
+    'vec3 permute(vec3 x) { return mod289(((x * 34.0) + 1.0) * x); }',
+    '',
+    'float snoise(vec2 v) {',
+    '  const vec4 C = vec4(0.211324865405187, 0.366025403784439,',
+    '                     -0.577350269189626, 0.024390243902439);',
+    '  vec2 i = floor(v + dot(v, C.yy));',
+    '  vec2 x0 = v - i + dot(i, C.xx);',
+    '  vec2 i1 = (x0.x > x0.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);',
+    '  vec4 x12 = x0.xyxy + C.xxzz;',
+    '  x12.xy -= i1;',
+    '  i = mod289v2(i);',
+    '  vec3 p = permute(permute(i.y + vec3(0.0, i1.y, 1.0)) + i.x + vec3(0.0, i1.x, 1.0));',
+    '  vec3 m = max(0.5 - vec3(dot(x0,x0), dot(x12.xy,x12.xy), dot(x12.zw,x12.zw)), 0.0);',
+    '  m = m*m; m = m*m;',
+    '  vec3 x = 2.0 * fract(p * C.www) - 1.0;',
+    '  vec3 h = abs(x) - 0.5;',
+    '  vec3 ox = floor(x + 0.5);',
+    '  vec3 a0 = x - ox;',
+    '  m *= 1.79284291400159 - 0.85373472095314 * (a0*a0 + h*h);',
+    '  vec3 g;',
+    '  g.x = a0.x * x0.x + h.x * x0.y;',
+    '  g.yz = a0.yz * x12.xz + h.yz * x12.yw;',
+    '  return 130.0 * dot(m, g);',
+    '}',
+    '',
+    '// Smooth membrane height - very low frequency, gentle',
+    'float membrane(vec2 p, float t) {',
+    '  float val = 0.0;',
+    '  // Layer 1: very large, very slow breathing',
+    '  val += 0.6 * snoise(p * 0.8 + vec2(t * 0.08, t * 0.06));',
+    '  // Layer 2: medium scale, slow drift',
+    '  val += 0.25 * snoise(p * 1.6 + vec2(-t * 0.05, t * 0.09));',
+    '  // Layer 3: subtle texture (very gentle)',
+    '  val += 0.08 * snoise(p * 3.2 + vec2(t * 0.07, -t * 0.04));',
+    '  return val;',
+    '}',
+    '',
+    'void main() {',
+    '  vec2 p = (gl_FragCoord.xy - u_res * 0.5) / min(u_res.x, u_res.y);',
+    '',
+    '  float t = u_time * u_speed;',
+    '',
+    '  // ── Surface height - gentle, broad undulations ──',
+    '  float amp = u_amplitude;',
+    '  float ht = membrane(p, t) * amp;',
+    '',
+    '  // ── Mouse interaction: soft, broad depression ──',
+    '  if (u_mouseActive > 0.5) {',
+    '    vec2 mp = (u_mouse - u_res * 0.5) / min(u_res.x, u_res.y);',
+    '    float md = length(p - mp);',
+    '    // Broad gaussian push, no sharp ripple rings',
+    '    float ripple = exp(-md * md * 4.0) * 0.3 * amp;',
+    '    ht += ripple;',
+    '  }',
+    '',
+    '  // ── Compute surface normal via finite differences ──',
+    '  float eps = 0.01;',
+    '  float hx = membrane(p + vec2(eps, 0.0), t) * amp;',
+    '  float hy = membrane(p + vec2(0.0, eps), t) * amp;',
+    '  // Surface gradient for lighting (full strength for shading)',
+    '  vec3 normal = normalize(vec3((ht - hx) / eps, (ht - hy) / eps, 3.0));',
+    '',
+    '  // ── Grid coordinates ──',
+    '  float gridScale = 10.0;',
+    '  vec2 gp = p * gridScale;',
+    '',
+    '  // Very gentle deformation - displacement uses height directly, not normal',
+    '  // This avoids the derivative amplification that causes line crossings',
+    '  float dx = membrane(p + vec2(0.02, 0.0), t) - membrane(p - vec2(0.02, 0.0), t);',
+    '  float dy = membrane(p + vec2(0.0, 0.02), t) - membrane(p - vec2(0.0, 0.02), t);',
+    '  vec2 deformedGP = gp + vec2(dx, dy) * 1.8;',
+    '',
+    '  // ── Anti-aliased grid lines ──',
+    '  vec2 grid = abs(fract(deformedGP) - 0.5);',
+    '  float lw = 0.035;',
+    '  float aaW = fwidth(deformedGP.x) * 1.5;',
+    '',
+    '  float lineH = smoothstep(lw + aaW, lw - aaW, grid.x);',
+    '  float lineV = smoothstep(lw + aaW, lw - aaW, grid.y);',
+    '  float gridLine = max(lineH, lineV);',
+    '',
+    '  // Intersection nodes',
+    '  vec2 nearCenter = abs(fract(deformedGP) - 0.5);',
+    '  float nodeDist = length(nearCenter);',
+    '  float nodeDot = smoothstep(0.14 + aaW, 0.09, nodeDist);',
+    '',
+    '  // ── Lighting ──',
+    '  vec3 lightDir = normalize(vec3(0.3, 0.5, 1.0));',
+    '  float diffuse = max(dot(normal, lightDir), 0.0);',
+    '  float ambient = 0.3;',
+    '  float lighting = ambient + diffuse * 0.7;',
+    '',
+    '  // Specular - soft rubber sheen',
+    '  vec3 viewDir = vec3(0.0, 0.0, 1.0);',
+    '  vec3 halfDir = normalize(lightDir + viewDir);',
+    '  float spec = pow(max(dot(normal, halfDir), 0.0), 30.0);',
+    '',
+    '  // ── Color palette ──',
+    '  vec3 bgColor = vec3(0.035, 0.028, 0.022);',
+    '  vec3 amberDark  = vec3(0.35, 0.22, 0.08);',
+    '  vec3 amberMid   = vec3(0.70, 0.50, 0.20);',
+    '  vec3 amberBright = vec3(1.0, 0.82, 0.48);',
+    '',
+    '  // Height-based color mapping',
+    '  float htNorm = clamp(ht * 0.5 + 0.5, 0.0, 1.0);',
+    '  vec3 gridColor = mix(amberDark, amberMid, smoothstep(0.25, 0.5, htNorm));',
+    '  gridColor = mix(gridColor, amberBright, smoothstep(0.6, 0.85, htNorm));',
+    '  gridColor *= lighting;',
+    '  gridColor += vec3(1.0, 0.9, 0.65) * spec * 0.4;',
+    '',
+    '  // ── Compose ──',
+    '  // Subtle surface shading beneath the grid',
+    '  vec3 surfaceColor = bgColor + vec3(0.05, 0.03, 0.012) * (htNorm * lighting);',
+    '',
+    '  // Blend grid onto surface',
+    '  float gridAlpha = gridLine * (0.35 + 0.45 * lighting);',
+    '  vec3 col = mix(surfaceColor, gridColor, gridAlpha);',
+    '',
+    '  // Node highlights',
+    '  col = mix(col, amberBright * lighting * 1.1, nodeDot * 0.5);',
+    '',
+    '  // ── Warm subsurface glow in deformed areas ──',
+    '  float deformGlow = smoothstep(0.05, 0.5, abs(ht));',
+    '  col += vec3(0.4, 0.22, 0.06) * deformGlow * 0.15 * (1.0 - gridAlpha);',
+    '',
+    '  // ── Vignette ──',
+    '  float vig = 1.0 - smoothstep(0.35, 1.2, length(p));',
+    '  col *= 0.55 + 0.45 * vig;',
+    '',
+    '  // Warmth adjustment',
+    '  col = pow(col, vec3(0.95, 1.0, 1.08));',
+    '',
+    '  gl_FragColor = vec4(col, 1.0);',
+    '}',
+  ].join('\n');
+
+  // ── Compile & link ──
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error('Shader compile error:', gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error('Program link error:', gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  // Full-screen triangle
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  // Uniforms
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uMouse = gl.getUniformLocation(prog, 'u_mouse');
+  var uMouseActive = gl.getUniformLocation(prog, 'u_mouseActive');
+  var uSpeed = gl.getUniformLocation(prog, 'u_speed');
+  var uAmplitude = gl.getUniformLocation(prog, 'u_amplitude');
+
+  // ── Mouse/touch tracking ──
+  var mouseX = 0, mouseY = 0, mouseActive = 0;
+  var mouseDecay = 0;
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  function onPointerMove(e) {
+    var rect = canvas.getBoundingClientRect();
+    var x = e.clientX || 0;
+    var y = e.clientY || 0;
+    mouseX = (x - rect.left) * dpr;
+    mouseY = (rect.height - (y - rect.top)) * dpr; // flip Y for GL
+    mouseActive = 1;
+    mouseDecay = 3.0;
+  }
+
+  canvas.addEventListener('mousemove', onPointerMove);
+  canvas.addEventListener('touchmove', function(e) {
+    e.preventDefault();
+    if (e.touches.length > 0) {
+      var touch = e.touches[0];
+      onPointerMove({ clientX: touch.clientX, clientY: touch.clientY });
+    }
+  }, { passive: false });
+  canvas.addEventListener('touchstart', function(e) {
+    e.preventDefault();
+    if (e.touches.length > 0) {
+      var touch = e.touches[0];
+      onPointerMove({ clientX: touch.clientX, clientY: touch.clientY });
+    }
+  }, { passive: false });
+  canvas.addEventListener('mouseleave', function() {
+    mouseDecay = 0;
+    mouseActive = 0;
+  });
+
+  // ── Resize ──
+  function resize() {
+    var w = Math.round(canvas.clientWidth * dpr);
+    var h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  // ── Animation ──
+  var lastTime = 0;
+  var paused = false;
+
+  function render(now) {
+    if (paused) {
+      requestAnimationFrame(render);
+      return;
+    }
+
+    var dt = 0;
+    if (lastTime > 0) {
+      dt = Math.min((now - lastTime) * 0.001, 0.05);
+    }
+    lastTime = now;
+
+    // Fade mouse influence
+    if (mouseDecay > 0) {
+      mouseDecay -= dt;
+      if (mouseDecay <= 0) {
+        mouseDecay = 0;
+        mouseActive = 0;
+      }
+    }
+
+    resize();
+
+    gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform2f(uMouse, mouseX, mouseY);
+    gl.uniform1f(uMouseActive, mouseActive);
+    gl.uniform1f(uSpeed, speedVal);
+    gl.uniform1f(uAmplitude, amplitudeVal);
+
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  // ── Visibility pause ──
+  document.addEventListener('visibilitychange', function() {
+    paused = document.hidden;
+    if (!paused) lastTime = 0;
+  });
+
+  // ── PostMessage API ──
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'speed': speedVal = e.data.value; break;
+        case 'amplitude': amplitudeVal = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

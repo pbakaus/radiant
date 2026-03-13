@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Shatter</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Shatter</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// 23 · Shatter — Voronoi glass fracture with prismatic refraction
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var urlParams = new URLSearchParams(window.location.search);
+  var pixelScale = parseFloat(urlParams.get('p')) || 1;
+
+  var gl = canvas.getContext('webgl', { alpha: true, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  var SHATTER_SPEED = 1.0;
+  var NUM_CELLS = 24;
+
+  var vertSrc = [
+    'attribute vec2 a_pos;',
+    'void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }'
+  ].join('\n');
+
+  // Strategy: pass both base (rest) and displaced cell positions.
+  // 1. Use BASE positions to determine which shard each pixel belongs to (stable assignment)
+  // 2. Use DISPLACED positions to compute where that shard currently is
+  // 3. Transform pixel coords from base shard space to displaced shard space
+  // 4. Pixels outside the displaced shard boundary become gap (show backlight)
+
+  var fragSrc = [
+    'precision highp float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform vec2 u_base[24];',       // original rest positions
+    'uniform vec2 u_cells[24];',      // displaced cell centers
+    'uniform float u_crack;',
+    'uniform float u_glow;',
+    'uniform float u_gapAmount;',
+    'uniform float u_backlight;',
+    'uniform float u_flash;',
+    'uniform vec2 u_impact;',
+    'uniform float u_wholePhase;',
+    '',
+    '#define PI 3.14159265359',
+    '#define TAU 6.28318530718',
+    '#define N 24',
+    '',
+    'float hash1f(float n) {',
+    '  return fract(sin(n * 127.1) * 43758.5453);',
+    '}',
+    'float hash1(vec2 p) {',
+    '  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);',
+    '}',
+    'float noise(vec2 p) {',
+    '  vec2 i=floor(p); vec2 f=fract(p); f=f*f*(3.0-2.0*f);',
+    '  float a=hash1(i),b=hash1(i+vec2(1,0)),c=hash1(i+vec2(0,1)),d=hash1(i+vec2(1,1));',
+    '  return mix(mix(a,b,f.x),mix(c,d,f.x),f.y);',
+    '}',
+    '',
+    '// Voronoi using base positions (for shard assignment)',
+    'void voronoiBase(vec2 uv, out float d1, out float d2, out float id1, out float id2) {',
+    '  d1=1e10; d2=1e10; id1=0.0; id2=0.0;',
+    '  for (int i=0; i<N; i++) {',
+    '    float d = length(uv - u_base[i]);',
+    '    if (d < d1) { d2=d1; id2=id1; d1=d; id1=float(i); }',
+    '    else if (d < d2) { d2=d; id2=float(i); }',
+    '  }',
+    '}',
+    '',
+    '// Voronoi using displaced positions (for rendering)',
+    'void voronoiDisp(vec2 uv, out float d1, out float d2, out float id1, out float id2) {',
+    '  d1=1e10; d2=1e10; id1=0.0; id2=0.0;',
+    '  for (int i=0; i<N; i++) {',
+    '    float d = length(uv - u_cells[i]);',
+    '    if (d < d1) { d2=d1; id2=id1; d1=d; id1=float(i); }',
+    '    else if (d < d2) { d2=d; id2=float(i); }',
+    '  }',
+    '}',
+    '',
+    'vec3 spectral(float t) {',
+    '  t = fract(t);',
+    '  vec3 c;',
+    '  c.r = smoothstep(0.0,0.15,t)-smoothstep(0.35,0.5,t)+smoothstep(0.7,0.85,t);',
+    '  c.g = smoothstep(0.1,0.3,t)-smoothstep(0.55,0.75,t);',
+    '  c.b = smoothstep(0.25,0.45,t)-smoothstep(0.65,0.9,t);',
+    '  return mix(c, vec3(dot(c,vec3(0.33))), 0.2);',
+    '}',
+    '',
+    'void main() {',
+    '  vec2 uv = gl_FragCoord.xy / u_res;',
+    '  vec2 uvC = (gl_FragCoord.xy - u_res*0.5)/min(u_res.x,u_res.y);',
+    '  float t = u_time;',
+    '  float px = 1.0/min(u_res.x, u_res.y);',
+    '',
+    '  // Step 1: Find which shard this pixel belongs to using BASE positions',
+    '  float bd1, bd2, bid1, bid2;',
+    '  voronoiBase(uv, bd1, bd2, bid1, bid2);',
+    '',
+    '  // Step 2: Compute displaced voronoi for visual rendering',
+    '  float d1, d2, id1, id2;',
+    '  voronoiDisp(uv, d1, d2, id1, id2);',
+    '',
+    '  float cellBorder = d2 - d1;',
+    '  float eDist = cellBorder * 0.5;',
+    '',
+    '  // Step 3: Gap mask using displacement-aware approach',
+    '  // Transform pixel to displaced shard space:',
+    '  // The pixel was assigned to shard bid1 in base space.',
+    '  // That shard has moved from u_base[bid1] to u_cells[bid1].',
+    '  // Check if pixel is still "inside" the displaced shard.',
+    '  float gap = u_gapAmount;',
+    '  float gapMask = 1.0;',
+    '',
+    '  if (gap > 0.005) {',
+    '    // Find the displaced position of our base shard.',
+    '    // bid1 tells us which shard this pixel belongs to in base voronoi.',
+    '    vec2 dispCenter = vec2(0.0);',
+    '    for (int i = 0; i < N; i++) {',
+    '      if (float(i) == bid1) { dispCenter = u_cells[i]; }',
+    '    }',
+    '',
+    '    // Distance from pixel to its (displaced) shard center.',
+    '    float distToShard = length(uv - dispCenter);',
+    '',
+    '    // The "radius" of this shard in base voronoi is approximately',
+    '    // bd1 + (bd2-bd1)/2 = (bd1+bd2)/2 - the half-distance to boundary.',
+    '    // Actually bd1 is the distance to the nearest base center,',
+    '    // and (bd2-bd1)/2 is roughly the distance from the pixel to the',
+    '    // nearest base voronoi edge. So the shard extends about bd1 + eDist',
+    '    // from its center through this pixel direction.',
+    '    float shardRadius = bd1 + (bd2 - bd1) * 0.5;',
+    '',
+    '    // Inset shard boundary to create visible gaps.',
+    '    // Use absolute inset rather than proportional to keep small shards visible.',
+    '    float insetAmount = gap * 0.012;',
+    '    float insetRadius = max(shardRadius - insetAmount, px * 4.0);',
+    '    float aaWidth = px * 3.0;',
+    '    gapMask = 1.0 - smoothstep(insetRadius - aaWidth, insetRadius + aaWidth, distToShard);',
+    '  }',
+    '',
+    '  // Per-shard hashes (use displaced voronoi id for rendering)',
+    '  float h1 = hash1f(id1*17.31+3.7);',
+    '  float h2 = hash1f(id1*31.17+7.3);',
+    '  float h3 = hash1f(id1*43.91+11.1);',
+    '  float h4 = hash1f(id1*59.37+2.9);',
+    '  float zDepth = 0.3 + h3*0.7;',
+    '',
+    '  float crack = u_crack;',
+    '  float glow = u_glow;',
+    '  float edgeW = px * 2.5;',
+    '',
+    '  // ── Backlight (through gaps) ──',
+    '  float blD = length(uv - u_impact);',
+    '  vec3 backlight = vec3(0.85,0.6,0.3)*exp(-blD*blD*2.0)*u_backlight*0.8',
+    '                 + vec3(0.25,0.15,0.06)*u_backlight*0.4;',
+    '',
+    '  // ── Glass base color ──',
+    '  vec3 col = vec3(0.06, 0.058, 0.055);',
+    '  col += vec3(h1*0.05, h1*0.035, h1*0.02);',
+    '  col += vec3(0.008) * noise(uv*12.0+t*0.02);',
+    '  col += vec3(0.03,0.025,0.018) * zDepth * gap;',
+    '',
+    '  // ── Specular ──',
+    '  vec2 lp = vec2(sin(t*0.2)*0.3, cos(t*0.17)*0.25);',
+    '  float spec = exp(-dot(uvC-lp,uvC-lp)*8.0)*0.06;',
+    '  vec2 shLO = vec2(h1-0.5,h2-0.5)*gap*0.2;',
+    '  float shSpec = exp(-dot(uvC-lp+shLO,uvC-lp+shLO)*5.0)*(0.06+gap*0.35);',
+    '  float tiltSpec = 0.0;',
+    '  if (gap > 0.05) {',
+    '    float tA = h3*TAU+gap*2.0+t*0.3;',
+    '    vec2 tD = vec2(cos(tA),sin(tA));',
+    '    tiltSpec = pow(max(dot(normalize(uvC+vec2(0.001)),tD),0.0),20.0)*gap*zDepth*0.35;',
+    '  }',
+    '  col += vec3(1.0,0.93,0.78)*(spec+shSpec+tiltSpec);',
+    '',
+    '  // ── Prismatic refraction at edges ──',
+    '  if (crack > 0.0) {',
+    '    float eProx = 1.0 - smoothstep(0.0, edgeW*14.0, eDist);',
+    '    float pPhase = h1*TAU+t*0.5+eDist*80.0;',
+    '    col += spectral(pPhase)*eProx*crack*0.2;',
+    '  }',
+    '',
+    '  // ── Surface reflections (whole phase) ──',
+    '  if (u_wholePhase > 0.5) {',
+    '    float breathe = 0.12+0.06*sin(t*0.8+id1*0.3);',
+    '    float faintEdge = 1.0-smoothstep(0.0,edgeW*4.0,eDist);',
+    '    col += vec3(0.78,0.58,0.42)*faintEdge*breathe;',
+    '    float hlD = length(uv-vec2(0.35+0.2*sin(t*0.25),0.3+0.15*cos(t*0.2)));',
+    '    col += vec3(0.78,0.58,0.42)*exp(-hlD*hlD*4.0)*0.04;',
+    '  }',
+    '',
+    '  // ── Crack glow ──',
+    '  if (crack > 0.0) {',
+    '    float crW = edgeW*(1.5+crack*2.0);',
+    '    float crLine = (1.0-smoothstep(0.0,crW,eDist))*crack;',
+    '    float core = (1.0-smoothstep(0.0,edgeW*0.7,eDist))*crack;',
+    '    vec3 crCol = mix(vec3(0.9,0.6,0.35),vec3(1.0,0.92,0.75),core)*glow*crLine;',
+    '    float bloom = (1.0-smoothstep(0.0,edgeW*18.0,eDist))*crack*glow;',
+    '    crCol += vec3(1.0,0.7,0.3)*bloom*0.12;',
+    '    col += crCol;',
+    '  }',
+    '',
+    '  // Gap: reveal backlight where gapMask < 1',
+    '  col = mix(backlight, col, gapMask);',
+    '',
+    '  // Impact flash',
+    '  if (u_flash > 0.01) {',
+    '    float fD=length(uv-u_impact);',
+    '    float fR=0.05+(1.0-u_flash)*0.6;',
+    '    col += vec3(1.0,0.94,0.8)*exp(-fD*fD/(fR*fR*0.3))*u_flash;',
+    '  }',
+    '',
+    '  // Vignette',
+    '  col *= 1.0-dot(uvC,uvC)*0.35;',
+    '',
+    '  // Tone map',
+    '  col = col/(1.0+col*0.3);',
+    '  col = pow(max(col,vec3(0.0)),vec3(0.95,0.97,1.02));',
+    '',
+    '  gl_FragColor = vec4(col, 1.0);',
+    '}'
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error('Shader compile error:', gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error('Program link error:', gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,3,-1,-1,3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uCrack = gl.getUniformLocation(prog, 'u_crack');
+  var uGlow = gl.getUniformLocation(prog, 'u_glow');
+  var uGapAmount = gl.getUniformLocation(prog, 'u_gapAmount');
+  var uBacklight = gl.getUniformLocation(prog, 'u_backlight');
+  var uFlash = gl.getUniformLocation(prog, 'u_flash');
+  var uImpact = gl.getUniformLocation(prog, 'u_impact');
+  var uWholePhase = gl.getUniformLocation(prog, 'u_wholePhase');
+
+  // Get uniform locations for each cell (base + displaced)
+  var uBase = [];
+  var uCells = [];
+  for (var i = 0; i < NUM_CELLS; i++) {
+    uBase.push(gl.getUniformLocation(prog, 'u_base[' + i + ']'));
+    uCells.push(gl.getUniformLocation(prog, 'u_cells[' + i + ']'));
+  }
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2) * pixelScale;
+
+  function resize() {
+    var w = Math.round(canvas.clientWidth * dpr);
+    var h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w; canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  // ── Pseudo-random ──
+  function seededHash2(a, b) {
+    var x = Math.sin(a * 127.1 + b * 311.7) * 43758.5453;
+    var y = Math.sin(a * 269.5 + b * 183.3) * 43758.5453;
+    return [x - Math.floor(x), y - Math.floor(y)];
+  }
+  function seededHash1(n) {
+    var v = Math.sin(n * 127.1) * 43758.5453;
+    return v - Math.floor(v);
+  }
+
+  // ── Cell generation ──
+  var cellBasePositions = [];  // original (rest) positions
+  var cellPositions = [];      // current displaced positions
+  var cellExplosionDirs = [];
+  var cellExplosionForces = [];
+  var cellCrackDelays = [];
+  var cellExplodeDelays = [];
+  var cellFloatPhases = [];
+
+  var nextCellBasePositions = []; // for morph transition
+
+  function generateCells(seed) {
+    var cells = [];
+    for (var i = 0; i < NUM_CELLS; i++) {
+      var h = seededHash2(i * 7.31 + seed * 13.17, i * 3.73 + seed * 5.91);
+      cells.push([h[0], h[1]]);
+    }
+    return cells;
+  }
+
+  function setupExplosion(baseCells, impact) {
+    cellExplosionDirs = [];
+    cellExplosionForces = [];
+    cellCrackDelays = [];
+    cellExplodeDelays = [];
+    cellFloatPhases = [];
+    for (var i = 0; i < NUM_CELLS; i++) {
+      var cx = baseCells[i][0], cy = baseCells[i][1];
+      var dx = cx - impact[0], dy = cy - impact[1];
+      var dist = Math.sqrt(dx * dx + dy * dy);
+      var normDist = Math.min(dist / 1.0, 1.0);
+
+      var h1 = seededHash1(i * 17.31 + 3.7);
+      var h2 = seededHash1(i * 31.17 + 7.3);
+
+      var angle = Math.atan2(dy, dx) + (h1 - 0.5) * 0.8;
+      var force = (0.06 + h2 * 0.12) * (1.2 - normDist * 0.3);
+
+      cellExplosionDirs.push([Math.cos(angle), Math.sin(angle)]);
+      cellExplosionForces.push(force);
+      cellCrackDelays.push(normDist * 0.7);
+      cellExplodeDelays.push(normDist * 0.35);
+      cellFloatPhases.push(h1 * Math.PI * 2);
+    }
+  }
+
+  // ── Easing ──
+  function easeOutQuint(t) { var t1 = t - 1; return t1*t1*t1*t1*t1 + 1; }
+  function easeOutExpo(t) { return t >= 1 ? 1 : 1 - Math.pow(2, -10 * t); }
+  function easeInOutCubic(t) { return t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2,3)/2; }
+  function easeInOutQuart(t) { return t < 0.5 ? 8*t*t*t*t : 1 - Math.pow(-2*t+2,4)/2; }
+  function easeOutCubic(t) { return 1 - Math.pow(1-t, 3); }
+
+  // ── State machine ──
+  var cycleCount = 0;
+  var phase = 0; // 0=whole, 1=crack, 2=explode, 3=float, 4=reform
+  var phaseTime = 0;
+
+  var WHOLE_DUR = 1.8, CRACK_DUR = 0.9, EXPLODE_DUR = 2.2, FLOAT_DUR = 1.5, REFORM_DUR = 2.5;
+  var phaseDurations = [WHOLE_DUR, CRACK_DUR, EXPLODE_DUR, FLOAT_DUR, REFORM_DUR];
+
+  var impactX = 0.4 + Math.random() * 0.2;
+  var impactY = 0.4 + Math.random() * 0.2;
+
+  // currentBase tracks what the shader sees as u_base -- these change
+  // during reform morph to smoothly transition between patterns
+  var currentBase = [];
+
+  function startCycle() {
+    cellBasePositions = generateCells(cycleCount);
+    nextCellBasePositions = generateCells(cycleCount + 1);
+    setupExplosion(cellBasePositions, [impactX, impactY]);
+    cellPositions = cellBasePositions.map(function(c) { return [c[0], c[1]]; });
+    currentBase = cellBasePositions.map(function(c) { return [c[0], c[1]]; });
+  }
+
+  function newImpact() {
+    impactX = 0.3 + Math.random() * 0.4;
+    impactY = 0.3 + Math.random() * 0.4;
+  }
+
+  function advancePhase() {
+    phase++;
+    if (phase > 4) {
+      phase = 0;
+      cycleCount++;
+      newImpact();
+      startCycle();
+    }
+    phaseTime = 0;
+  }
+
+  startCycle();
+
+  var lastTime = 0;
+
+  function render(now) {
+    resize();
+    if (!lastTime) lastTime = now;
+    var dt = Math.min((now - lastTime) / 1000, 0.05);
+    lastTime = now;
+    if (prefersReduced) dt *= 0.15;
+
+    var speedMult = 1.0 / Math.max(SHATTER_SPEED, 0.1);
+    phaseTime += dt;
+    var dur = phaseDurations[phase] * speedMult;
+    if (phaseTime >= dur) {
+      advancePhase();
+      dur = phaseDurations[phase] * speedMult;
+    }
+
+    var pt = Math.min(phaseTime / dur, 1.0);
+    var time = now * 0.001;
+
+    // ── Compute per-cell displaced positions ──
+    var globalCrack = 0, globalGlow = 0, globalGap = 0;
+    var globalBacklight = 0, globalFlash = 0, globalWhole = 0;
+
+    if (phase === 0) {
+      globalWhole = 1;
+      for (var i = 0; i < NUM_CELLS; i++) {
+        cellPositions[i][0] = cellBasePositions[i][0];
+        cellPositions[i][1] = cellBasePositions[i][1];
+        currentBase[i][0] = cellBasePositions[i][0];
+        currentBase[i][1] = cellBasePositions[i][1];
+      }
+    } else if (phase === 1) {
+      // Cracking
+      globalCrack = easeOutExpo(pt);
+      globalGlow = easeOutCubic(pt);
+      globalBacklight = easeOutCubic(pt) * 0.7;
+      globalFlash = (1 - Math.min(pt / 0.4, 1)) * 0.6;
+      for (var i = 0; i < NUM_CELLS; i++) {
+        cellPositions[i][0] = cellBasePositions[i][0];
+        cellPositions[i][1] = cellBasePositions[i][1];
+        currentBase[i][0] = cellBasePositions[i][0];
+        currentBase[i][1] = cellBasePositions[i][1];
+      }
+    } else if (phase === 2) {
+      // Exploding
+      globalCrack = 1;
+      globalGlow = 1 - pt * 0.3;
+      globalBacklight = 0.8 + pt * 0.2;
+      for (var i = 0; i < NUM_CELLS; i++) {
+        var delT = Math.max(0, pt - cellExplodeDelays[i]) / (1 - cellExplodeDelays[i] + 0.01);
+        delT = Math.min(delT, 1);
+        var disp = easeOutQuint(delT);
+        globalGap = Math.max(globalGap, disp);
+        var ox = cellExplosionDirs[i][0] * cellExplosionForces[i] * disp;
+        var oy = cellExplosionDirs[i][1] * cellExplosionForces[i] * disp;
+        if (disp > 0.05) {
+          ox += Math.sin(time * 1.2 + cellFloatPhases[i]) * 0.02 * disp;
+          oy += Math.cos(time * 0.9 + cellFloatPhases[i] * 1.3) * 0.015 * disp;
+        }
+        cellPositions[i][0] = cellBasePositions[i][0] + ox;
+        cellPositions[i][1] = cellBasePositions[i][1] + oy;
+        currentBase[i][0] = cellBasePositions[i][0];
+        currentBase[i][1] = cellBasePositions[i][1];
+      }
+    } else if (phase === 3) {
+      // Floating
+      globalCrack = 1;
+      globalGlow = 0.7 - pt * 0.3;
+      globalBacklight = 1 - pt * 0.3;
+      globalGap = 1;
+      for (var i = 0; i < NUM_CELLS; i++) {
+        var ox = cellExplosionDirs[i][0] * cellExplosionForces[i];
+        var oy = cellExplosionDirs[i][1] * cellExplosionForces[i];
+        ox += Math.sin(time * 1.2 + cellFloatPhases[i]) * 0.025;
+        oy += Math.cos(time * 0.9 + cellFloatPhases[i] * 1.3) * 0.018;
+        cellPositions[i][0] = cellBasePositions[i][0] + ox;
+        cellPositions[i][1] = cellBasePositions[i][1] + oy;
+        currentBase[i][0] = cellBasePositions[i][0];
+        currentBase[i][1] = cellBasePositions[i][1];
+      }
+    } else {
+      // Reforming
+      var reformT = easeInOutQuart(pt);
+      globalCrack = 1 - easeInOutCubic(pt);
+      globalGlow = (1 - easeInOutCubic(pt)) * 0.6;
+      globalBacklight = (1 - easeInOutCubic(pt)) * 0.35;
+      globalGap = 1 - reformT;
+
+      // Morph blend: interpolate toward next pattern's positions
+      var morphBlend = Math.max(0, Math.min(1, (pt - 0.3) / 0.65));
+      morphBlend = morphBlend * morphBlend * (3 - 2 * morphBlend);
+
+      for (var i = 0; i < NUM_CELLS; i++) {
+        var displacedX = cellBasePositions[i][0] + cellExplosionDirs[i][0] * cellExplosionForces[i] * (1 - reformT);
+        var displacedY = cellBasePositions[i][1] + cellExplosionDirs[i][1] * cellExplosionForces[i] * (1 - reformT);
+        displacedX += Math.sin(time * 1.2 + cellFloatPhases[i]) * 0.025 * (1 - reformT);
+        displacedY += Math.cos(time * 0.9 + cellFloatPhases[i] * 1.3) * 0.018 * (1 - reformT);
+
+        var nextX = nextCellBasePositions[i][0];
+        var nextY = nextCellBasePositions[i][1];
+        cellPositions[i][0] = displacedX * (1 - morphBlend) + nextX * morphBlend;
+        cellPositions[i][1] = displacedY * (1 - morphBlend) + nextY * morphBlend;
+        // Base also morphs so gap mask stays consistent
+        currentBase[i][0] = cellBasePositions[i][0] * (1 - morphBlend) + nextX * morphBlend;
+        currentBase[i][1] = cellBasePositions[i][1] * (1 - morphBlend) + nextY * morphBlend;
+      }
+    }
+
+    // ── Upload uniforms ──
+    gl.uniform1f(uTime, time);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uCrack, globalCrack);
+    gl.uniform1f(uGlow, globalGlow);
+    gl.uniform1f(uGapAmount, globalGap);
+    gl.uniform1f(uBacklight, globalBacklight);
+    gl.uniform1f(uFlash, globalFlash);
+    gl.uniform2f(uImpact, impactX, impactY);
+    gl.uniform1f(uWholePhase, globalWhole);
+
+    for (var i = 0; i < NUM_CELLS; i++) {
+      gl.uniform2f(uBase[i], currentBase[i][0], currentBase[i][1]);
+      gl.uniform2f(uCells[i], cellPositions[i][0], cellPositions[i][1]);
+    }
+
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    if (running) rafId = requestAnimationFrame(render);
+  }
+
+  var running = true;
+  var rafId = requestAnimationFrame(render);
+
+  // Pause when not visible
+  document.addEventListener('visibilitychange', function() {
+    if (document.hidden) {
+      running = false;
+      if (rafId) cancelAnimationFrame(rafId);
+    } else {
+      running = true;
+      lastTime = 0;
+      rafId = requestAnimationFrame(render);
+    }
+  });
+
+  // IntersectionObserver for iframe embedding
+  if (typeof IntersectionObserver !== 'undefined') {
+    var observer = new IntersectionObserver(function(entries) {
+      var visible = entries[0].isIntersecting;
+      if (!visible && running) {
+        running = false;
+        if (rafId) cancelAnimationFrame(rafId);
+      } else if (visible && !running && !document.hidden) {
+        running = true;
+        lastTime = 0;
+        rafId = requestAnimationFrame(render);
+      }
+    }, { threshold: 0.01 });
+    observer.observe(canvas);
+  }
+
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'param') {
+      if (e.data.name === 'SHATTER_SPEED') SHATTER_SPEED = e.data.value;
+    }
+  });
+})();
+</script>
+</body>
+</html>

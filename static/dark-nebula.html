@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dark Nebula</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Dark Nebula</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// 42 · Dark Nebula — Cosmic dust clouds with hidden star formation
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var urlParams = new URLSearchParams(window.location.search);
+  var pixelScale = parseFloat(urlParams.get('p')) || 1;
+
+  var gl = canvas.getContext('webgl', { alpha: true, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  var vertSrc = [
+    'attribute vec2 a_pos;',
+    'void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }'
+  ].join('\n');
+
+  var fragSrc = [
+    'precision highp float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform float u_dustDensity;',
+    'uniform float u_starBrightness;',
+    '',
+    '#define PI 3.14159265359',
+    '#define NUM_STARS 5',
+    '#define NUM_BG_STARS 40',
+    '',
+    '// ── Hash functions ──',
+    'float hash(vec2 p) {',
+    '  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);',
+    '}',
+    '',
+    'float hash1(float n) {',
+    '  return fract(sin(n) * 43758.5453123);',
+    '}',
+    '',
+    '// ── Smooth value noise ──',
+    'float noise(vec2 p) {',
+    '  vec2 i = floor(p);',
+    '  vec2 f = fract(p);',
+    '  f = f * f * (3.0 - 2.0 * f);',
+    '  float a = hash(i);',
+    '  float b = hash(i + vec2(1.0, 0.0));',
+    '  float c = hash(i + vec2(0.0, 1.0));',
+    '  float d = hash(i + vec2(1.0, 1.0));',
+    '  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);',
+    '}',
+    '',
+    '// ── FBM with many octaves for fine dust detail ──',
+    'float fbm(vec2 p, float t, int octaves) {',
+    '  float val = 0.0;',
+    '  float amp = 0.5;',
+    '  float freq = 1.0;',
+    '  for (int i = 0; i < 8; i++) {',
+    '    if (i >= octaves) break;',
+    '    val += amp * noise(p * freq + t * 0.15);',
+    '    freq *= 2.05;',
+    '    amp *= 0.5;',
+    '    p += vec2(1.7, 9.2);',
+    '  }',
+    '  return val;',
+    '}',
+    '',
+    '// ── Domain-warped dust field ──',
+    '// Creates swirling, layered dust clouds with parallax depth',
+    'float dustField(vec2 p, float t, float layer) {',
+    '  // Offset each layer for parallax',
+    '  float layerOffset = layer * 3.7;',
+    '  float layerSpeed = 0.08 + layer * 0.03;',
+    '  vec2 drift = vec2(t * layerSpeed, t * layerSpeed * 0.6);',
+    '  vec2 pp = p + drift + vec2(layerOffset, layerOffset * 0.7);',
+    '',
+    '  // First domain warp',
+    '  vec2 q = vec2(',
+    '    fbm(pp + vec2(0.0, 0.0), t * 0.3, 6),',
+    '    fbm(pp + vec2(5.2, 1.3), t * 0.3, 6)',
+    '  );',
+    '',
+    '  // Second domain warp — finer turbulence',
+    '  vec2 r = vec2(',
+    '    fbm(pp + 3.0 * q + vec2(1.7, 9.2), t * 0.4, 7),',
+    '    fbm(pp + 3.0 * q + vec2(8.3, 2.8), t * 0.4, 7)',
+    '  );',
+    '',
+    '  // Final field with high-octave detail',
+    '  float f = fbm(pp + 2.5 * r, t * 0.25, 8);',
+    '',
+    '  // Combine warps for cloud structure',
+    '  float density = f * 0.6 + length(q) * 0.25 + length(r) * 0.15;',
+    '',
+    '  return density;',
+    '}',
+    '',
+    '// ── Star positions (deterministic from index) ──',
+    'vec2 starPos(int idx) {',
+    '  float fi = float(idx);',
+    '  return vec2(',
+    '    hash1(fi * 13.37 + 1.0) * 1.4 - 0.7,',
+    '    hash1(fi * 7.91 + 2.0) * 1.4 - 0.7',
+    '  );',
+    '}',
+    '',
+    '// ── Star glow — pulsing forming stars behind dust ──',
+    'float starGlow(vec2 uv, vec2 center, float t, float idx) {',
+    '  float d = length(uv - center);',
+    '',
+    '  // Each star has its own slow pulse cycle',
+    '  float phase = hash1(idx * 5.13 + 3.0) * PI * 2.0;',
+    '  float pulseSpeed = 0.15 + hash1(idx * 3.77 + 4.0) * 0.15;',
+    '  float pulse = sin(t * pulseSpeed + phase);',
+    '',
+    '  // Occasional dramatic brightening',
+    '  float flare = pow(max(pulse, 0.0), 6.0);',
+    '',
+    '  // Core glow',
+    '  float baseRadius = 0.02 + hash1(idx * 2.31 + 5.0) * 0.015;',
+    '  float core = smoothstep(baseRadius, 0.0, d);',
+    '',
+    '  // Wide halo that diffuses through dust',
+    '  float haloRadius = 0.15 + flare * 0.2;',
+    '  float halo = exp(-d * d / (haloRadius * haloRadius * 0.05));',
+    '',
+    '  // Medium glow ring',
+    '  float midGlow = exp(-d * d / (0.01 + flare * 0.02));',
+    '',
+    '  float brightness = 0.4 + pulse * 0.3 + flare * 0.8;',
+    '',
+    '  return (core * 2.0 + midGlow * 0.6 + halo * 0.35) * brightness;',
+    '}',
+    '',
+    '// ── Background stars — tiny twinkling points ──',
+    'float bgStars(vec2 uv, float t) {',
+    '  float stars = 0.0;',
+    '  for (int i = 0; i < NUM_BG_STARS; i++) {',
+    '    float fi = float(i);',
+    '    vec2 pos = vec2(',
+    '      hash1(fi * 17.31 + 100.0) * 2.4 - 1.2,',
+    '      hash1(fi * 11.97 + 200.0) * 2.4 - 1.2',
+    '    );',
+    '    float d = length(uv - pos);',
+    '    float twinkle = 0.4 + 0.6 * sin(t * (0.5 + hash1(fi * 3.3 + 300.0) * 1.5) + fi * 2.7);',
+    '    twinkle = max(twinkle, 0.0);',
+    '    float size = 0.001 + hash1(fi * 5.5 + 400.0) * 0.002;',
+    '    stars += smoothstep(size, 0.0, d) * twinkle * 0.6;',
+    '  }',
+    '  return stars;',
+    '}',
+    '',
+    'void main() {',
+    '  vec2 uv = (gl_FragCoord.xy - u_res * 0.5) / min(u_res.x, u_res.y);',
+    '  float t = u_time;',
+    '',
+    '  // ── Deep space background — very dark ──',
+    '  vec3 col = vec3(0.012, 0.010, 0.015);',
+    '',
+    '  // ── Background stars (tiny, twinkling, visible in gaps) ──',
+    '  float bgStarField = bgStars(uv, t);',
+    '  vec3 bgStarColor = vec3(0.85, 0.80, 0.70);',
+    '  col += bgStarColor * bgStarField;',
+    '',
+    '  // ── Three dust layers with parallax depth ──',
+    '  // Back layer — diffuse, broad structures',
+    '  float dust0 = dustField(uv * 1.5, t, 0.0);',
+    '  // Mid layer — primary dust clouds',
+    '  float dust1 = dustField(uv * 2.0, t, 1.0);',
+    '  // Front layer — fine wisps close to viewer',
+    '  float dust2 = dustField(uv * 2.8, t, 2.0);',
+    '',
+    '  // Shape dust into cloud-like structures (not uniform)',
+    '  float shaped0 = smoothstep(0.3, 0.8, dust0) * 0.4;',
+    '  float shaped1 = smoothstep(0.25, 0.75, dust1) * 0.7;',
+    '  float shaped2 = smoothstep(0.35, 0.85, dust2) * 0.3;',
+    '',
+    '  // Scale by density parameter',
+    '  float totalDust = (shaped0 + shaped1 + shaped2) * u_dustDensity;',
+    '  totalDust = clamp(totalDust, 0.0, 1.0);',
+    '',
+    '  // ── Dust color — warm amber/brown tones ──',
+    '  vec3 dustColorDeep = vec3(0.06, 0.04, 0.02);',
+    '  vec3 dustColorMid = vec3(0.12, 0.08, 0.04);',
+    '  vec3 dustColorBright = vec3(0.20, 0.14, 0.08);',
+    '',
+    '  // Vary dust color based on density',
+    '  vec3 dustColor = mix(dustColorDeep, dustColorMid, smoothstep(0.1, 0.4, totalDust));',
+    '  dustColor = mix(dustColor, dustColorBright, smoothstep(0.4, 0.8, totalDust));',
+    '',
+    '  // Add dust to background — it mostly absorbs/obscures',
+    '  col = mix(col, dustColor, totalDust * 0.85);',
+    '',
+    '  // ── Forming stars hidden in the dust ──',
+    '  float starAccum = 0.0;',
+    '  vec3 starLight = vec3(0.0);',
+    '',
+    '  for (int i = 0; i < NUM_STARS; i++) {',
+    '    vec2 sPos = starPos(i);',
+    '    float fi = float(i);',
+    '    float glow = starGlow(uv, sPos, t, fi);',
+    '',
+    '    // Star color — warm white to gold',
+    '    float warmth = hash1(fi * 9.17 + 6.0);',
+    '    vec3 sColor = mix(',
+    '      vec3(1.0, 0.95, 0.85),',
+    '      vec3(1.0, 0.78, 0.45),',
+    '      warmth * 0.6',
+    '    );',
+    '',
+    '    // How much dust is in front of this star',
+    '    float dustAtStar = dustField(sPos * 2.0, t, 1.0);',
+    '    float obscure = smoothstep(0.3, 0.7, dustAtStar) * u_dustDensity;',
+    '',
+    '    // Star light that makes it through the dust',
+    '    float transmitted = glow * (1.0 - obscure * 0.7);',
+    '',
+    '    // Diffused halo from light scattering through dust',
+    '    float d = length(uv - sPos);',
+    '    float scattered = glow * obscure * 0.4 * exp(-d * d / 0.06);',
+    '',
+    '    starLight += sColor * (transmitted + scattered) * u_starBrightness;',
+    '    starAccum += transmitted;',
+    '  }',
+    '',
+    '  // Stars illuminate nearby dust — warm amber glow',
+    '  for (int i = 0; i < NUM_STARS; i++) {',
+    '    vec2 sPos = starPos(i);',
+    '    float fi = float(i);',
+    '    float d = length(uv - sPos);',
+    '',
+    '    // Pulse of this star',
+    '    float phase = hash1(fi * 5.13 + 3.0) * PI * 2.0;',
+    '    float pulseSpeed = 0.15 + hash1(fi * 3.77 + 4.0) * 0.15;',
+    '    float pulse = sin(t * pulseSpeed + phase);',
+    '    float flare = pow(max(pulse, 0.0), 6.0);',
+    '    float brightness = 0.3 + flare * 0.7;',
+    '',
+    '    // Illuminate dust near the star',
+    '    float illumRadius = 0.25 + flare * 0.15;',
+    '    float illum = exp(-d * d / (illumRadius * illumRadius * 0.08));',
+    '    float dustHere = totalDust;',
+    '',
+    '    vec3 illumColor = vec3(0.25, 0.17, 0.08);',
+    '    col += illumColor * illum * dustHere * brightness * u_starBrightness * 0.5;',
+    '  }',
+    '',
+    '  // Add star light on top',
+    '  col += starLight;',
+    '',
+    '  // ── Attenuate background stars by dust ──',
+    '  // (background stars show through gaps in dust)',
+    '  col -= bgStarColor * bgStarField * totalDust * 0.8;',
+    '',
+    '  // ── Subtle large-scale color variation ──',
+    '  float largeNoise = noise(uv * 0.8 + t * 0.02);',
+    '  col += vec3(0.02, 0.01, 0.005) * largeNoise * totalDust;',
+    '',
+    '  // ── Vignette — darker at edges for vastness ──',
+    '  float dist = length(uv);',
+    '  float vignette = 1.0 - smoothstep(0.4, 1.3, dist);',
+    '  col *= 0.6 + vignette * 0.4;',
+    '',
+    '  // ── Ensure nothing goes below pure black ──',
+    '  col = max(col, vec3(0.0));',
+    '',
+    '  // ── Very subtle tone curve ──',
+    '  col = pow(col, vec3(0.97, 1.0, 1.04));',
+    '',
+    '  gl_FragColor = vec4(col, 1.0);',
+    '}'
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error('Shader compile error:', gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error('Program link error:', gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uDustDensity = gl.getUniformLocation(prog, 'u_dustDensity');
+  var uStarBrightness = gl.getUniformLocation(prog, 'u_starBrightness');
+
+  var dustDensityVal = 0.6;
+  var starBrightnessVal = 1.0;
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2) * pixelScale;
+
+  function resize() {
+    var w = Math.round(canvas.clientWidth * dpr);
+    var h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  function render(now) {
+    resize();
+    gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uDustDensity, dustDensityVal);
+    gl.uniform1f(uStarBrightness, starBrightnessVal);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'DUST_DENSITY': dustDensityVal = e.data.value; break;
+        case 'STAR_BRIGHTNESS': starBrightnessVal = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

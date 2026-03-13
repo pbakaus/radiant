@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Moonlit Ripple</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Moonlit Ripple</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// Moonlit Ripple — Moon reflection on dark water with concentric ripple interference
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var gl = canvas.getContext('webgl', { alpha: true, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  var vertSrc = [
+    'attribute vec2 a_pos;',
+    'void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }'
+  ].join('\n');
+
+  var fragSrc = [
+    'precision highp float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform float u_rippleSpeed;',
+    'uniform float u_moonGlow;',
+    '',
+    '#define PI 3.14159265359',
+    '#define NUM_SOURCES 4',
+    '',
+    '// Hash for subtle variation',
+    'float hash(vec2 p) {',
+    '  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);',
+    '}',
+    '',
+    '// Ripple source positions — slowly drifting',
+    'vec2 ripplePos(int i, float t) {',
+    '  float fi = float(i);',
+    '  float angle = fi * 1.571 + t * 0.06 * (0.7 + fi * 0.08);',
+    '  float r = 0.15 + fi * 0.12 + 0.05 * sin(fi * 3.1 + t * 0.04);',
+    '  return vec2(cos(angle) * r, sin(angle) * r * 0.5 - 0.05);',
+    '}',
+    '',
+    'void main() {',
+    '  float aspect = u_res.x / u_res.y;',
+    '  vec2 p = (gl_FragCoord.xy / u_res - 0.5) * vec2(aspect, 1.0);',
+    '  float t = u_time * u_rippleSpeed;',
+    '',
+    '  // ── Ripple height field from wave interference ──',
+    '  // Use signed sine waves so they properly cancel/reinforce',
+    '  float h = 0.0;',
+    '  for (int i = 0; i < NUM_SOURCES; i++) {',
+    '    vec2 src = ripplePos(i, u_time);',
+    '    float d = length(p - src);',
+    '    float fi = float(i);',
+    '    float freq = 40.0 + fi * 8.0;',
+    '    float phase = fi * 2.1;',
+    '    // Expanding rings: outward traveling sine',
+    '    float wave = sin(d * freq - t * 5.0 - phase);',
+    '    // Attenuation with distance',
+    '    float atten = 1.0 / (1.0 + d * 4.0);',
+    '    h += wave * atten;',
+    '  }',
+    '  h /= float(NUM_SOURCES) * 0.6;',
+    '',
+    '  // ── Compute surface normal from height field for lighting ──',
+    '  // Approximate derivatives',
+    '  float eps = 0.002;',
+    '  float hR = 0.0; float hU = 0.0;',
+    '  for (int i = 0; i < NUM_SOURCES; i++) {',
+    '    vec2 src = ripplePos(i, u_time);',
+    '    float fi = float(i);',
+    '    float freq = 40.0 + fi * 8.0;',
+    '    float phase = fi * 2.1;',
+    '    float dR = length(p + vec2(eps, 0.0) - src);',
+    '    float dU = length(p + vec2(0.0, eps) - src);',
+    '    float attenR = 1.0 / (1.0 + dR * 4.0);',
+    '    float attenU = 1.0 / (1.0 + dU * 4.0);',
+    '    hR += sin(dR * freq - t * 5.0 - phase) * attenR;',
+    '    hU += sin(dU * freq - t * 5.0 - phase) * attenU;',
+    '  }',
+    '  hR /= float(NUM_SOURCES) * 0.6;',
+    '  hU /= float(NUM_SOURCES) * 0.6;',
+    '  vec2 grad = vec2(hR - h, hU - h) / eps;',
+    '  vec3 N = normalize(vec3(-grad * 0.15, 1.0));',
+    '',
+    '  // ── Water color ──',
+    '  vec3 deepWater = vec3(0.01, 0.02, 0.06);',
+    '  vec3 shallowWater = vec3(0.03, 0.05, 0.12);',
+    '  vec3 waterCol = mix(shallowWater, deepWater, smoothstep(-0.3, 0.4, p.y) * 0.6);',
+    '',
+    '  // ── Moon position & reflection ──',
+    '  vec2 moonPos = vec2(0.05, 0.30);',
+    '  // Reflected light direction from moon',
+    '  vec3 moonDir = normalize(vec3(moonPos - p, 0.8));',
+    '  vec3 viewDir = vec3(0.0, 0.0, 1.0);',
+    '  vec3 halfDir = normalize(moonDir + viewDir);',
+    '',
+    '  // Specular reflection of moonlight off waves',
+    '  float spec = max(dot(N, halfDir), 0.0);',
+    '  float specPow = pow(spec, 80.0);',
+    '  float specMed = pow(spec, 20.0);',
+    '  float specWide = pow(spec, 5.0);',
+    '',
+    '  // ── Ambient ripple visibility — surface catches ambient light ──',
+    '  float surfaceLift = 0.5 + 0.5 * h;',
+    '  vec3 col = waterCol * (0.6 + surfaceLift * 0.8);',
+    '',
+    '  // ── Moonlight specular on wave crests ──',
+    '  vec3 moonColor = vec3(1.0, 0.90, 0.70);',
+    '  vec3 warmSpec = vec3(0.95, 0.75, 0.40);',
+    '  col += warmSpec * specWide * 0.08 * u_moonGlow;',
+    '  col += moonColor * specMed * 0.25 * u_moonGlow;',
+    '  col += vec3(1.0, 0.95, 0.85) * specPow * 0.8 * u_moonGlow;',
+    '',
+    '  // ── Moon disc and glow in sky ──',
+    '  float moonDist = length(p - moonPos);',
+    '  float moonDisc = smoothstep(0.06, 0.04, moonDist);',
+    '  float moonBloom = exp(-moonDist * moonDist * 12.0);',
+    '  col += moonColor * moonDisc * 0.8 * u_moonGlow;',
+    '  col += moonColor * moonBloom * 0.1 * u_moonGlow;',
+    '',
+    '  // ── Vertical moon path shimmer ──',
+    '  float path = exp(-pow(p.x - moonPos.x, 2.0) * 30.0);',
+    '  float pathY = smoothstep(moonPos.y - 0.05, moonPos.y - 0.8, p.y);',
+    '  float pathShimmer = path * pathY * specMed;',
+    '  col += warmSpec * pathShimmer * 0.4 * u_moonGlow;',
+    '',
+    '  // ── Scattered sparkles on wave peaks near moon path ──',
+    '  float sparkle = pow(spec, 120.0);',
+    '  col += vec3(1.0, 0.95, 0.8) * sparkle * 1.5 * u_moonGlow;',
+    '',
+    '  // ── Vignette ──',
+    '  float vig = 1.0 - smoothstep(0.45, 1.3, length(p * vec2(0.8, 1.0)));',
+    '  col *= 0.55 + 0.45 * vig;',
+    '',
+    '  // ── Gamma ──',
+    '  col = pow(max(col, vec3(0.0)), vec3(0.92));',
+    '',
+    '  gl_FragColor = vec4(col, 1.0);',
+    '}',
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uRippleSpeed = gl.getUniformLocation(prog, 'u_rippleSpeed');
+  var uMoonGlow = gl.getUniformLocation(prog, 'u_moonGlow');
+  var rippleSpeedVal = 0.5;
+  var moonGlowVal = 1.0;
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+  var running = true;
+
+  function resize() {
+    var w = Math.round(canvas.clientWidth * dpr);
+    var h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  function render(now) {
+    if (!running) { requestAnimationFrame(render); return; }
+    resize();
+    gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uRippleSpeed, rippleSpeedVal);
+    gl.uniform1f(uMoonGlow, moonGlowVal);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  document.addEventListener('visibilitychange', function () {
+    running = !document.hidden;
+  });
+
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'RIPPLE_SPEED': rippleSpeedVal = e.data.value; break;
+        case 'MOON_GLOW': moonGlowVal = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

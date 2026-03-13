@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Eclipse Glow</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Eclipse Glow</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// Eclipse Glow — Solar eclipse corona
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var urlParams = new URLSearchParams(window.location.search);
+  var pixelScale = parseFloat(urlParams.get('p')) || 1;
+
+  var gl = canvas.getContext('webgl', { alpha: true, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  // Tunable parameters
+  var CORONA_SIZE = 1.0;
+  var RAY_INTENSITY = 1.0;
+
+  var vertSrc = [
+    'attribute vec2 a_pos;',
+    'void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }'
+  ].join('\n');
+
+  var fragSrc = [
+    'precision highp float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform float u_coronaSize;',
+    'uniform float u_rayIntensity;',
+    '',
+    '#define PI 3.14159265359',
+    '#define TAU 6.28318530718',
+    '',
+    '// ── Hash for star field and grain ──',
+    'float hash(vec2 p) {',
+    '  vec3 p3 = fract(vec3(p.xyx) * 0.1031);',
+    '  p3 += dot(p3, p3.yzx + 33.33);',
+    '  return fract((p3.x + p3.y) * p3.z);',
+    '}',
+    '',
+    '// ── Value noise ──',
+    'float vnoise(vec2 p) {',
+    '  vec2 i = floor(p);',
+    '  vec2 f = fract(p);',
+    '  f = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);',
+    '  return mix(',
+    '    mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),',
+    '    mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x),',
+    '    f.y',
+    '  );',
+    '}',
+    '',
+    '// ── FBM for corona rays (3 octaves, cheap) ──',
+    'float fbm3(vec2 p) {',
+    '  float v = 0.0, a = 0.5;',
+    '  mat2 rot = mat2(0.8, 0.6, -0.6, 0.8);',
+    '  for (int i = 0; i < 3; i++) {',
+    '    v += a * vnoise(p);',
+    '    p = rot * p * 2.1 + vec2(1.7, 9.2);',
+    '    a *= 0.5;',
+    '  }',
+    '  return v;',
+    '}',
+    '',
+    '// ── FBM 4 octaves for finer detail ──',
+    'float fbm4(vec2 p) {',
+    '  float v = 0.0, a = 0.5;',
+    '  mat2 rot = mat2(0.866, 0.5, -0.5, 0.866);',
+    '  for (int i = 0; i < 4; i++) {',
+    '    v += a * vnoise(p);',
+    '    p = rot * p * 2.05 + vec2(3.1, 7.4);',
+    '    a *= 0.48;',
+    '  }',
+    '  return v;',
+    '}',
+    '',
+    'void main() {',
+    '  vec2 uv = (gl_FragCoord.xy - u_res * 0.5) / min(u_res.x, u_res.y);',
+    '  float t = u_time;',
+    '  float coronaSize = u_coronaSize;',
+    '  float rayIntensity = u_rayIntensity;',
+    '',
+    '  // ── Polar coordinates ──',
+    '  float r = length(uv);',
+    '  float a = atan(uv.y, uv.x);',
+    '',
+    '  // ── Background: deep space ──',
+    '  vec3 col = vec3(0.005, 0.003, 0.008);',
+    '',
+    '  // ── Star field — sparse hash-based points ──',
+    '  vec2 starGrid = floor(gl_FragCoord.xy / 3.0);',
+    '  float starHash = hash(starGrid * 0.73 + vec2(13.7, 29.3));',
+    '  float starBright = step(0.997, starHash);',
+    '  // Twinkle',
+    '  float twinkle = sin(t * 1.5 + starHash * 100.0) * 0.4 + 0.6;',
+    '  starBright *= twinkle * hash(starGrid * 1.31 + vec2(7.1, 3.9));',
+    '  // Fade stars near corona',
+    '  starBright *= smoothstep(0.15, 0.45, r);',
+    '  col += vec3(0.7, 0.75, 0.9) * starBright * 0.6;',
+    '',
+    '  // ── Eclipse disc parameters ──',
+    '  float discRadius = 0.15;',
+    '  float chromoRadius = discRadius + 0.008;',
+    '',
+    '  // ── Slow corona rotation ──',
+    '  float rotAngle = a + t * 0.05;',
+    '',
+    '  // ── Corona ray noise — multiple octaves at different speeds ──',
+    '  // Octave 1: broad rays, slow',
+    '  float ray1 = fbm3(vec2(rotAngle * 3.0, r * 4.0 - t * 0.08));',
+    '  // Octave 2: medium detail, medium speed',
+    '  float ray2 = fbm3(vec2(rotAngle * 7.0 + 5.0, r * 6.0 - t * 0.12));',
+    '  // Octave 3: fine streaks, faster',
+    '  float ray3 = fbm4(vec2(rotAngle * 13.0 + 10.0, r * 8.0 - t * 0.18));',
+    '',
+    '  // Combine rays with weighting',
+    '  float rays = ray1 * 0.5 + ray2 * 0.3 + ray3 * 0.2;',
+    '',
+    '  // ── Radial falloff for corona ──',
+    '  float coronaOuter = discRadius + 0.35 * coronaSize;',
+    '  float radialFalloff = smoothstep(coronaOuter, discRadius + 0.02, r);',
+    '  radialFalloff *= smoothstep(discRadius - 0.01, discRadius + 0.03, r);',
+    '',
+    '  // ── Extended ray reach — rays extend further than base corona ──',
+    '  float rayReach = discRadius + 0.6 * coronaSize;',
+    '  float rayFalloff = smoothstep(rayReach, discRadius + 0.03, r);',
+    '  rayFalloff *= smoothstep(discRadius - 0.01, discRadius + 0.03, r);',
+    '',
+    '  // ── Corona color gradient: warm amber inner to deep orange outer ──',
+    '  float colorMix = smoothstep(discRadius, coronaOuter, r);',
+    '  vec3 innerColor = vec3(1.0, 0.75, 0.30);',
+    '  vec3 outerColor = vec3(0.8, 0.35, 0.08);',
+    '  vec3 coronaColor = mix(innerColor, outerColor, colorMix);',
+    '',
+    '  // ── Apply corona base glow ──',
+    '  float coronaGlow = radialFalloff * (0.4 + rays * 0.6);',
+    '  col += coronaColor * coronaGlow * 1.2 * rayIntensity;',
+    '',
+    '  // ── Apply extended ray streaks ──',
+    '  float rayStreak = rayFalloff * pow(rays, 1.5) * 0.8;',
+    '  col += mix(coronaColor, outerColor, 0.5) * rayStreak * rayIntensity;',
+    '',
+    '  // ── Bright inner corona ring (chromosphere) ──',
+    '  float chromoDist = abs(r - chromoRadius);',
+    '  float chromo = exp(-chromoDist * chromoDist / 0.00008);',
+    '  // Modulate with subtle noise for unevenness',
+    '  float chromoNoise = fbm3(vec2(rotAngle * 10.0, t * 0.2));',
+    '  chromo *= 0.7 + chromoNoise * 0.5;',
+    '  vec3 chromoColor = vec3(1.0, 0.85, 0.5);',
+    '  col += chromoColor * chromo * 2.5 * rayIntensity;',
+    '',
+    '  // ── Hot inner edge — very tight bright ring ──',
+    '  float innerEdge = exp(-pow((r - discRadius) * 80.0, 2.0));',
+    '  innerEdge *= smoothstep(discRadius - 0.02, discRadius + 0.005, r);',
+    '  col += vec3(1.0, 0.95, 0.8) * innerEdge * 3.0;',
+    '',
+    '  // ── Solar wind particles ──',
+    '  // Subtle radial streaming particles',
+    '  float particleAngle = a + t * 0.03;',
+    '  float particleR = fract(r * 5.0 - t * 0.15);',
+    '  vec2 particleUV = vec2(particleAngle * 8.0, particleR * 12.0);',
+    '  float particle = hash(floor(particleUV));',
+    '  particle = step(0.96, particle);',
+    '  float particleFade = smoothstep(0.0, 0.2, particleR) * smoothstep(1.0, 0.5, particleR);',
+    '  particleFade *= smoothstep(discRadius, discRadius + 0.08, r);',
+    '  particleFade *= smoothstep(rayReach + 0.15, discRadius + 0.1, r);',
+    '  col += vec3(1.0, 0.8, 0.5) * particle * particleFade * 0.15 * rayIntensity;',
+    '',
+    '  // ── Second particle layer — different speed/density ──',
+    '  float p2Angle = a - t * 0.02;',
+    '  float p2R = fract(r * 3.5 - t * 0.1);',
+    '  vec2 p2UV = vec2(p2Angle * 12.0, p2R * 8.0);',
+    '  float p2 = hash(floor(p2UV) + vec2(77.0, 33.0));',
+    '  p2 = step(0.97, p2);',
+    '  float p2Fade = smoothstep(0.0, 0.3, p2R) * smoothstep(1.0, 0.4, p2R);',
+    '  p2Fade *= smoothstep(discRadius, discRadius + 0.1, r);',
+    '  p2Fade *= smoothstep(rayReach + 0.2, discRadius + 0.12, r);',
+    '  col += vec3(0.9, 0.6, 0.3) * p2 * p2Fade * 0.1 * rayIntensity;',
+    '',
+    '  // ── Bloom / lens flare ──',
+    '  // Soft wide glow around the corona',
+    '  float bloomDist = max(r - discRadius, 0.0);',
+    '  float bloom = exp(-bloomDist * 2.5);',
+    '  bloom *= smoothstep(discRadius - 0.05, discRadius + 0.01, r);',
+    '  col += vec3(0.4, 0.25, 0.1) * bloom * 0.25 * rayIntensity;',
+    '',
+    '  // Very wide subtle bloom',
+    '  float wideBloom = exp(-r * 1.2) * 0.15;',
+    '  col += vec3(0.3, 0.18, 0.06) * wideBloom * rayIntensity;',
+    '',
+    '  // Horizontal lens streak',
+    '  float streak = exp(-abs(uv.y) * 30.0) * exp(-abs(r - discRadius) * 8.0);',
+    '  streak *= smoothstep(discRadius - 0.02, discRadius + 0.05, r);',
+    '  col += vec3(0.6, 0.4, 0.2) * streak * 0.15 * rayIntensity;',
+    '',
+    '  // ── Dark moon disc ──',
+    '  float disc = smoothstep(discRadius + 0.003, discRadius - 0.003, r);',
+    '  col *= 1.0 - disc;',
+    '  // Very faint lunar surface noise',
+    '  float lunarNoise = vnoise(uv * 40.0) * 0.008;',
+    '  col += vec3(lunarNoise * 0.5, lunarNoise * 0.4, lunarNoise * 0.3) * disc;',
+    '',
+    '  // ── Diamond ring effect — subtle bright spot at edge ──',
+    '  float diamondAngle = sin(t * 0.02) * PI;',
+    '  vec2 diamondDir = vec2(cos(diamondAngle), sin(diamondAngle));',
+    '  float diamondDot = dot(normalize(uv), diamondDir);',
+    '  float diamond = smoothstep(0.97, 1.0, diamondDot);',
+    '  float diamondR = smoothstep(discRadius + 0.03, discRadius, r);',
+    '  diamondR *= smoothstep(discRadius - 0.03, discRadius, r);',
+    '  float diamondGlow = diamond * diamondR;',
+    '  col += vec3(1.0, 0.9, 0.7) * diamondGlow * 1.5 * rayIntensity;',
+    '  // Diamond bloom',
+    '  float diamondBloom = diamond * exp(-abs(r - discRadius) * 15.0);',
+    '  col += vec3(0.5, 0.35, 0.15) * diamondBloom * 0.4 * rayIntensity;',
+    '',
+    '  // ── Film grain ──',
+    '  float grain = (hash(gl_FragCoord.xy + fract(t * 43.0) * 1000.0) - 0.5) * 0.015;',
+    '  col += grain;',
+    '',
+    '  // ── Subtle vignette ──',
+    '  float vig = 1.0 - smoothstep(0.5, 1.3, r);',
+    '  col *= 0.85 + 0.15 * vig;',
+    '',
+    '  // ── Tone mapping — keep blacks deep ──',
+    '  col = max(col, vec3(0.0));',
+    '  // Soft highlight compression',
+    '  col = col / (1.0 + col * 0.3);',
+    '  // Slight warm push in shadows',
+    '  float lum = dot(col, vec3(0.299, 0.587, 0.114));',
+    '  col = mix(col, col * vec3(1.06, 0.97, 0.90), smoothstep(0.05, 0.0, lum) * 0.2);',
+    '',
+    '  gl_FragColor = vec4(col, 1.0);',
+    '}'
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error('Shader compile error:', gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error('Program link error:', gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uCoronaSize = gl.getUniformLocation(prog, 'u_coronaSize');
+  var uRayIntensity = gl.getUniformLocation(prog, 'u_rayIntensity');
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  function resize() {
+    var scale = 1.0 / pixelScale;
+    var w = Math.round(canvas.clientWidth * dpr * scale);
+    var h = Math.round(canvas.clientHeight * dpr * scale);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  var running = true;
+
+  function render(now) {
+    if (!running) { requestAnimationFrame(render); return; }
+    resize();
+    gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uCoronaSize, CORONA_SIZE);
+    gl.uniform1f(uRayIntensity, RAY_INTENSITY);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  // ── Pause when offscreen ──
+  document.addEventListener('visibilitychange', function () {
+    running = !document.hidden;
+  });
+
+  // ── PostMessage API for parameter control ──
+  window.addEventListener('message', function (e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'CORONA_SIZE': CORONA_SIZE = e.data.value; break;
+        case 'RAY_INTENSITY': RAY_INTENSITY = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Obsidian Flow</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Obsidian Flow</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// Obsidian Flow — Volcanic glass with razor-sharp specular catches
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var urlParams = new URLSearchParams(window.location.search);
+  var pixelScale = parseFloat(urlParams.get('p')) || 1;
+
+  var gl = canvas.getContext('webgl', { alpha: true, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  // Tunable parameters
+  var FLOW_SPEED = 0.3;
+  var GLINT_SHARPNESS = 1.0;
+
+  var vertSrc = [
+    'attribute vec2 a_pos;',
+    'void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }'
+  ].join('\n');
+
+  var fragSrc = [
+    'precision highp float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform float u_flowSpeed;',
+    'uniform float u_glintSharpness;',
+    '',
+    '#define PI 3.14159265359',
+    '',
+    '// ── Hash functions ──',
+    'float hash(vec2 p) {',
+    '  vec3 p3 = fract(vec3(p.xyx) * 0.1031);',
+    '  p3 += dot(p3, p3.yzx + 33.33);',
+    '  return fract((p3.x + p3.y) * p3.z);',
+    '}',
+    '',
+    '// ── Gradient noise ──',
+    'vec2 hashGrad(vec2 p) {',
+    '  vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));',
+    '  p3 += dot(p3, p3.yzx + 33.33);',
+    '  return fract((p3.xx + p3.yz) * p3.zy) * 2.0 - 1.0;',
+    '}',
+    '',
+    'float gnoise(vec2 p) {',
+    '  vec2 i = floor(p);',
+    '  vec2 f = fract(p);',
+    '  vec2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);',
+    '  vec2 ga = hashGrad(i + vec2(0.0, 0.0));',
+    '  vec2 gb = hashGrad(i + vec2(1.0, 0.0));',
+    '  vec2 gc = hashGrad(i + vec2(0.0, 1.0));',
+    '  vec2 gd = hashGrad(i + vec2(1.0, 1.0));',
+    '  float va = dot(ga, f - vec2(0.0, 0.0));',
+    '  float vb = dot(gb, f - vec2(1.0, 0.0));',
+    '  float vc = dot(gc, f - vec2(0.0, 1.0));',
+    '  float vd = dot(gd, f - vec2(1.0, 1.0));',
+    '  return va + u.x * (vb - va) + u.y * (vc - va) + u.x * u.y * (va - vb - vc + vd);',
+    '}',
+    '',
+    '// ── FBM with rotation between octaves (4 octaves for performance) ──',
+    'float fbm(vec2 p, float t) {',
+    '  float v = 0.0, a = 0.5;',
+    '  mat2 rot = mat2(0.8, 0.6, -0.6, 0.8);',
+    '  for (int i = 0; i < 4; i++) {',
+    '    v += a * gnoise(p + t * 0.03);',
+    '    p = rot * p * 2.05 + vec2(1.7, 9.2);',
+    '    a *= 0.5;',
+    '  }',
+    '  return v;',
+    '}',
+    '',
+    '// ── Domain-warped height field — the obsidian surface ──',
+    'float heightField(vec2 p, float t) {',
+    '  float speed = u_flowSpeed;',
+    '  vec2 drift = vec2(t * speed * 0.08, t * speed * 0.05);',
+    '  vec2 pp = p + drift;',
+    '',
+    '  // First domain warp — large-scale flowing deformation',
+    '  vec2 q = vec2(',
+    '    fbm(pp + vec2(0.0, 0.0), t * speed * 0.5),',
+    '    fbm(pp + vec2(5.2, 1.3), t * speed * 0.4)',
+    '  );',
+    '',
+    '  // Second domain warp — finer structure, creates glass-edge ridges',
+    '  vec2 r = vec2(',
+    '    fbm(pp + 3.0 * q + vec2(1.7, 9.2), t * speed * 0.3),',
+    '    fbm(pp + 3.0 * q + vec2(8.3, 2.8), t * speed * 0.35)',
+    '  );',
+    '',
+    '  // Final height with warp influence',
+    '  float h = fbm(pp + 2.5 * r, t * speed * 0.25);',
+    '  h = h * 0.6 + length(q) * 0.2 + length(r) * 0.2;',
+    '',
+    '  return h;',
+    '}',
+    '',
+    '// ── Compute surface normal from height field gradient ──',
+    'vec3 calcNormal(vec2 p, float t) {',
+    '  float eps = 0.003;',
+    '  float hC = heightField(p, t);',
+    '  float hR = heightField(p + vec2(eps, 0.0), t);',
+    '  float hU = heightField(p + vec2(0.0, eps), t);',
+    '  float dhdx = (hR - hC) / eps;',
+    '  float dhdy = (hU - hC) / eps;',
+    '  // Scale the height gradient to control bumpiness',
+    '  return normalize(vec3(-dhdx * 0.4, -dhdy * 0.4, 1.0));',
+    '}',
+    '',
+    'void main() {',
+    '  vec2 uv = (gl_FragCoord.xy - u_res * 0.5) / min(u_res.x, u_res.y);',
+    '  float t = u_time;',
+    '  float sharpness = u_glintSharpness;',
+    '',
+    '  // ── Surface normal from height field ──',
+    '  vec3 N = calcNormal(uv * 2.5, t);',
+    '',
+    '  // ── View direction (looking straight down) ──',
+    '  vec3 V = normalize(vec3(-uv * 0.3, 1.0));',
+    '',
+    '  // ── Base surface color: near-black with deep purple/green undertone ──',
+    '  vec3 baseColor = vec3(0.015, 0.012, 0.02);',
+    '',
+    '  // Slight variation in base from the surface height',
+    '  float h = heightField(uv * 2.5, t);',
+    '  baseColor += vec3(0.005, 0.003, 0.008) * h;',
+    '',
+    '  vec3 col = baseColor;',
+    '',
+    '  // ── Specular color palette ──',
+    '  vec3 specColorCore = vec3(1.0, 0.9, 0.75);   // warm white center',
+    '  vec3 specColorEdge = vec3(0.9, 0.65, 0.3);    // amber at edges',
+    '',
+    '  // ── Three slowly moving point lights ──',
+    '  float totalSpec = 0.0;',
+    '  vec3 totalSpecColor = vec3(0.0);',
+    '  vec3 totalBroadSpec = vec3(0.0);',
+    '',
+    '  // Light 1 — warm, slow orbit',
+    '  vec3 lightPos1 = vec3(',
+    '    sin(t * 0.07 + 0.0) * 0.8 + cos(t * 0.03) * 0.3,',
+    '    cos(t * 0.05 + 1.2) * 0.6 + sin(t * 0.04) * 0.2,',
+    '    1.5',
+    '  );',
+    '',
+    '  // Light 2 — slightly different orbit',
+    '  vec3 lightPos2 = vec3(',
+    '    sin(t * 0.06 + 2.1) * 0.9 + cos(t * 0.025 + 0.7) * 0.4,',
+    '    cos(t * 0.04 + 3.5) * 0.7 + sin(t * 0.035 + 1.0) * 0.3,',
+    '    1.8',
+    '  );',
+    '',
+    '  // Light 3 — broader sweep',
+    '  vec3 lightPos3 = vec3(',
+    '    cos(t * 0.05 + 4.0) * 1.0 + sin(t * 0.02 + 2.5) * 0.5,',
+    '    sin(t * 0.045 + 0.8) * 0.8 + cos(t * 0.03 + 3.0) * 0.3,',
+    '    1.3',
+    '  );',
+    '',
+    '  // Process each light',
+    '  // -- Light 1 --',
+    '  vec3 L1 = normalize(lightPos1 - vec3(uv, 0.0));',
+    '  vec3 H1 = normalize(L1 + V);',
+    '  float NdH1 = max(dot(N, H1), 0.0);',
+    '  float sharpExp = 200.0 * sharpness;',
+    '  float spec1sharp = pow(NdH1, sharpExp);',
+    '  float spec1broad = pow(NdH1, 30.0);',
+    '  float specMix1 = smoothstep(0.0, 1.0, spec1broad * 8.0);',
+    '  vec3 sColor1 = mix(specColorEdge, specColorCore, specMix1);',
+    '  totalSpecColor += sColor1 * spec1sharp * 1.8;',
+    '  totalBroadSpec += specColorEdge * spec1broad * 0.04;',
+    '',
+    '  // -- Light 2 --',
+    '  vec3 L2 = normalize(lightPos2 - vec3(uv, 0.0));',
+    '  vec3 H2 = normalize(L2 + V);',
+    '  float NdH2 = max(dot(N, H2), 0.0);',
+    '  float spec2sharp = pow(NdH2, sharpExp);',
+    '  float spec2broad = pow(NdH2, 30.0);',
+    '  float specMix2 = smoothstep(0.0, 1.0, spec2broad * 8.0);',
+    '  vec3 sColor2 = mix(specColorEdge, specColorCore, specMix2);',
+    '  totalSpecColor += sColor2 * spec2sharp * 1.5;',
+    '  totalBroadSpec += specColorEdge * spec2broad * 0.035;',
+    '',
+    '  // -- Light 3 --',
+    '  vec3 L3 = normalize(lightPos3 - vec3(uv, 0.0));',
+    '  vec3 H3 = normalize(L3 + V);',
+    '  float NdH3 = max(dot(N, H3), 0.0);',
+    '  float spec3sharp = pow(NdH3, sharpExp);',
+    '  float spec3broad = pow(NdH3, 30.0);',
+    '  float specMix3 = smoothstep(0.0, 1.0, spec3broad * 8.0);',
+    '  vec3 sColor3 = mix(specColorEdge, specColorCore, specMix3);',
+    '  totalSpecColor += sColor3 * spec3sharp * 1.3;',
+    '  totalBroadSpec += specColorEdge * spec3broad * 0.03;',
+    '',
+    '  // Add specular to base',
+    '  col += totalSpecColor;',
+    '  col += totalBroadSpec;',
+    '',
+    '  // ── Fresnel rim — subtle warm edge highlight ──',
+    '  float NdV = max(dot(N, V), 0.0);',
+    '  float fresnel = pow(1.0 - NdV, 4.0);',
+    '  vec3 fresnelColor = vec3(0.12, 0.08, 0.04);',
+    '  col += fresnelColor * fresnel * 0.15;',
+    '',
+    '  // ── Film grain — very subtle ──',
+    '  float grain = (hash(gl_FragCoord.xy + fract(t * 43.0) * 1000.0) - 0.5) * 0.012;',
+    '  col += grain;',
+    '',
+    '  // ── Vignette — darker at edges ──',
+    '  float vig = length(uv);',
+    '  float vignette = 1.0 - smoothstep(0.4, 1.2, vig);',
+    '  col *= 0.7 + vignette * 0.3;',
+    '',
+    '  // ── Ensure no negative values ──',
+    '  col = max(col, vec3(0.0));',
+    '',
+    '  // ── Subtle tone curve — warm shadows ──',
+    '  col = pow(col, vec3(0.96, 1.0, 1.05));',
+    '',
+    '  gl_FragColor = vec4(col, 1.0);',
+    '}'
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error('Shader compile error:', gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error('Program link error:', gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uFlowSpeed = gl.getUniformLocation(prog, 'u_flowSpeed');
+  var uGlintSharpness = gl.getUniformLocation(prog, 'u_glintSharpness');
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  function resize() {
+    var scale = 1.0 / pixelScale;
+    var w = Math.round(canvas.clientWidth * dpr * scale);
+    var h = Math.round(canvas.clientHeight * dpr * scale);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  var running = true;
+
+  function render(now) {
+    if (!running) { requestAnimationFrame(render); return; }
+    resize();
+    gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uFlowSpeed, FLOW_SPEED);
+    gl.uniform1f(uGlintSharpness, GLINT_SHARPNESS);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  // ── Pause when offscreen ──
+  document.addEventListener('visibilitychange', function () {
+    running = !document.hidden;
+  });
+
+  // ── PostMessage API for parameter control ──
+  window.addEventListener('message', function (e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'FLOW_SPEED': FLOW_SPEED = e.data.value; break;
+        case 'GLINT_SHARPNESS': GLINT_SHARPNESS = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Canopy Light</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Canopy Light</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// Canopy Light — Dappled sunlight filtering through a forest canopy
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var gl = canvas.getContext('webgl', { alpha: true, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  var vertSrc = [
+    'attribute vec2 a_pos;',
+    'void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }'
+  ].join('\n');
+
+  var fragSrc = [
+    'precision mediump float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform float u_windSpeed;',
+    'uniform float u_lightDensity;',
+    '',
+    '// ── Hash for value noise ──',
+    'float hash(vec2 p) {',
+    '  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);',
+    '}',
+    '',
+    '// ── Smooth value noise ──',
+    'float noise(vec2 p) {',
+    '  vec2 i = floor(p);',
+    '  vec2 f = fract(p);',
+    '  f = f * f * (3.0 - 2.0 * f);',
+    '  float a = hash(i);',
+    '  float b = hash(i + vec2(1.0, 0.0));',
+    '  float c = hash(i + vec2(0.0, 1.0));',
+    '  float d = hash(i + vec2(1.0, 1.0));',
+    '  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);',
+    '}',
+    '',
+    '// ── FBM — 4 octaves for canopy structure ──',
+    'float fbm(vec2 p, float t) {',
+    '  float val = 0.0;',
+    '  float amp = 0.5;',
+    '  float freq = 1.0;',
+    '  for (int i = 0; i < 4; i++) {',
+    '    val += amp * noise(p * freq + t * 0.12);',
+    '    freq *= 2.1;',
+    '    amp *= 0.5;',
+    '    p += vec2(1.7, 9.2);',
+    '  }',
+    '  return val;',
+    '}',
+    '',
+    '// ── Domain-warped canopy layer ──',
+    '// Each layer represents a different depth of foliage',
+    'float canopyLayer(vec2 p, float t, float scale, float speed) {',
+    '  // Wind sway — slowly shift noise coordinates',
+    '  vec2 wind = vec2(',
+    '    sin(t * 0.17 * speed) * 0.3 + sin(t * 0.07 * speed) * 0.15,',
+    '    cos(t * 0.13 * speed) * 0.2 + cos(t * 0.09 * speed) * 0.1',
+    '  );',
+    '  vec2 pp = p * scale + wind;',
+    '',
+    '  // First domain warp — creates organic leaf gap shapes',
+    '  vec2 q = vec2(',
+    '    fbm(pp + vec2(0.0, 0.0), t * speed * 0.5),',
+    '    fbm(pp + vec2(5.2, 1.3), t * speed * 0.5)',
+    '  );',
+    '',
+    '  // Second domain warp — adds finer organic detail',
+    '  vec2 r = vec2(',
+    '    fbm(pp + 3.0 * q + vec2(1.7, 9.2), t * speed * 0.6),',
+    '    fbm(pp + 3.0 * q + vec2(8.3, 2.8), t * speed * 0.6)',
+    '  );',
+    '',
+    '  // Final warped noise field',
+    '  float f = fbm(pp + 2.5 * r, t * speed * 0.4);',
+    '',
+    '  return f;',
+    '}',
+    '',
+    'void main() {',
+    '  vec2 uv = (gl_FragCoord.xy - u_res * 0.5) / min(u_res.x, u_res.y);',
+    '  float t = u_time;',
+    '  float wind = u_windSpeed;',
+    '',
+    '  // ── Forest floor base — very dark with green-brown tint ──',
+    '  vec3 floorColor = vec3(0.025, 0.028, 0.020);',
+    '  vec3 col = floorColor;',
+    '',
+    '  // ── Subtle floor texture — leaf litter, moss ──',
+    '  float floorTex = noise(uv * 12.0 + vec2(3.1, 7.4));',
+    '  float floorTex2 = noise(uv * 24.0 + vec2(11.3, 2.9));',
+    '  col += vec3(0.008, 0.010, 0.006) * floorTex;',
+    '  col += vec3(0.005, 0.006, 0.003) * floorTex2;',
+    '',
+    '  // ── Three canopy layers at different scales and speeds ──',
+    '  // Upper canopy — medium gaps, slow sway',
+    '  float layer1 = canopyLayer(uv, t, 3.0, 0.6 * wind);',
+    '  // Middle canopy — smaller dappled pools',
+    '  float layer2 = canopyLayer(uv + vec2(3.7, 1.1), t, 5.0, 0.9 * wind);',
+    '  // Lower canopy — fine leaf detail flickers',
+    '  float layer3 = canopyLayer(uv + vec2(7.3, 4.8), t, 7.0, 1.3 * wind);',
+    '',
+    '  // ── Threshold layers into light/shadow ──',
+    '  float threshold = 0.55 - u_lightDensity * 0.10;',
+    '',
+    '  // Each layer creates gaps where light can pass',
+    '  float gap1 = smoothstep(threshold, threshold + 0.15, layer1);',
+    '  float gap2 = smoothstep(threshold + 0.03, threshold + 0.16, layer2);',
+    '  float gap3 = smoothstep(threshold + 0.05, threshold + 0.14, layer3);',
+    '',
+    '  // Two-layer intersection for main pools + single layer for soft dappling',
+    '  float brightPool = gap1 * gap2;',
+    '  float softDapple = gap1 * 0.15 + gap3 * 0.10;',
+    '  float lightMask = brightPool + softDapple;',
+    '  lightMask *= gap3 * 0.5 + 0.5;',
+    '  lightMask = clamp(lightMask * u_lightDensity, 0.0, 1.0);',
+    '',
+    '  // ── Light pool colors ──',
+    '  // Base dappled light — warm golden',
+    '  vec3 warmLight = vec3(0.85, 0.65, 0.30);',
+    '  // Brighter direct sunlight in concentrated spots',
+    '  vec3 brightSun = vec3(1.0, 0.85, 0.45);',
+    '  // Dim filtered light at edges of pools',
+    '  vec3 dimLight = vec3(0.55, 0.40, 0.18);',
+    '',
+    '  // Vary color across the light pool — brighter at center',
+    '  float intensity = lightMask * lightMask;',
+    '  vec3 lightColor = mix(dimLight, warmLight, smoothstep(0.0, 0.3, lightMask));',
+    '  lightColor = mix(lightColor, brightSun, smoothstep(0.4, 0.8, intensity));',
+    '',
+    '  // ── Sunspot hotspots — where multiple layers align perfectly ──',
+    '  float sunspot = gap1 * gap2 * gap3;',
+    '  sunspot = smoothstep(0.3, 0.7, sunspot);',
+    '  lightColor = mix(lightColor, brightSun * 1.2, sunspot * 0.5);',
+    '',
+    '  // ── God rays — elongated bright streaks suggesting angled beams ──',
+    '  // Diagonal streaks from upper-right (simulating sun angle)',
+    '  vec2 rayUV = uv;',
+    '  float rayAngle = -0.65;',
+    '  float cosA = cos(rayAngle);',
+    '  float sinA = sin(rayAngle);',
+    '  vec2 rotUV = vec2(',
+    '    rayUV.x * cosA - rayUV.y * sinA,',
+    '    rayUV.x * sinA + rayUV.y * cosA',
+    '  );',
+    '',
+    '  // Elongated noise for ray shapes — stretched along the beam direction',
+    '  float rayNoise1 = noise(vec2(rotUV.x * 1.5, rotUV.y * 8.0) + t * wind * 0.06);',
+    '  float rayNoise2 = noise(vec2(rotUV.x * 2.0, rotUV.y * 12.0) + t * wind * 0.04 + 5.0);',
+    '  float rays = smoothstep(0.55, 0.8, rayNoise1) * smoothstep(0.5, 0.75, rayNoise2);',
+    '  rays *= 0.25 * lightMask;',
+    '',
+    '  // Add god ray glow — slightly more white/gold',
+    '  vec3 rayColor = vec3(1.0, 0.90, 0.55);',
+    '  lightColor += rayColor * rays;',
+    '',
+    '  // ── Apply light to forest floor ──',
+    '  col = mix(col, lightColor * 0.4, smoothstep(0.01, 0.15, lightMask));',
+    '  col += lightColor * intensity * 0.3;',
+    '',
+    '  // ── Ambient green fill-light in shadowed areas ──',
+    '  // Very subtle — light bouncing off leaves tints the shadows',
+    '  float shadow = 1.0 - lightMask;',
+    '  col += vec3(0.005, 0.012, 0.005) * shadow;',
+    '',
+    '  // ── Gentle light bloom / scatter around bright pools ──',
+    '  float bloom = smoothstep(0.15, 0.6, lightMask);',
+    '  col += vec3(0.06, 0.04, 0.015) * bloom * bloom * u_lightDensity;',
+    '',
+    '  // ── Subtle vignette — darker at edges ──',
+    '  float vig = length(uv);',
+    '  float vignette = 1.0 - smoothstep(0.4, 1.2, vig);',
+    '  col *= 0.7 + 0.3 * vignette;',
+    '',
+    '  // ── Clamp and tone ──',
+    '  col = max(col, vec3(0.0));',
+    '  col = pow(col, vec3(0.97));',
+    '',
+    '  gl_FragColor = vec4(col, 1.0);',
+    '}',
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uWindSpeed = gl.getUniformLocation(prog, 'u_windSpeed');
+  var uLightDensity = gl.getUniformLocation(prog, 'u_lightDensity');
+  var windSpeedVal = 0.5;
+  var lightDensityVal = 1.0;
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+  var running = true;
+
+  function resize() {
+    var w = Math.round(canvas.clientWidth * dpr);
+    var h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  function render(now) {
+    if (!running) { requestAnimationFrame(render); return; }
+    resize();
+    gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uWindSpeed, windSpeedVal);
+    gl.uniform1f(uLightDensity, lightDensityVal);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  document.addEventListener('visibilitychange', function () {
+    running = !document.hidden;
+  });
+
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'WIND_SPEED': windSpeedVal = e.data.value; break;
+        case 'LIGHT_DENSITY': lightDensityVal = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

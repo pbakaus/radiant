@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Velvet Cascade</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Velvet Cascade</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// Velvet Cascade — Luxurious dark velvet under candlelight
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var urlParams = new URLSearchParams(window.location.search);
+  var pixelScale = parseFloat(urlParams.get('p')) || 1;
+
+  var gl = canvas.getContext('webgl', { alpha: true, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  // Tunable parameters
+  var FLOW_SPEED = 0.3;
+  var SHEEN_INTENSITY = 1.0;
+
+  var vertSrc = [
+    'attribute vec2 a_pos;',
+    'void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }'
+  ].join('\n');
+
+  var fragSrc = [
+    'precision highp float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform float u_flowSpeed;',
+    'uniform float u_sheenIntensity;',
+    '',
+    '#define PI 3.14159265359',
+    '#define TAU 6.28318530718',
+    '',
+    '// ── Hash functions ──',
+    'float hash(vec2 p) {',
+    '  vec3 p3 = fract(vec3(p.xyx) * 0.1031);',
+    '  p3 += dot(p3, p3.yzx + 33.33);',
+    '  return fract((p3.x + p3.y) * p3.z);',
+    '}',
+    '',
+    '// ── Gradient noise for smooth organic flow ──',
+    'vec2 hashGrad(vec2 p) {',
+    '  vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));',
+    '  p3 += dot(p3, p3.yzx + 33.33);',
+    '  return fract((p3.xx + p3.yz) * p3.zy) * 2.0 - 1.0;',
+    '}',
+    '',
+    'float gnoise(vec2 p) {',
+    '  vec2 i = floor(p);',
+    '  vec2 f = fract(p);',
+    '  vec2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);',
+    '  vec2 ga = hashGrad(i + vec2(0.0, 0.0));',
+    '  vec2 gb = hashGrad(i + vec2(1.0, 0.0));',
+    '  vec2 gc = hashGrad(i + vec2(0.0, 1.0));',
+    '  vec2 gd = hashGrad(i + vec2(1.0, 1.0));',
+    '  float va = dot(ga, f - vec2(0.0, 0.0));',
+    '  float vb = dot(gb, f - vec2(1.0, 0.0));',
+    '  float vc = dot(gc, f - vec2(0.0, 1.0));',
+    '  float vd = dot(gd, f - vec2(1.0, 1.0));',
+    '  return va + u.x * (vb - va) + u.y * (vc - va) + u.x * u.y * (va - vb - vc + vd);',
+    '}',
+    '',
+    '// ── Value noise for micro-texture grain ──',
+    'float vnoise(vec2 p) {',
+    '  vec2 i = floor(p);',
+    '  vec2 f = fract(p);',
+    '  f = f * f * (3.0 - 2.0 * f);',
+    '  return mix(',
+    '    mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),',
+    '    mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x),',
+    '    f.y',
+    '  );',
+    '}',
+    '',
+    '// ── FBM with rotation between octaves — fewer octaves for smooth folds ──',
+    'float fbm(vec2 p, float t) {',
+    '  float v = 0.0, a = 0.5;',
+    '  mat2 rot = mat2(0.8, 0.6, -0.6, 0.8);',
+    '  for (int i = 0; i < 4; i++) {',
+    '    v += a * gnoise(p + t * 0.02);',
+    '    p = rot * p * 2.03 + vec2(1.7, 9.2);',
+    '    a *= 0.45;',
+    '  }',
+    '  return v;',
+    '}',
+    '',
+    '// ── Fine FBM for fabric micro-detail ──',
+    'float fbmFine(vec2 p, float t) {',
+    '  float v = 0.0, a = 0.5;',
+    '  mat2 rot = mat2(0.866, 0.5, -0.5, 0.866);',
+    '  for (int i = 0; i < 8; i++) {',
+    '    v += a * gnoise(p + t * 0.01);',
+    '    p = rot * p * 2.05 + vec2(3.1, 7.4);',
+    '    a *= 0.47;',
+    '  }',
+    '  return v;',
+    '}',
+    '',
+    '// ── Double domain warp for fabric fold structure ──',
+    '// Creates deep, organic folds like draped velvet',
+    'float fabricFolds(vec2 p, float t) {',
+    '  // First domain warp — large sweeping folds',
+    '  vec2 q = vec2(',
+    '    fbm(p + vec2(0.0, 0.0), t * 0.5),',
+    '    fbm(p + vec2(5.2, 1.3), t * 0.45)',
+    '  );',
+    '',
+    '  // Second domain warp — secondary creases within folds',
+    '  vec2 r = vec2(',
+    '    fbm(p + 2.0 * q + vec2(1.7, 9.2), t * 0.3),',
+    '    fbm(p + 2.0 * q + vec2(8.3, 2.8), t * 0.35)',
+    '  );',
+    '',
+    '  // Final fold field',
+    '  float f = fbm(p + 1.8 * r, t * 0.25);',
+    '',
+    '  // Combine for rich structural variation',
+    '  return f * 0.5 + length(q) * 0.3 + length(r) * 0.2;',
+    '}',
+    '',
+    '// ── Surface normal estimation from height field ──',
+    '// We compute the gradient of the fabric folds to get a pseudo-normal',
+    'vec3 fabricNormal(vec2 p, float t) {',
+    '  float eps = 0.02;',
+    '  float h  = fabricFolds(p, t);',
+    '  float hx = fabricFolds(p + vec2(eps, 0.0), t);',
+    '  float hy = fabricFolds(p + vec2(0.0, eps), t);',
+    '  vec2 grad = vec2(hx - h, hy - h) / eps;',
+    '  // Scale the gradient to control the apparent depth of folds',
+    '  grad *= 1.5;',
+    '  return normalize(vec3(-grad.x, -grad.y, 1.0));',
+    '}',
+    '',
+    '// ── Velvet BRDF / anisotropic sheen ──',
+    '// Velvet is brightest at grazing angles (rim lighting)',
+    '// and darkest when viewed head-on — the inverse of typical diffuse',
+    'float velvetShading(vec3 normal, vec3 lightDir, vec3 viewDir) {',
+    '  float NdotL = dot(normal, lightDir);',
+    '  float NdotV = dot(normal, viewDir);',
+    '',
+    '  // Standard diffuse term (very subdued for velvet)',
+    '  float diffuse = max(NdotL, 0.0) * 0.15;',
+    '',
+    '  // Rim/sheen term — bright where surface is nearly edge-on to light',
+    '  // This is the signature velvet look — sharper falloff for concentrated sheen',
+    '  float rim = 1.0 - max(NdotL, 0.0);',
+    '  rim = pow(rim, 2.8) * 0.9;',
+    '',
+    '  // View-dependent sheen — catches at grazing view angles too',
+    '  float viewRim = 1.0 - max(NdotV, 0.0);',
+    '  viewRim = pow(viewRim, 3.0) * 0.35;',
+    '',
+    '  // Half-vector sheen — anisotropic highlight',
+    '  vec3 H = normalize(lightDir + viewDir);',
+    '  float NdotH = max(dot(normal, H), 0.0);',
+    '  float sheen = pow(1.0 - NdotH, 3.0) * 0.6;',
+    '',
+    '  // Back-scatter: faint light wrapping around into shadow',
+    '  float backscatter = max(-NdotL * 0.15, 0.0);',
+    '',
+    '  return diffuse + (rim + viewRim + sheen) + backscatter;',
+    '}',
+    '',
+    'void main() {',
+    '  vec2 uv = (gl_FragCoord.xy - u_res * 0.5) / min(u_res.x, u_res.y);',
+    '  float t = u_time * u_flowSpeed;',
+    '  float sheen = u_sheenIntensity;',
+    '',
+    '  // ── Fabric coordinate space ──',
+    '  // Scale for large, sweeping folds — lower = bigger, smoother drapes',
+    '  vec2 fabricUV = uv * 1.0;',
+    '',
+    '  // Slow undulation — the fabric "breathes"',
+    '  float breathe1 = sin(t * 0.7 + uv.x * 1.5) * 0.03;',
+    '  float breathe2 = sin(t * 0.5 + uv.y * 1.2 + 0.8) * 0.025;',
+    '  fabricUV += vec2(breathe1, breathe2);',
+    '',
+    '  // ── Compute fabric surface ──',
+    '  float foldHeight = fabricFolds(fabricUV, t);',
+    '  vec3 normal = fabricNormal(fabricUV, t);',
+    '',
+    '  // ── View direction (looking straight at the fabric) ──',
+    '  vec3 viewDir = normalize(vec3(uv * 0.15, 1.0));',
+    '',
+    '  // ── Light source 1: Primary warm sweep ──',
+    '  // Slowly arcs across the fabric like candlelight',
+    '  float lightAngle1 = t * 0.4;',
+    '  vec3 lightDir1 = normalize(vec3(',
+    '    sin(lightAngle1) * 0.7,',
+    '    cos(lightAngle1 * 0.7 + 0.5) * 0.5,',
+    '    0.6',
+    '  ));',
+    '',
+    '  // ── Light source 2: Secondary counter-sweep ──',
+    '  float lightAngle2 = t * 0.28 + PI * 0.7;',
+    '  vec3 lightDir2 = normalize(vec3(',
+    '    cos(lightAngle2) * 0.6,',
+    '    sin(lightAngle2 * 0.6 + 1.2) * 0.65,',
+    '    0.55',
+    '  ));',
+    '',
+    '  // ── Light source 3: Subtle overhead fill ──',
+    '  float lightAngle3 = t * 0.17 + PI * 1.3;',
+    '  vec3 lightDir3 = normalize(vec3(',
+    '    sin(lightAngle3 * 0.5) * 0.3,',
+    '    cos(lightAngle3 * 0.4) * 0.3,',
+    '    0.9',
+    '  ));',
+    '',
+    '  // ── Compute velvet shading per light ──',
+    '  float v1 = velvetShading(normal, lightDir1, viewDir);',
+    '  float v2 = velvetShading(normal, lightDir2, viewDir);',
+    '  float v3 = velvetShading(normal, lightDir3, viewDir);',
+    '',
+    '  // ── Color palette — deep, dark velvet ──',
+    '  vec3 deepBlack    = vec3(0.005, 0.003, 0.002);',
+    '  vec3 valleyShadow = vec3(0.012, 0.008, 0.006);',
+    '  vec3 midFabric    = vec3(0.03, 0.02, 0.015);',
+    '  vec3 lightCatch   = vec3(0.15, 0.10, 0.05);',
+    '  vec3 brightSheen  = vec3(0.45, 0.30, 0.12);',
+    '  vec3 hotHighlight = vec3(0.70, 0.52, 0.25);',
+    '',
+    '  // ── Base fabric color from fold depth ──',
+    '  // Deep valleys are the darkest, ridges get slightly lighter',
+    '  float depth = smoothstep(0.2, 0.8, foldHeight);',
+    '  vec3 baseColor = mix(deepBlack, valleyShadow, depth);',
+    '  // Subtle mid-tone on raised areas',
+    '  baseColor = mix(baseColor, midFabric, smoothstep(0.5, 0.85, depth) * 0.4);',
+    '',
+    '  // ── Apply velvet shading from each light ──',
+    '  // Light 1: Primary — strongest, warm amber',
+    '  float intensity1 = v1 * 0.35 * sheen;',
+    '  vec3 light1Color = mix(lightCatch, brightSheen, smoothstep(0.4, 0.8, v1));',
+    '  light1Color = mix(light1Color, hotHighlight, smoothstep(0.75, 0.98, v1));',
+    '',
+    '  // Light 2: Secondary — softer, slightly cooler amber',
+    '  float intensity2 = v2 * 0.2 * sheen;',
+    '  vec3 light2Color = mix(lightCatch * 0.8, brightSheen * 0.7, smoothstep(0.4, 0.8, v2));',
+    '',
+    '  // Light 3: Fill — very subtle, prevents total blackness',
+    '  float intensity3 = v3 * 0.08 * sheen;',
+    '  vec3 light3Color = mix(valleyShadow, midFabric, smoothstep(0.3, 0.7, v3));',
+    '',
+    '  // ── Combine lighting ──',
+    '  vec3 col = baseColor;',
+    '  col += light1Color * intensity1;',
+    '  col += light2Color * intensity2;',
+    '  col += light3Color * intensity3;',
+    '',
+    '  // ── Micro-texture: velvet grain / nap ──',
+    '  // Fine noise simulating the tiny fibers of velvet catching light differently',
+    '  float grain = fbmFine(fabricUV * 5.0, t * 0.3);',
+    '  float grainMask = vnoise(fabricUV * 10.0 + t * 0.1);',
+    '',
+    '  // Grain is more visible where light catches the surface',
+    '  float totalLight = intensity1 + intensity2 + intensity3;',
+    '  float grainIntensity = grain * 0.08 * smoothstep(0.1, 0.4, totalLight);',
+    '  grainIntensity *= 0.7 + grainMask * 0.3;',
+    '',
+    '  // Warm grain color',
+    '  col += vec3(0.5, 0.35, 0.15) * grainIntensity;',
+    '',
+    '  // ── Additional fold detail: sharper creases ──',
+    '  // Subtle fold creases — very gentle, not busy',
+    '  float fineCrease = fabricFolds(fabricUV * 1.8, t * 0.5);',
+    '  float creaseEdge = abs(fract(fineCrease * 2.0) - 0.5) * 2.0;',
+    '  creaseEdge = smoothstep(0.0, 0.3, creaseEdge);',
+    '  // Darken creases very subtly',
+    '  col *= 0.95 + creaseEdge * 0.05;',
+    '',
+    '  // ── Traveling light caustic: bright line where light hits fold ridge ──',
+    '  // Creates the signature "light sweeping across velvet" effect',
+    '  float ridgeLight = smoothstep(0.62, 0.72, foldHeight);',
+    '  ridgeLight *= smoothstep(0.82, 0.72, foldHeight);',
+    '  float sweep = sin(uv.x * 2.5 + uv.y * 1.5 + t * 1.2) * 0.5 + 0.5;',
+    '  sweep = pow(sweep, 3.0);',
+    '  float caustic = ridgeLight * sweep * sheen * 0.5;',
+    '  col += brightSheen * caustic * 0.25;',
+    '  col += hotHighlight * pow(caustic, 2.0) * 0.15;',
+    '',
+    '  // ── Global breathing luminance ──',
+    '  float breatheLum = sin(t * 0.9) * 0.015 + sin(t * 0.6 + 1.3) * 0.01;',
+    '  col *= 1.0 + breatheLum;',
+    '',
+    '  // ── Soft vignette — darker edges, focus center ──',
+    '  float vig = length(uv);',
+    '  float vignette = 1.0 - smoothstep(0.25, 1.0, vig);',
+    '  col *= 0.5 + vignette * 0.5;',
+    '',
+    '  // ── Film grain — very subtle noise ──',
+    '  float filmGrain = (hash(gl_FragCoord.xy + fract(t * 37.0) * 1000.0) - 0.5) * 0.012;',
+    '  col += filmGrain;',
+    '',
+    '  // ── Tone: push warm, keep blacks deep ──',
+    '  col = max(col, vec3(0.0));',
+    '  col = pow(col, vec3(0.96, 1.0, 1.05));',
+    '',
+    '  // ── Warm lift in near-blacks (velvet never goes fully neutral) ──',
+    '  float lum = dot(col, vec3(0.299, 0.587, 0.114));',
+    '  col = mix(col, col * vec3(1.1, 0.97, 0.88), smoothstep(0.03, 0.0, lum) * 0.25);',
+    '',
+    '  gl_FragColor = vec4(col, 1.0);',
+    '}'
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error('Shader compile error:', gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error('Program link error:', gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uFlowSpeed = gl.getUniformLocation(prog, 'u_flowSpeed');
+  var uSheenIntensity = gl.getUniformLocation(prog, 'u_sheenIntensity');
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  function resize() {
+    var scale = 1.0 / pixelScale;
+    var w = Math.round(canvas.clientWidth * dpr * scale);
+    var h = Math.round(canvas.clientHeight * dpr * scale);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  var running = true;
+
+  function render(now) {
+    if (!running) { requestAnimationFrame(render); return; }
+    resize();
+    gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uFlowSpeed, FLOW_SPEED);
+    gl.uniform1f(uSheenIntensity, SHEEN_INTENSITY);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  // ── Pause when offscreen ──
+  document.addEventListener('visibilitychange', function () {
+    running = !document.hidden;
+  });
+
+  // ── PostMessage API for parameter control ──
+  window.addEventListener('message', function (e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'FLOW_SPEED': FLOW_SPEED = e.data.value; break;
+        case 'SHEEN_INTENSITY': SHEEN_INTENSITY = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

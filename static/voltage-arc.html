@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Voltage Arc</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Voltage Arc</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// Voltage Arc — Electric arcs crackling between floating conductors
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var urlParams = new URLSearchParams(window.location.search);
+  var pixelScale = parseFloat(urlParams.get('p')) || 1;
+
+  var gl = canvas.getContext('webgl', { alpha: true, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  // Tunable parameters
+  var ARC_INTENSITY = 1.0;
+  var CRACKLE_SPEED = 0.5;
+
+  var vertSrc = [
+    'attribute vec2 a_pos;',
+    'void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }'
+  ].join('\n');
+
+  var fragSrc = [
+    'precision highp float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform float u_arcIntensity;',
+    'uniform float u_crackleSpeed;',
+    '',
+    '#define PI 3.14159265359',
+    '#define NUM_CONDUCTORS 4',
+    '#define NUM_ARCS 5',
+    '',
+    '// ── Hash for noise ──',
+    'float hash(vec2 p) {',
+    '  vec3 p3 = fract(vec3(p.xyx) * 0.1031);',
+    '  p3 += dot(p3, p3.yzx + 33.33);',
+    '  return fract((p3.x + p3.y) * p3.z);',
+    '}',
+    '',
+    '// ── Value noise ──',
+    'float vnoise(vec2 p) {',
+    '  vec2 i = floor(p);',
+    '  vec2 f = fract(p);',
+    '  f = f * f * (3.0 - 2.0 * f);',
+    '  return mix(',
+    '    mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),',
+    '    mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x),',
+    '    f.y',
+    '  );',
+    '}',
+    '',
+    '// ── Layered noise for arc displacement (2-3 octaves) ──',
+    'float arcNoise(vec2 p) {',
+    '  float v = vnoise(p) * 0.6;',
+    '  v += vnoise(p * 2.3 + 17.1) * 0.3;',
+    '  v += vnoise(p * 5.7 + 43.2) * 0.1;',
+    '  return v;',
+    '}',
+    '',
+    '// ── Conductor positions — slowly orbiting points ──',
+    'vec2 conductor(int idx, float t) {',
+    '  float fi = float(idx);',
+    '  float angle = fi * 1.571 + t * (0.12 + fi * 0.03);',
+    '  float rx = 0.25 + fi * 0.05;',
+    '  float ry = 0.18 + fi * 0.04;',
+    '  float offx = sin(fi * 2.7 + 0.5) * 0.1;',
+    '  float offy = cos(fi * 1.9 + 1.3) * 0.08;',
+    '  return vec2(',
+    '    offx + cos(angle) * rx + sin(t * 0.07 + fi * 3.1) * 0.06,',
+    '    offy + sin(angle * 1.3 + fi * 0.8) * ry + cos(t * 0.09 + fi * 2.3) * 0.05',
+    '  );',
+    '}',
+    '',
+    '// ── Compute single electric arc contribution ──',
+    '// Returns glow intensity for a pixel relative to an arc between two points',
+    'float electricArc(vec2 uv, vec2 a, vec2 b, float t, float seed) {',
+    '  vec2 ab = b - a;',
+    '  float len = length(ab);',
+    '  if (len < 0.001) return 0.0;',
+    '  vec2 dir = ab / len;',
+    '  vec2 perp = vec2(-dir.y, dir.x);',
+    '',
+    '  // Project point onto line segment',
+    '  vec2 ap = uv - a;',
+    '  float proj = dot(ap, dir);',
+    '  float param = clamp(proj / len, 0.0, 1.0);',
+    '',
+    '  // Noise displacement perpendicular to the arc path',
+    '  // Use fast-changing noise offset for crackling effect',
+    '  float noiseT = t * u_crackleSpeed * 8.0 + seed * 100.0;',
+    '  float noiseX = param * 6.0 + seed * 37.0;',
+    '',
+    '  // Main bolt displacement — large jagged strokes',
+    '  float disp = (arcNoise(vec2(noiseX, noiseT)) - 0.5) * 0.12;',
+    '  // Taper displacement at endpoints so arcs connect cleanly',
+    '  float taper = param * (1.0 - param) * 4.0;',
+    '  taper = min(taper, 1.0);',
+    '  disp *= taper;',
+    '',
+    '  // Fine crackle detail — higher frequency jitter',
+    '  float fine = (arcNoise(vec2(noiseX * 3.0 + 91.0, noiseT * 1.7 + 53.0)) - 0.5) * 0.03;',
+    '  fine *= taper;',
+    '',
+    '  // Point on the displaced arc centerline',
+    '  vec2 arcPoint = a + dir * (param * len) + perp * (disp + fine);',
+    '',
+    '  // Distance from pixel to displaced arc',
+    '  float d = length(uv - arcPoint);',
+    '',
+    '  // Intensity pulse — arcs periodically intensify',
+    '  float pulse = 0.7 + 0.3 * sin(t * 1.5 + seed * 5.0);',
+    '  pulse *= 0.8 + 0.2 * sin(t * 3.7 + seed * 11.0);',
+    '',
+    '  // Flicker — rapid random intensity variation',
+    '  float flicker = 0.85 + 0.15 * sin(noiseT * 13.0 + param * 20.0);',
+    '',
+    '  // Core brightness (sharp, bright center)',
+    '  float core = 0.003 / (d * d + 0.0001);',
+    '  core = min(core, 8.0);',
+    '',
+    '  // Inner glow (medium falloff)',
+    '  float inner = 0.008 / (d + 0.005);',
+    '  inner = min(inner, 3.0);',
+    '',
+    '  // Outer glow (soft, wide)',
+    '  float outer = 0.02 / (d + 0.03);',
+    '  outer = min(outer, 1.0);',
+    '',
+    '  float total = (core * 0.5 + inner * 0.35 + outer * 0.15) * pulse * flicker * taper;',
+    '',
+    '  return total;',
+    '}',
+    '',
+    '// ── Branch arc — smaller secondary bolt that forks off ──',
+    'float branchArc(vec2 uv, vec2 a, vec2 b, float t, float seed) {',
+    '  vec2 ab = b - a;',
+    '  float len = length(ab);',
+    '  if (len < 0.001) return 0.0;',
+    '  vec2 dir = ab / len;',
+    '  vec2 perp = vec2(-dir.y, dir.x);',
+    '',
+    '  vec2 ap = uv - a;',
+    '  float proj = dot(ap, dir);',
+    '  float param = clamp(proj / len, 0.0, 1.0);',
+    '',
+    '  float noiseT = t * u_crackleSpeed * 10.0 + seed * 200.0;',
+    '  float noiseX = param * 4.0 + seed * 53.0;',
+    '',
+    '  float disp = (arcNoise(vec2(noiseX, noiseT)) - 0.5) * 0.06;',
+    '  float taper = sqrt(param) * pow(1.0 - param, 2.0) * 6.75;',
+    '  taper = min(taper, 1.0);',
+    '  disp *= taper;',
+    '',
+    '  vec2 arcPoint = a + dir * (param * len) + perp * disp;',
+    '  float d = length(uv - arcPoint);',
+    '',
+    '  float flicker = 0.5 + 0.5 * sin(noiseT * 17.0 + param * 30.0);',
+    '',
+    '  float core = 0.001 / (d * d + 0.0002);',
+    '  core = min(core, 4.0);',
+    '  float glow = 0.004 / (d + 0.01);',
+    '  glow = min(glow, 1.5);',
+    '',
+    '  return (core * 0.4 + glow * 0.3) * flicker * taper;',
+    '}',
+    '',
+    '// ── Conductor point glow ──',
+    'float conductorGlow(vec2 uv, vec2 pos) {',
+    '  float d = length(uv - pos);',
+    '  float core = 0.0008 / (d * d + 0.00005);',
+    '  core = min(core, 10.0);',
+    '  float glow = 0.006 / (d + 0.008);',
+    '  glow = min(glow, 3.0);',
+    '  float halo = 0.015 / (d + 0.05);',
+    '  halo = min(halo, 0.8);',
+    '  return core * 0.3 + glow * 0.4 + halo * 0.3;',
+    '}',
+    '',
+    'void main() {',
+    '  vec2 uv = (gl_FragCoord.xy - u_res * 0.5) / min(u_res.x, u_res.y);',
+    '  float t = u_time;',
+    '  float intensity = u_arcIntensity;',
+    '',
+    '  // ── Background — very dark warm ──',
+    '  vec3 bg = vec3(0.031, 0.024, 0.016);',
+    '',
+    '  // Subtle ambient noise in background',
+    '  float bgNoise = vnoise(uv * 3.0 + t * 0.05) * 0.008;',
+    '  bg += vec3(bgNoise * 0.8, bgNoise * 0.5, bgNoise * 0.3);',
+    '',
+    '  // ── Compute conductor positions ──',
+    '  vec2 c0 = conductor(0, t);',
+    '  vec2 c1 = conductor(1, t);',
+    '  vec2 c2 = conductor(2, t);',
+    '  vec2 c3 = conductor(3, t);',
+    '',
+    '  // ── Color layers ──',
+    '  vec3 coreColor  = vec3(1.0, 0.92, 0.75);',
+    '  vec3 innerColor = vec3(0.95, 0.65, 0.30);',
+    '  vec3 outerColor = vec3(0.60, 0.35, 0.12);',
+    '',
+    '  // ── Accumulate arc contributions ──',
+    '  float totalArc = 0.0;',
+    '  float totalBranch = 0.0;',
+    '',
+    '  // Arc 0: c0 -> c1',
+    '  totalArc += electricArc(uv, c0, c1, t, 1.0);',
+    '  // Arc 1: c1 -> c2',
+    '  totalArc += electricArc(uv, c1, c2, t, 2.7);',
+    '  // Arc 2: c2 -> c3',
+    '  totalArc += electricArc(uv, c2, c3, t, 4.3);',
+    '  // Arc 3: c3 -> c0 (completing the circuit)',
+    '  totalArc += electricArc(uv, c3, c0, t, 6.1);',
+    '  // Arc 4: c0 -> c2 (diagonal, with intermittent activity)',
+    '  float diagPulse = smoothstep(0.3, 0.7, sin(t * 0.4 + 1.0) * 0.5 + 0.5);',
+    '  totalArc += electricArc(uv, c0, c2, t, 8.5) * diagPulse;',
+    '',
+    '  // ── Branch arcs — small forks off main arcs ──',
+    '  // Branch from midpoint of arc 0',
+    '  vec2 mid01 = (c0 + c1) * 0.5 + vec2(',
+    '    sin(t * 2.3) * 0.02,',
+    '    cos(t * 1.9) * 0.02',
+    '  );',
+    '  vec2 branchEnd1 = mid01 + vec2(',
+    '    sin(t * 0.7 + 3.0) * 0.12,',
+    '    cos(t * 0.5 + 1.0) * 0.08',
+    '  );',
+    '  float branchActive1 = smoothstep(0.4, 0.6, sin(t * 0.8 + 2.0) * 0.5 + 0.5);',
+    '  totalBranch += branchArc(uv, mid01, branchEnd1, t, 11.0) * branchActive1;',
+    '',
+    '  // Branch from midpoint of arc 2',
+    '  vec2 mid23 = (c2 + c3) * 0.5 + vec2(',
+    '    cos(t * 1.8) * 0.02,',
+    '    sin(t * 2.1) * 0.02',
+    '  );',
+    '  vec2 branchEnd2 = mid23 + vec2(',
+    '    cos(t * 0.6 + 5.0) * 0.10,',
+    '    sin(t * 0.8 + 3.0) * 0.10',
+    '  );',
+    '  float branchActive2 = smoothstep(0.4, 0.6, sin(t * 0.6 + 4.0) * 0.5 + 0.5);',
+    '  totalBranch += branchArc(uv, mid23, branchEnd2, t, 15.0) * branchActive2;',
+    '',
+    '  // ── Composite arc color ──',
+    '  float arcVal = totalArc * intensity;',
+    '  float branchVal = totalBranch * intensity * 0.6;',
+    '',
+    '  // Three-layer coloring: outer glow -> inner glow -> bright core',
+    '  vec3 arcColor = outerColor * smoothstep(0.0, 0.2, arcVal) * 0.6;',
+    '  arcColor += innerColor * smoothstep(0.15, 0.8, arcVal) * 0.7;',
+    '  arcColor += coreColor * smoothstep(0.6, 2.0, arcVal) * 1.0;',
+    '  // Hot white at peak intensity',
+    '  arcColor += vec3(1.0, 0.96, 0.92) * smoothstep(2.0, 4.0, arcVal) * 0.6;',
+    '',
+    '  // Branch coloring (similar but dimmer)',
+    '  vec3 branchColor = outerColor * smoothstep(0.0, 0.2, branchVal) * 0.3;',
+    '  branchColor += innerColor * smoothstep(0.15, 0.6, branchVal) * 0.35;',
+    '  branchColor += coreColor * smoothstep(0.5, 1.5, branchVal) * 0.5;',
+    '',
+    '  // ── Conductor point rendering ──',
+    '  float condGlow = 0.0;',
+    '  condGlow += conductorGlow(uv, c0);',
+    '  condGlow += conductorGlow(uv, c1);',
+    '  condGlow += conductorGlow(uv, c2);',
+    '  condGlow += conductorGlow(uv, c3);',
+    '',
+    '  vec3 condColor = vec3(0.0);',
+    '  condColor += coreColor * smoothstep(0.0, 0.5, condGlow) * 0.3;',
+    '  condColor += innerColor * smoothstep(0.3, 1.5, condGlow) * 0.4;',
+    '  condColor += vec3(1.0, 0.95, 0.88) * smoothstep(1.5, 4.0, condGlow) * 0.6;',
+    '',
+    '  // ── Ambient electric haze — very subtle field glow ──',
+    '  float haze = 0.0;',
+    '  haze += 0.02 / (length(uv - c0) + 0.3);',
+    '  haze += 0.02 / (length(uv - c1) + 0.3);',
+    '  haze += 0.02 / (length(uv - c2) + 0.3);',
+    '  haze += 0.02 / (length(uv - c3) + 0.3);',
+    '  vec3 hazeColor = outerColor * haze * intensity * 0.25;',
+    '',
+    '  // ── Combine all layers (additive blending) ──',
+    '  vec3 col = bg;',
+    '  col += hazeColor;',
+    '  col += arcColor;',
+    '  col += branchColor;',
+    '  col += condColor;',
+    '',
+    '  // ── Film grain ──',
+    '  float grain = (hash(gl_FragCoord.xy + fract(t * 43.0) * 1000.0) - 0.5) * 0.015;',
+    '  col += grain;',
+    '',
+    '  // ── Vignette ──',
+    '  float vig = length(uv * vec2(0.9, 1.0));',
+    '  float vignette = 1.0 - smoothstep(0.4, 1.1, vig);',
+    '  col *= 0.6 + vignette * 0.4;',
+    '',
+    '  // ── Tone mapping — keep warm, prevent blowout ──',
+    '  col = col / (col + vec3(1.2));',
+    '  col = pow(col, vec3(0.92, 0.97, 1.05));',
+    '',
+    '  col = max(col, vec3(0.0));',
+    '',
+    '  gl_FragColor = vec4(col, 1.0);',
+    '}'
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error('Shader compile error:', gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error('Program link error:', gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uArcIntensity = gl.getUniformLocation(prog, 'u_arcIntensity');
+  var uCrackleSpeed = gl.getUniformLocation(prog, 'u_crackleSpeed');
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  function resize() {
+    var scale = 1.0 / pixelScale;
+    var w = Math.round(canvas.clientWidth * dpr * scale);
+    var h = Math.round(canvas.clientHeight * dpr * scale);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  var running = true;
+
+  function render(now) {
+    if (!running) { requestAnimationFrame(render); return; }
+    resize();
+    gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uArcIntensity, ARC_INTENSITY);
+    gl.uniform1f(uCrackleSpeed, CRACKLE_SPEED);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  // ── Pause when offscreen ──
+  document.addEventListener('visibilitychange', function () {
+    running = !document.hidden;
+  });
+
+  // ── PostMessage API for parameter control ──
+  window.addEventListener('message', function (e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'ARC_INTENSITY': ARC_INTENSITY = e.data.value; break;
+        case 'CRACKLE_SPEED': CRACKLE_SPEED = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

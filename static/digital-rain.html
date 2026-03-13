@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Digital Rain</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed; top: 20px; left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px; letter-spacing: 0.15em; text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5); z-index: 10; pointer-events: none; user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Digital Rain</div>
+<canvas id="canvas"></canvas>
+<script>
+(function() {
+  var canvas = document.getElementById('canvas');
+  var ctx = canvas.getContext('2d');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var _pad = parseFloat(new URLSearchParams(location.search).get('p')) || 1;
+
+  var width, height, dpr;
+
+  function resize() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    canvas.style.width = width + 'px';
+    canvas.style.height = height + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    initColumns();
+  }
+
+  window.addEventListener('resize', resize);
+
+  // Tunable parameters
+  var FALL_SPEED = 1.0;
+  var COLUMN_DENSITY = 0.7;
+
+  // Character sets
+  var katakana = '\u30A2\u30A4\u30A6\u30A8\u30AA\u30AB\u30AD\u30AF\u30B1\u30B3\u30B5\u30B7\u30B9\u30BB\u30BD\u30BF\u30C1\u30C4\u30C6\u30C8\u30CA\u30CB\u30CC\u30CD\u30CE\u30CF\u30D2\u30D5\u30D8\u30DB\u30DE\u30DF\u30E0\u30E1\u30E2\u30E4\u30E6\u30E8\u30E9\u30EA\u30EB\u30EC\u30ED\u30EF\u30F2\u30F3';
+  var numbers = '0123456789';
+  var mathSymbols = '\u00D7\u00F7\u2206\u03A3\u03A0\u221A\u221E\u2248\u2260\u2264\u2265\u222B\u2202\u03B1\u03B2\u03B3\u03B8\u03C6\u03C8\u03C9';
+  var allChars = katakana + numbers + mathSymbols;
+
+  function randomChar() {
+    return allChars[Math.floor(Math.random() * allChars.length)];
+  }
+
+  // Column settings
+  var FONT_SIZE = Math.max(14, Math.round(16 * _pad));
+  var columns = [];
+  var waterSurface; // y coordinate where water begins
+
+  // Ripple system
+  var ripples = [];
+  var MAX_RIPPLES = 40;
+
+  // Wave simulation for the water surface
+  var wavePoints = [];
+  var WAVE_RESOLUTION = 4; // pixels per wave point
+  var waveCount = 0;
+
+  function initColumns() {
+    waterSurface = height * 0.78;
+    var colWidth = FONT_SIZE;
+    var colCount = Math.floor(width / colWidth);
+    var newColumns = [];
+
+    for (var i = 0; i < colCount; i++) {
+      var existing = columns[i];
+      if (existing) {
+        existing.x = i * colWidth;
+        newColumns.push(existing);
+      } else {
+        newColumns.push(createColumn(i, true));
+      }
+    }
+    columns = newColumns;
+
+    // Reinit wave points
+    waveCount = Math.ceil(width / WAVE_RESOLUTION) + 1;
+    var newWave = [];
+    for (var w = 0; w < waveCount; w++) {
+      newWave.push({ y: 0, vy: 0 });
+    }
+    wavePoints = newWave;
+  }
+
+  function createColumn(index, scatter) {
+    var trailLen = 12 + Math.floor(Math.random() * 20);
+    var maxChars = trailLen + 5;
+    var chars = [];
+    for (var j = 0; j < maxChars; j++) {
+      chars.push({
+        char: randomChar(),
+        cycleTimer: Math.random() * 3,
+        cycleRate: 0.5 + Math.random() * 2
+      });
+    }
+
+    // When scatter is true (initial load), distribute columns across the
+    // full screen so characters are visible on the very first frame
+    var startY;
+    if (scatter) {
+      if (Math.random() < COLUMN_DENSITY) {
+        // Place the lead character somewhere between top and water surface
+        startY = Math.random() * (waterSurface + trailLen * FONT_SIZE) - trailLen * FONT_SIZE * 0.3;
+      } else {
+        startY = -trailLen * FONT_SIZE - Math.random() * height * 0.5;
+      }
+    } else {
+      startY = -trailLen * FONT_SIZE * Math.random() * 0.3;
+    }
+
+    return {
+      x: index * FONT_SIZE,
+      y: startY,
+      speed: 1.2 + Math.random() * 2.5,
+      length: trailLen,
+      chars: chars,
+      active: scatter ? Math.random() < (COLUMN_DENSITY + 0.2) : Math.random() < COLUMN_DENSITY,
+      restartDelay: 0,
+      opacity: 0.6 + Math.random() * 0.4,
+      hitWater: false
+    };
+  }
+
+  function updateColumns(dt) {
+    for (var i = 0; i < columns.length; i++) {
+      var col = columns[i];
+
+      if (!col.active) {
+        col.restartDelay -= dt;
+        if (col.restartDelay <= 0) {
+          if (Math.random() < COLUMN_DENSITY) {
+            col.active = true;
+            col.y = -col.length * FONT_SIZE * Math.random() * 0.3;
+            col.speed = 1.2 + Math.random() * 2.5;
+            col.length = 12 + Math.floor(Math.random() * 20);
+            col.opacity = 0.6 + Math.random() * 0.4;
+            col.hitWater = false;
+            // Refresh chars
+            for (var c = 0; c < col.chars.length; c++) {
+              col.chars[c].char = randomChar();
+            }
+          } else {
+            col.restartDelay = 0.3 + Math.random() * 1.5;
+          }
+        }
+        continue;
+      }
+
+      // Move column down
+      var prevY = col.y;
+      col.y += col.speed * FALL_SPEED * dt * 60;
+
+      // Cycle characters randomly
+      for (var j = 0; j < col.chars.length; j++) {
+        col.chars[j].cycleTimer -= dt;
+        if (col.chars[j].cycleTimer <= 0) {
+          col.chars[j].char = randomChar();
+          col.chars[j].cycleTimer = col.chars[j].cycleRate;
+        }
+      }
+
+      // Check if lead character has hit the water
+      if (!col.hitWater && col.y >= waterSurface && prevY < waterSurface) {
+        col.hitWater = true;
+        spawnRipple(col.x + FONT_SIZE * 0.5, waterSurface);
+        disturbWave(col.x + FONT_SIZE * 0.5, -2 - Math.random() * 3);
+      }
+
+      // Reset column when entire trail is below water
+      var tailY = col.y - col.length * FONT_SIZE;
+      if (tailY > waterSurface + 30) {
+        col.active = false;
+        col.restartDelay = 0.2 + Math.random() * 2;
+      }
+    }
+  }
+
+  function drawColumns() {
+    ctx.font = FONT_SIZE + 'px "SF Mono", "Fira Code", "Cascadia Code", monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+
+    for (var i = 0; i < columns.length; i++) {
+      var col = columns[i];
+      if (!col.active) continue;
+
+      for (var j = 0; j < col.length; j++) {
+        // j=0 is the leading (bottom) character, higher j = further up the trail
+        var charY = col.y - j * FONT_SIZE;
+
+        // Don't draw below water surface
+        if (charY > waterSurface) continue;
+        // Don't draw above screen (with some margin)
+        if (charY < -FONT_SIZE) continue;
+
+        // Wrap char index safely
+        var charIndex = j % col.chars.length;
+
+        // Calculate brightness: leading char is brightest, fades behind
+        var trailFraction = j / col.length;
+        var brightness;
+
+        if (j === 0) {
+          // Leading character - white-hot
+          brightness = 1.0;
+        } else if (j === 1) {
+          brightness = 0.9;
+        } else if (j < 4) {
+          brightness = 0.75 - (j - 2) * 0.08;
+        } else {
+          brightness = Math.max(0, 0.6 * (1 - trailFraction));
+        }
+
+        // Fade characters approaching water surface
+        var distToWater = waterSurface - charY;
+        if (distToWater < FONT_SIZE * 3) {
+          brightness *= Math.max(0, distToWater / (FONT_SIZE * 3));
+        }
+
+        brightness *= col.opacity;
+
+        if (brightness < 0.02) continue;
+
+        // Color: lead is white-amber, near-lead is bright amber, trail is warm amber
+        var r, g, b;
+        if (j === 0) {
+          r = 255; g = 245; b = 220;
+        } else if (j < 3) {
+          r = 240; g = 200; b = 140;
+        } else {
+          r = 200; g = 149; b = 108;
+        }
+
+        ctx.fillStyle = 'rgba(' + r + ',' + g + ',' + b + ',' + brightness + ')';
+
+        // Subtle glow on leading character
+        if (j === 0) {
+          ctx.shadowColor = 'rgba(255, 220, 160, 0.6)';
+          ctx.shadowBlur = 8;
+        }
+
+        ctx.fillText(col.chars[charIndex].char, col.x + FONT_SIZE * 0.5, charY);
+
+        if (j === 0) {
+          ctx.shadowColor = 'transparent';
+          ctx.shadowBlur = 0;
+        }
+      }
+    }
+  }
+
+  // Draw faint reflections in the water
+  function drawReflections() {
+    ctx.save();
+
+    // Clip to water region
+    ctx.beginPath();
+    ctx.rect(0, waterSurface, width, height - waterSurface);
+    ctx.clip();
+
+    ctx.font = FONT_SIZE + 'px "SF Mono", "Fira Code", "Cascadia Code", monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+
+    for (var i = 0; i < columns.length; i++) {
+      var col = columns[i];
+      if (!col.active) continue;
+
+      // Reflect the last few visible characters near the surface
+      for (var j = 0; j < Math.min(col.length, 8); j++) {
+        var charY = col.y - j * FONT_SIZE;
+        // Only reflect characters near the surface
+        if (charY > waterSurface || charY < waterSurface - FONT_SIZE * 8) continue;
+
+        var charIndex = j % col.chars.length;
+
+        // Mirror position below surface
+        var reflectY = waterSurface + (waterSurface - charY);
+
+        // Fade with depth below surface
+        var depthBelow = reflectY - waterSurface;
+        var reflectAlpha = Math.max(0, 0.12 * (1 - depthBelow / (height * 0.2)));
+
+        // Slight horizontal distortion from waves
+        var waveIdx = Math.floor(col.x / WAVE_RESOLUTION);
+        var waveOffset = 0;
+        if (waveIdx >= 0 && waveIdx < wavePoints.length) {
+          waveOffset = wavePoints[waveIdx].y * 2;
+        }
+
+        if (reflectAlpha < 0.01) continue;
+
+        ctx.fillStyle = 'rgba(200, 149, 108, ' + reflectAlpha + ')';
+        ctx.fillText(
+          col.chars[charIndex].char,
+          col.x + FONT_SIZE * 0.5 + Math.sin(depthBelow * 0.05) * 3,
+          reflectY + waveOffset
+        );
+      }
+    }
+
+    ctx.restore();
+  }
+
+  // Ripple system
+  function spawnRipple(x, y) {
+    if (ripples.length >= MAX_RIPPLES) {
+      ripples.shift();
+    }
+    ripples.push({
+      x: x,
+      y: y,
+      radius: 0,
+      maxRadius: 30 + Math.random() * 50,
+      speed: 20 + Math.random() * 30,
+      life: 1.0,
+      decay: 0.3 + Math.random() * 0.2
+    });
+  }
+
+  function updateRipples(dt) {
+    var i = ripples.length;
+    while (i--) {
+      var r = ripples[i];
+      r.radius += r.speed * dt;
+      r.life -= r.decay * dt;
+      if (r.life <= 0 || r.radius > r.maxRadius) {
+        ripples.splice(i, 1);
+      }
+    }
+  }
+
+  function drawRipples() {
+    for (var i = 0; i < ripples.length; i++) {
+      var r = ripples[i];
+      var alpha = r.life * 0.3;
+
+      for (var ring = 0; ring < 3; ring++) {
+        var ringRadius = r.radius - ring * 8;
+        if (ringRadius <= 0) continue;
+        var ringAlpha = alpha * (1 - ring * 0.3);
+
+        ctx.beginPath();
+        ctx.ellipse(r.x, r.y + ring * 2, ringRadius, ringRadius * 0.3, 0, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(200, 170, 130, ' + ringAlpha + ')';
+        ctx.lineWidth = 1 - ring * 0.2;
+        ctx.stroke();
+      }
+    }
+  }
+
+  // Wave simulation
+  function disturbWave(x, force) {
+    var idx = Math.floor(x / WAVE_RESOLUTION);
+    var spread = 3;
+    for (var i = -spread; i <= spread; i++) {
+      var wi = idx + i;
+      if (wi >= 0 && wi < wavePoints.length) {
+        var influence = 1 - Math.abs(i) / (spread + 1);
+        wavePoints[wi].vy += force * influence;
+      }
+    }
+  }
+
+  function updateWaves(dt) {
+    var damping = 0.97;
+    var tension = 0.03;
+    var spread = 0.25;
+
+    for (var i = 0; i < wavePoints.length; i++) {
+      var p = wavePoints[i];
+      p.vy += -tension * p.y;
+      p.vy *= damping;
+      p.y += p.vy;
+    }
+
+    for (var pass = 0; pass < 3; pass++) {
+      for (var i = 0; i < wavePoints.length; i++) {
+        if (i > 0) {
+          wavePoints[i].vy += spread * (wavePoints[i - 1].y - wavePoints[i].y);
+        }
+        if (i < wavePoints.length - 1) {
+          wavePoints[i].vy += spread * (wavePoints[i + 1].y - wavePoints[i].y);
+        }
+      }
+    }
+  }
+
+  function drawWaterSurface(time) {
+    // Draw the water region background
+    var waterGrad = ctx.createLinearGradient(0, waterSurface, 0, height);
+    waterGrad.addColorStop(0, 'rgba(15, 13, 11, 0.6)');
+    waterGrad.addColorStop(0.3, 'rgba(12, 11, 10, 0.85)');
+    waterGrad.addColorStop(1, 'rgba(10, 10, 10, 0.95)');
+    ctx.fillStyle = waterGrad;
+    ctx.fillRect(0, waterSurface - 2, width, height - waterSurface + 2);
+
+    // Draw wave surface line
+    ctx.beginPath();
+
+    for (var x = 0; x <= width; x += WAVE_RESOLUTION) {
+      var idx = Math.floor(x / WAVE_RESOLUTION);
+      var waveY = idx < wavePoints.length ? wavePoints[idx].y : 0;
+
+      var ambient = Math.sin(x * 0.01 + time * 0.8) * 1.5
+                  + Math.sin(x * 0.023 + time * 0.5) * 1.0
+                  + Math.sin(x * 0.007 + time * 0.3) * 2.0;
+
+      var py = waterSurface + waveY + ambient;
+
+      if (x === 0) {
+        ctx.moveTo(x, py);
+      } else {
+        ctx.lineTo(x, py);
+      }
+    }
+
+    ctx.strokeStyle = 'rgba(200, 170, 130, 0.25)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // Glow along the surface
+    var surfGlow = ctx.createLinearGradient(0, waterSurface - 10, 0, waterSurface + 20);
+    surfGlow.addColorStop(0, 'rgba(200, 149, 108, 0)');
+    surfGlow.addColorStop(0.4, 'rgba(200, 149, 108, 0.06)');
+    surfGlow.addColorStop(0.6, 'rgba(200, 149, 108, 0.04)');
+    surfGlow.addColorStop(1, 'rgba(200, 149, 108, 0)');
+    ctx.fillStyle = surfGlow;
+    ctx.fillRect(0, waterSurface - 10, width, 30);
+
+    drawZenRipples(time);
+  }
+
+  function drawZenRipples(time) {
+    var zenPoints = [
+      { x: width * 0.3, y: waterSurface + (height - waterSurface) * 0.4 },
+      { x: width * 0.7, y: waterSurface + (height - waterSurface) * 0.5 },
+      { x: width * 0.5, y: waterSurface + (height - waterSurface) * 0.7 }
+    ];
+
+    for (var z = 0; z < zenPoints.length; z++) {
+      var zp = zenPoints[z];
+
+      for (var ring = 0; ring < 4; ring++) {
+        var phase = time * 0.4 + ring * 1.5 + z * 2.0;
+        var radius = 20 + (phase % 6) * 15;
+        var alpha = 0.06 * Math.max(0, 1 - (phase % 6) / 6);
+
+        if (alpha < 0.005) continue;
+
+        ctx.beginPath();
+        ctx.ellipse(zp.x, zp.y, radius, radius * 0.3, 0, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(200, 170, 130, ' + alpha + ')';
+        ctx.lineWidth = 0.8;
+        ctx.stroke();
+      }
+    }
+  }
+
+  function drawVignette() {
+    var cx = width / 2;
+    var cy = height / 2;
+    var maxDim = Math.max(width, height);
+    var vignette = ctx.createRadialGradient(cx, cy, maxDim * 0.25, cx, cy, maxDim * 0.8);
+    vignette.addColorStop(0, 'rgba(10, 10, 10, 0)');
+    vignette.addColorStop(1, 'rgba(10, 10, 10, 0.45)');
+    ctx.fillStyle = vignette;
+    ctx.fillRect(0, 0, width, height);
+  }
+
+  function drawWaterParticles(time) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, waterSurface, width, height - waterSurface);
+    ctx.clip();
+
+    for (var i = 0; i < 30; i++) {
+      var px = (Math.sin(i * 73.1 + time * 0.07) * 0.5 + 0.5) * width;
+      var py = waterSurface + (Math.cos(i * 127.3 + time * 0.05) * 0.5 + 0.5) * (height - waterSurface);
+      var alpha = 0.04 + 0.03 * Math.sin(time * 0.5 + i * 1.7);
+
+      ctx.fillStyle = 'rgba(200, 149, 108, ' + alpha + ')';
+      ctx.beginPath();
+      ctx.arc(px, py, 1, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
+
+  // Animation state
+  var lastTime = 0;
+
+  resize();
+
+  function render(timestamp) {
+    if (!lastTime) lastTime = timestamp;
+    var dt = Math.min((timestamp - lastTime) / 1000, 0.05);
+    lastTime = timestamp;
+
+    if (prefersReduced) dt = 0;
+
+    var time = timestamp / 1000;
+
+    // Clear
+    ctx.clearRect(0, 0, width, height);
+    ctx.fillStyle = '#0a0a0a';
+    ctx.fillRect(0, 0, width, height);
+
+    // Update systems
+    updateColumns(dt);
+    updateRipples(dt);
+    updateWaves(dt);
+
+    // Draw layers (back to front)
+    drawColumns();
+    drawWaterSurface(time);
+    drawReflections();
+    drawRipples();
+    drawWaterParticles(time);
+    drawVignette();
+
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  // PostMessage listener for parameter updates
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'FALL_SPEED': FALL_SPEED = e.data.value; break;
+        case 'COLUMN_DENSITY': COLUMN_DENSITY = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

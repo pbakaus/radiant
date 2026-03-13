@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Satin Ripple</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed; top: 20px; left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px; letter-spacing: 0.15em; text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5); z-index: 10; pointer-events: none; user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Satin Ripple</div>
+<canvas id="canvas"></canvas>
+<script>
+(function() {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var gl = canvas.getContext('webgl', { alpha: false, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  var vertSrc = 'attribute vec2 a_pos; void main(){gl_Position=vec4(a_pos,0,1);}';
+
+  var fragSrc = [
+    'precision highp float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform float u_rippleSpeed;',
+    'uniform float u_sheenIntensity;',
+    '',
+    '// Simple hash for subtle noise',
+    'float hash(vec2 p) {',
+    '  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);',
+    '}',
+    '',
+    '// Smooth value noise for subtle organic variation',
+    'float vnoise(vec2 p) {',
+    '  vec2 i = floor(p);',
+    '  vec2 f = fract(p);',
+    '  f = f * f * (3.0 - 2.0 * f);',
+    '  float a = hash(i);',
+    '  float b = hash(i + vec2(1.0, 0.0));',
+    '  float c = hash(i + vec2(0.0, 1.0));',
+    '  float d = hash(i + vec2(1.0, 1.0));',
+    '  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);',
+    '}',
+    '',
+    'void main() {',
+    '  vec2 uv = gl_FragCoord.xy / u_res;',
+    '  float aspect = u_res.x / u_res.y;',
+    '  vec2 p = uv;',
+    '  p.x *= aspect;',
+    '',
+    '  float t = u_time * u_rippleSpeed;',
+    '',
+    '  // ── Height field: 4 large sweeping sine waves ──',
+    '  // Each wave has low frequency and a slightly different angle',
+    '  // to create broad fabric drape-like folds',
+    '',
+    '  // Wave 1: dominant horizontal fold (the main drape)',
+    '  float h = 0.45 * sin(p.y * 2.2 + p.x * 0.3 + t * 0.7);',
+    '',
+    '  // Wave 2: gentle diagonal sweep',
+    '  h += 0.30 * sin(p.y * 1.5 - p.x * 1.8 + t * 0.5 + 1.0);',
+    '',
+    '  // Wave 3: very broad undulation',
+    '  h += 0.20 * sin(p.x * 1.2 + p.y * 0.8 + t * 0.9 + 2.5);',
+    '',
+    '  // Wave 4: subtle secondary fold',
+    '  h += 0.12 * sin(p.y * 2.8 + p.x * 1.0 - t * 0.4 + 4.0);',
+    '',
+    '  // Tiny amount of noise for organic feel (very subtle)',
+    '  h += 0.04 * (vnoise(p * 6.0 + t * 0.3) - 0.5);',
+    '',
+    '  // ── Compute surface normal via central differencing ──',
+    '  float eps = 0.003;',
+    '',
+    '  // Height at offset positions (recompute the same wave formula)',
+    '  // +x offset',
+    '  vec2 px = p + vec2(eps, 0.0);',
+    '  float hx = 0.45 * sin(px.y * 2.2 + px.x * 0.3 + t * 0.7)',
+    '           + 0.30 * sin(px.y * 1.5 - px.x * 1.8 + t * 0.5 + 1.0)',
+    '           + 0.20 * sin(px.x * 1.2 + px.y * 0.8 + t * 0.9 + 2.5)',
+    '           + 0.12 * sin(px.y * 2.8 + px.x * 1.0 - t * 0.4 + 4.0)',
+    '           + 0.04 * (vnoise(px * 6.0 + t * 0.3) - 0.5);',
+    '',
+    '  // +y offset',
+    '  vec2 py = p + vec2(0.0, eps);',
+    '  float hy = 0.45 * sin(py.y * 2.2 + py.x * 0.3 + t * 0.7)',
+    '           + 0.30 * sin(py.y * 1.5 - py.x * 1.8 + t * 0.5 + 1.0)',
+    '           + 0.20 * sin(py.x * 1.2 + py.y * 0.8 + t * 0.9 + 2.5)',
+    '           + 0.12 * sin(py.y * 2.8 + py.x * 1.0 - t * 0.4 + 4.0)',
+    '           + 0.04 * (vnoise(py * 6.0 + t * 0.3) - 0.5);',
+    '',
+    '  // Surface normal (unnormalized tangent-space derivatives)',
+    '  float dhdx = (hx - h) / eps;',
+    '  float dhdy = (hy - h) / eps;',
+    '  vec3 N = normalize(vec3(-dhdx, -dhdy, 1.0));',
+    '',
+    '  // ── Tangent direction (along the dominant fold) ──',
+    '  // The dominant folds run mostly horizontally (wave 1 is along Y),',
+    '  // so the tangent along the fold is roughly in X direction',
+    '  vec3 T = normalize(vec3(1.0, 0.3, dhdx * 0.3));',
+    '',
+    '  // ── Lighting setup ──',
+    '  // Single strong directional light from upper-left to create one main sheen line',
+    '  vec3 lightDir = normalize(vec3(0.4, 0.6, 0.8));',
+    '  vec3 viewDir = vec3(0.0, 0.0, 1.0);',
+    '  vec3 halfVec = normalize(lightDir + viewDir);',
+    '',
+    '  // ── Anisotropic specular (satin sheen) ──',
+    '  // The sheen stretches perpendicular to the fold tangent',
+    '  float TdotH = dot(T, halfVec);',
+    '  float aniso = pow(max(1.0 - TdotH * TdotH, 0.0), 12.0);',
+    '',
+    '  // Also add a standard NdotH term to localize the sheen on the folds',
+    '  float NdotH = max(dot(N, halfVec), 0.0);',
+    '  float specBase = pow(NdotH, 8.0);',
+    '',
+    '  // Combine: anisotropic sheen modulated by fold orientation',
+    '  float sheen = aniso * specBase * 3.5 * u_sheenIntensity;',
+    '',
+    '  // Add a broad softer secondary specular for overall satin glow',
+    '  float softSpec = pow(NdotH, 3.0) * 0.4;',
+    '',
+    '  // ── Diffuse lighting ──',
+    '  float NdotL = max(dot(N, lightDir), 0.0);',
+    '  float diffuse = NdotL * 0.6 + 0.4; // fill light so shadows are not black',
+    '',
+    '  // ── Color palette ──',
+    '  vec3 baseColor = vec3(0.82, 0.45, 0.40);   // rich champagne pink',
+    '  vec3 shadowColor = vec3(0.25, 0.08, 0.08);  // deep rose shadow',
+    '  vec3 highlightColor = vec3(1.0, 0.88, 0.82); // warm white-pink',
+    '',
+    '  // Mix base and shadow based on fold depth',
+    '  float foldDepth = smoothstep(-0.6, 0.6, h);',
+    '  vec3 fabricColor = mix(shadowColor, baseColor, foldDepth);',
+    '',
+    '  // Apply diffuse lighting',
+    '  fabricColor *= diffuse;',
+    '',
+    '  // Darken the deep folds a bit more for contrast',
+    '  float deepFold = smoothstep(0.3, -0.4, h);',
+    '  fabricColor = mix(fabricColor, shadowColor * 0.7, deepFold * 0.4);',
+    '',
+    '  // ── Apply specular sheen ──',
+    '  // The main sharp sheen line',
+    '  vec3 sheenColor = highlightColor * sheen;',
+    '',
+    '  // Softer broad glow',
+    '  vec3 softGlow = baseColor * softSpec * 0.6;',
+    '',
+    '  vec3 col = fabricColor + sheenColor + softGlow;',
+    '',
+    '  // ── Subtle variation to prevent banding ──',
+    '  float grain = (hash(gl_FragCoord.xy + fract(u_time * 0.1) * 100.0) - 0.5) * 0.015;',
+    '  col += grain;',
+    '',
+    '  // ── Simple gamma correction (NO Reinhard) ──',
+    '  col = pow(clamp(col, 0.0, 1.0), vec3(1.0 / 2.2));',
+    '',
+    '  gl_FragColor = vec4(col, 1.0);',
+    '}',
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error(gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error(gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uRippleSpeed = gl.getUniformLocation(prog, 'u_rippleSpeed');
+  var uSheenIntensity = gl.getUniformLocation(prog, 'u_sheenIntensity');
+  var rippleSpeedVal = 0.6;
+  var sheenIntensityVal = 1.0;
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+  var running = true;
+
+  function resize() {
+    var w = Math.round(canvas.clientWidth * dpr);
+    var h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  function render(now) {
+    if (!running) return;
+    resize();
+    gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uRippleSpeed, rippleSpeedVal);
+    gl.uniform1f(uSheenIntensity, sheenIntensityVal);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  document.addEventListener('visibilitychange', function() {
+    if (document.hidden) {
+      running = false;
+    } else {
+      running = true;
+      requestAnimationFrame(render);
+    }
+  });
+
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'RIPPLE_SPEED': rippleSpeedVal = e.data.value; break;
+        case 'SHEEN_INTENSITY': sheenIntensityVal = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Laser Labyrinth</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Laser Labyrinth</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// Laser Labyrinth — Intersecting colored laser beams
+// with volumetric glow, bloom, and nightclub aesthetic
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var gl = canvas.getContext('webgl', { alpha: false, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  // ── Tunable parameters ──
+  var SWEEP_SPEED = 0.5;
+  var BEAM_INTENSITY = 1.0;
+
+  var vertSrc = [
+    'attribute vec2 a_pos;',
+    'void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }'
+  ].join('\n');
+
+  var fragSrc = [
+    'precision highp float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform float u_sweep;',
+    'uniform float u_intensity;',
+    '',
+    '// ── Constants: 10 laser beams ──',
+    '// Each beam: origin (x, y), base angle, sweep amplitude, sweep frequency, color (r, g, b)',
+    '// We store these as individual constants to avoid non-constant array indexing.',
+    '',
+    '// Beam origins placed around screen edges (in UV space centered at 0,0)',
+    'const vec2 o0 = vec2(-0.9, -0.6);',
+    'const vec2 o1 = vec2( 0.9, -0.5);',
+    'const vec2 o2 = vec2(-0.7,  0.8);',
+    'const vec2 o3 = vec2( 0.8,  0.7);',
+    'const vec2 o4 = vec2(-0.95, 0.1);',
+    'const vec2 o5 = vec2( 0.95, 0.0);',
+    'const vec2 o6 = vec2(-0.3, -0.9);',
+    'const vec2 o7 = vec2( 0.3,  0.9);',
+    'const vec2 o8 = vec2(-0.85, -0.85);',
+    'const vec2 o9 = vec2( 0.85, -0.85);',
+    '',
+    '// Base angles (radians)',
+    'const float a0 = 0.45;',
+    'const float a1 = 2.4;',
+    'const float a2 = -0.7;',
+    'const float a3 = 3.6;',
+    'const float a4 = 0.15;',
+    'const float a5 = 2.95;',
+    'const float a6 = 1.2;',
+    'const float a7 = 4.3;',
+    'const float a8 = 0.85;',
+    'const float a9 = 2.1;',
+    '',
+    '// Sweep amplitude and frequency per beam',
+    'const float amp0 = 0.6;  const float frq0 = 0.37;',
+    'const float amp1 = 0.5;  const float frq1 = 0.53;',
+    'const float amp2 = 0.7;  const float frq2 = 0.29;',
+    'const float amp3 = 0.45; const float frq3 = 0.67;',
+    'const float amp4 = 0.55; const float frq4 = 0.41;',
+    'const float amp5 = 0.65; const float frq5 = 0.31;',
+    'const float amp6 = 0.5;  const float frq6 = 0.59;',
+    'const float amp7 = 0.6;  const float frq7 = 0.43;',
+    'const float amp8 = 0.4;  const float frq8 = 0.71;',
+    'const float amp9 = 0.55; const float frq9 = 0.47;',
+    '',
+    '// Beam colors — disco spectrum',
+    'const vec3 c0 = vec3(1.0, 0.05, 0.6);',   // electric magenta
+    'const vec3 c1 = vec3(0.0, 0.9, 0.95);',    // cyan
+    'const vec3 c2 = vec3(0.6, 0.1, 1.0);',     // violet
+    'const vec3 c3 = vec3(0.1, 1.0, 0.3);',     // green
+    'const vec3 c4 = vec3(1.0, 0.15, 0.5);',    // hot pink
+    'const vec3 c5 = vec3(0.1, 0.2, 1.0);',     // deep blue
+    'const vec3 c6 = vec3(0.9, 0.0, 0.9);',     // magenta-violet
+    'const vec3 c7 = vec3(0.0, 0.7, 1.0);',     // electric blue
+    'const vec3 c8 = vec3(1.0, 0.3, 0.1);',     // orange-red
+    'const vec3 c9 = vec3(0.4, 0.0, 1.0);',     // indigo
+    '',
+    '// ── Distance from point to infinite line (origin + direction) ──',
+    'float lineDist(vec2 p, vec2 origin, vec2 dir) {',
+    '  vec2 d = p - origin;',
+    '  return abs(d.x * dir.y - d.y * dir.x);',
+    '}',
+    '',
+    '// ── Single beam contribution ──',
+    'vec3 beam(vec2 p, vec2 origin, float angle, float amp, float frq, vec3 col, float t, float intensity) {',
+    '  float sweepAngle = angle + sin(t * frq) * amp;',
+    '  vec2 dir = vec2(cos(sweepAngle), sin(sweepAngle));',
+    '',
+    '  float dist = lineDist(p, origin, dir);',
+    '  float dist2 = dist * dist;',
+    '',
+    '  // Sharp core',
+    '  float core = exp(-dist2 * 8000.0);',
+    '  // Soft volumetric glow',
+    '  float glow = exp(-dist2 * 200.0);',
+    '  // Wide atmospheric scatter',
+    '  float atmo = exp(-dist2 * 20.0);',
+    '',
+    '  // Beat-like brightness pulse — each beam pulses at its own rate',
+    '  float pulse = 0.75 + 0.25 * sin(t * frq * 4.0 + angle);',
+    '',
+    '  float brightness = (core * 1.5 + glow * 0.5 + atmo * 0.08) * intensity * pulse;',
+    '',
+    '  // White-hot core blended with color',
+    '  vec3 coreCol = mix(col, vec3(1.0), core * 0.7);',
+    '',
+    '  return coreCol * brightness;',
+    '}',
+    '',
+    '// ── Intersection flare between two beams ──',
+    'float beamIntersect(vec2 p, vec2 o1, float a1, float amp1, float frq1, vec2 o2, float a2, float amp2, float frq2, float t) {',
+    '  float sa1 = a1 + sin(t * frq1) * amp1;',
+    '  float sa2 = a2 + sin(t * frq2) * amp2;',
+    '  vec2 d1 = vec2(cos(sa1), sin(sa1));',
+    '  vec2 d2 = vec2(cos(sa2), sin(sa2));',
+    '',
+    '  float dist1 = lineDist(p, o1, d1);',
+    '  float dist2 = lineDist(p, o2, d2);',
+    '',
+    '  // Both beams must be close for a flare',
+    '  float proximity = exp(-dist1 * dist1 * 600.0) * exp(-dist2 * dist2 * 600.0);',
+    '  return proximity;',
+    '}',
+    '',
+    '// ── Noise for fog ──',
+    'float hash(vec2 p) {',
+    '  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);',
+    '}',
+    '',
+    'float noise(vec2 p) {',
+    '  vec2 i = floor(p);',
+    '  vec2 f = fract(p);',
+    '  f = f * f * (3.0 - 2.0 * f);',
+    '  float a = hash(i);',
+    '  float b = hash(i + vec2(1.0, 0.0));',
+    '  float c = hash(i + vec2(0.0, 1.0));',
+    '  float d = hash(i + vec2(1.0, 1.0));',
+    '  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);',
+    '}',
+    '',
+    'void main() {',
+    '  vec2 uv = (gl_FragCoord.xy - u_res * 0.5) / u_res.y;',
+    '  float t = u_time * u_sweep;',
+    '  float intensity = u_intensity;',
+    '',
+    '  // ── Dark purple/black background ──',
+    '  vec3 bg = vec3(0.01, 0.005, 0.025);',
+    '',
+    '  // Subtle fog noise for atmosphere',
+    '  float fog = noise(uv * 3.0 + vec2(t * 0.1, t * 0.07)) * 0.5',
+    '            + noise(uv * 6.0 + vec2(-t * 0.05, t * 0.12)) * 0.3;',
+    '  bg += vec3(0.02, 0.01, 0.04) * fog;',
+    '',
+    '  vec3 col = bg;',
+    '',
+    '  // ── Accumulate all 10 beams ──',
+    '  col += beam(uv, o0, a0, amp0, frq0, c0, t, intensity);',
+    '  col += beam(uv, o1, a1, amp1, frq1, c1, t, intensity);',
+    '  col += beam(uv, o2, a2, amp2, frq2, c2, t, intensity);',
+    '  col += beam(uv, o3, a3, amp3, frq3, c3, t, intensity);',
+    '  col += beam(uv, o4, a4, amp4, frq4, c4, t, intensity);',
+    '  col += beam(uv, o5, a5, amp5, frq5, c5, t, intensity);',
+    '  col += beam(uv, o6, a6, amp6, frq6, c6, t, intensity);',
+    '  col += beam(uv, o7, a7, amp7, frq7, c7, t, intensity);',
+    '  col += beam(uv, o8, a8, amp8, frq8, c8, t, intensity);',
+    '  col += beam(uv, o9, a9, amp9, frq9, c9, t, intensity);',
+    '',
+    '  // ── Intersection flares (selected prominent pairs) ──',
+    '  float flare = 0.0;',
+    '  flare += beamIntersect(uv, o0, a0, amp0, frq0, o1, a1, amp1, frq1, t);',
+    '  flare += beamIntersect(uv, o0, a0, amp0, frq0, o5, a5, amp5, frq5, t);',
+    '  flare += beamIntersect(uv, o1, a1, amp1, frq1, o2, a2, amp2, frq2, t);',
+    '  flare += beamIntersect(uv, o2, a2, amp2, frq2, o3, a3, amp3, frq3, t);',
+    '  flare += beamIntersect(uv, o3, a3, amp3, frq3, o4, a4, amp4, frq4, t);',
+    '  flare += beamIntersect(uv, o4, a4, amp4, frq4, o5, a5, amp5, frq5, t);',
+    '  flare += beamIntersect(uv, o5, a5, amp5, frq5, o6, a6, amp6, frq6, t);',
+    '  flare += beamIntersect(uv, o6, a6, amp6, frq6, o7, a7, amp7, frq7, t);',
+    '  flare += beamIntersect(uv, o7, a7, amp7, frq7, o8, a8, amp8, frq8, t);',
+    '  flare += beamIntersect(uv, o8, a8, amp8, frq8, o9, a9, amp9, frq9, t);',
+    '  flare += beamIntersect(uv, o9, a9, amp9, frq9, o0, a0, amp0, frq0, t);',
+    '  flare += beamIntersect(uv, o1, a1, amp1, frq1, o4, a4, amp4, frq4, t);',
+    '  flare += beamIntersect(uv, o2, a2, amp2, frq2, o7, a7, amp7, frq7, t);',
+    '  flare += beamIntersect(uv, o3, a3, amp3, frq3, o8, a8, amp8, frq8, t);',
+    '  flare += beamIntersect(uv, o6, a6, amp6, frq6, o9, a9, amp9, frq9, t);',
+    '',
+    '  // White-hot flare with slight color tint',
+    '  vec3 flareCol = vec3(1.0, 0.95, 0.98) * flare * 4.0 * intensity;',
+    '  // Add a bloom halo around flare points',
+    '  flareCol += vec3(0.7, 0.5, 0.9) * flare * 1.5 * intensity;',
+    '  col += flareCol;',
+    '',
+    '  // ── Global beat pulse — subtle brightness surge ──',
+    '  float beat = pow(max(0.0, sin(t * 3.14159 * 1.2)), 8.0) * 0.15;',
+    '  col *= 1.0 + beat;',
+    '',
+    '  // ── Vignette ──',
+    '  float vd = length(uv * vec2(0.9, 1.0));',
+    '  float vig = smoothstep(1.1, 0.3, vd);',
+    '  col *= vig;',
+    '',
+    '  // ── Tone mapping ──',
+    '  col = col / (col + vec3(0.7));',
+    '  col = pow(col, vec3(0.92));',
+    '',
+    '  gl_FragColor = vec4(col, 1.0);',
+    '}',
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error('Shader compile error:', gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error('Program link error:', gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uSweep = gl.getUniformLocation(prog, 'u_sweep');
+  var uIntensity = gl.getUniformLocation(prog, 'u_intensity');
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  function resize() {
+    var w = Math.round(canvas.clientWidth * dpr);
+    var h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  var running = true;
+
+  function render(now) {
+    if (!running) return;
+    resize();
+    var t = prefersReduced ? 0.0 : now * 0.001;
+    gl.uniform1f(uTime, t);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uSweep, SWEEP_SPEED);
+    gl.uniform1f(uIntensity, BEAM_INTENSITY);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  // ── Visibility pause ──
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) {
+      running = false;
+    } else {
+      running = true;
+      requestAnimationFrame(render);
+    }
+  });
+
+  // ── PostMessage listener for parameter updates ──
+  window.addEventListener('message', function (e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'SWEEP_SPEED': SWEEP_SPEED = e.data.value; break;
+        case 'BEAM_INTENSITY': BEAM_INTENSITY = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

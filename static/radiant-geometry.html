@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Radiant Geometry</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Radiant Geometry</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// Radiant Geometry — Animated Islamic geometric art in golden line work
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // URL param for embed scaling
+  var urlParams = new URLSearchParams(window.location.search);
+  var pixelScale = parseFloat(urlParams.get('p')) || 1;
+
+  var gl = canvas.getContext('webgl', { alpha: true, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  var vertSrc = [
+    'attribute vec2 a_pos;',
+    'void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }'
+  ].join('\n');
+
+  var fragSrc = [
+    'precision highp float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform float u_rotationSpeed;',
+    'uniform float u_complexity;',
+    '',
+    '#define PI 3.14159265359',
+    '#define TAU 6.28318530718',
+    '#define SQRT3 1.7320508',
+    '',
+    '// ── Rotation matrix ──',
+    'mat2 rot(float a) {',
+    '  float c = cos(a), s = sin(a);',
+    '  return mat2(c, -s, s, c);',
+    '}',
+    '',
+    '// ── Polar fold: mirror UV into 1/N sector ──',
+    '// This is the core of Islamic geometric patterns — angular repetition',
+    'vec2 polarFold(vec2 p, float n) {',
+    '  float angle = atan(p.y, p.x);',
+    '  float sector = TAU / n;',
+    '  angle = mod(angle + sector * 0.5, sector) - sector * 0.5;',
+    '  // Mirror for kaleidoscopic symmetry',
+    '  angle = abs(angle);',
+    '  float r = length(p);',
+    '  return vec2(cos(angle), sin(angle)) * r;',
+    '}',
+    '',
+    '// ── SDF: line segment ──',
+    'float sdSegment(vec2 p, vec2 a, vec2 b) {',
+    '  vec2 pa = p - a;',
+    '  vec2 ba = b - a;',
+    '  float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);',
+    '  return length(pa - ba * h);',
+    '}',
+    '',
+    '// ── SDF: regular polygon outline ──',
+    'float sdPolygon(vec2 p, float r, float n) {',
+    '  float angle = atan(p.y, p.x);',
+    '  float sector = TAU / n;',
+    '  float a = mod(angle + sector * 0.5, sector) - sector * 0.5;',
+    '  float rp = length(p);',
+    '  vec2 q = vec2(cos(a), abs(sin(a))) * rp;',
+    '  // Distance to polygon edge',
+    '  vec2 edge = vec2(cos(sector * 0.5), sin(sector * 0.5)) * r;',
+    '  vec2 d = q - edge * clamp(dot(q, edge) / dot(edge, edge), 0.0, 1.0);',
+    '  return length(d) * sign(q.x * edge.y - q.y * edge.x);',
+    '}',
+    '',
+    '// ── SDF: circle ──',
+    'float sdCircle(vec2 p, float r) {',
+    '  return length(p) - r;',
+    '}',
+    '',
+    '// ── Star pattern: interlocking star and rosette ──',
+    '// Based on the classic 6-fold or 8-fold Islamic star construction',
+    'float starPattern6(vec2 p, float scale, float time) {',
+    '  p *= scale;',
+    '  float d = 1e9;',
+    '  ',
+    '  // Fold into 1/12 sector (6-fold with mirror = 12)',
+    '  vec2 fp = polarFold(p, 12.0);',
+    '  ',
+    '  // Primary star lines — the interlocking kite shapes',
+    '  // Two line segments that create the classic six-pointed star',
+    '  float breathe = 1.0 + 0.03 * sin(time * 0.7);',
+    '  ',
+    '  // Outer star arm',
+    '  vec2 a1 = vec2(0.5 * breathe, 0.0);',
+    '  vec2 b1 = vec2(0.35 * breathe, 0.15 * breathe);',
+    '  d = min(d, sdSegment(fp, a1, b1));',
+    '  ',
+    '  // Inner connecting lines',
+    '  vec2 a2 = vec2(0.35 * breathe, 0.15 * breathe);',
+    '  vec2 b2 = vec2(0.22 * breathe, 0.0);',
+    '  d = min(d, sdSegment(fp, a2, b2));',
+    '  ',
+    '  // Central rosette petals',
+    '  vec2 a3 = vec2(0.22 * breathe, 0.0);',
+    '  vec2 b3 = vec2(0.12 * breathe, 0.07 * breathe);',
+    '  d = min(d, sdSegment(fp, a3, b3));',
+    '  ',
+    '  // Innermost connecting lines to center',
+    '  vec2 a4 = vec2(0.12 * breathe, 0.07 * breathe);',
+    '  vec2 b4 = vec2(0.0, 0.0);',
+    '  d = min(d, sdSegment(fp, a4, b4));',
+    '  ',
+    '  // Outer ring connecting the star tips',
+    '  float outerRing = abs(length(p) - 0.5 * breathe);',
+    '  d = min(d, outerRing);',
+    '  ',
+    '  // Inner ring',
+    '  float innerRing = abs(length(p) - 0.22 * breathe);',
+    '  d = min(d, innerRing);',
+    '  ',
+    '  return d / scale;',
+    '}',
+    '',
+    '// ── 8-fold star pattern — classic Islamic octagonal geometry ──',
+    'float starPattern8(vec2 p, float scale, float time) {',
+    '  p *= scale;',
+    '  float d = 1e9;',
+    '  ',
+    '  // Fold into 1/16 sector (8-fold with mirror)',
+    '  vec2 fp = polarFold(p, 16.0);',
+    '  ',
+    '  float breathe = 1.0 + 0.025 * sin(time * 0.5 + 1.0);',
+    '  ',
+    '  // Khatam-style interlocking — the octagonal star',
+    '  vec2 a1 = vec2(0.45 * breathe, 0.0);',
+    '  vec2 b1 = vec2(0.32 * breathe, 0.13 * breathe);',
+    '  d = min(d, sdSegment(fp, a1, b1));',
+    '  ',
+    '  vec2 a2 = vec2(0.32 * breathe, 0.13 * breathe);',
+    '  vec2 b2 = vec2(0.18 * breathe, 0.0);',
+    '  d = min(d, sdSegment(fp, a2, b2));',
+    '  ',
+    '  // Inner rosette geometry',
+    '  vec2 a3 = vec2(0.18 * breathe, 0.0);',
+    '  vec2 b3 = vec2(0.10 * breathe, 0.06 * breathe);',
+    '  d = min(d, sdSegment(fp, a3, b3));',
+    '  ',
+    '  vec2 a4 = vec2(0.10 * breathe, 0.06 * breathe);',
+    '  vec2 b4 = vec2(0.0, 0.0);',
+    '  d = min(d, sdSegment(fp, a4, b4));',
+    '  ',
+    '  // Concentric rings',
+    '  float ring1 = abs(length(p) - 0.45 * breathe);',
+    '  float ring2 = abs(length(p) - 0.18 * breathe);',
+    '  d = min(d, ring1);',
+    '  d = min(d, ring2);',
+    '  ',
+    '  return d / scale;',
+    '}',
+    '',
+    '// ── Hexagonal tiling with star motif ──',
+    '// Repeating the star across a hexagonal grid (as in real Islamic tilework)',
+    'float hexTileStars(vec2 p, float scale, float time, float rotAngle) {',
+    '  p = rot(rotAngle) * p;',
+    '  p *= scale;',
+    '  ',
+    '  // Hexagonal grid',
+    '  vec2 s = vec2(1.0, SQRT3);',
+    '  vec2 h = s * 0.5;',
+    '  vec2 a = mod(p, s) - h;',
+    '  vec2 b = mod(p - h, s) - h;',
+    '  vec2 gUV = dot(a, a) < dot(b, b) ? a : b;',
+    '  ',
+    '  // Place a star pattern in each hex cell',
+    '  float d = starPattern6(gUV, 1.8, time);',
+    '  ',
+    '  return d / scale;',
+    '}',
+    '',
+    '// ── Square tiling with 8-fold stars ──',
+    'float squareTileStars(vec2 p, float scale, float time, float rotAngle) {',
+    '  p = rot(rotAngle) * p;',
+    '  p *= scale;',
+    '  ',
+    '  // Square grid',
+    '  vec2 cell = mod(p + 0.5, 1.0) - 0.5;',
+    '  ',
+    '  float d = starPattern8(cell, 1.6, time);',
+    '  ',
+    '  return d / scale;',
+    '}',
+    '',
+    '// ── Girih-inspired extended pattern ──',
+    '// Overlapping decagonal straps',
+    'float girihPattern(vec2 p, float scale, float time) {',
+    '  p *= scale;',
+    '  float d = 1e9;',
+    '  ',
+    '  float breathe = 1.0 + 0.02 * sin(time * 0.6 + 2.0);',
+    '  ',
+    '  // 10-fold symmetry (classic Girih)',
+    '  vec2 fp = polarFold(p, 10.0);',
+    '  ',
+    '  // Decagonal strap lines',
+    '  vec2 a1 = vec2(0.5 * breathe, 0.0);',
+    '  vec2 b1 = vec2(0.38 * breathe, 0.18 * breathe);',
+    '  d = min(d, sdSegment(fp, a1, b1));',
+    '  ',
+    '  vec2 a2 = vec2(0.38 * breathe, 0.18 * breathe);',
+    '  vec2 b2 = vec2(0.25 * breathe, 0.05 * breathe);',
+    '  d = min(d, sdSegment(fp, a2, b2));',
+    '  ',
+    '  vec2 a3 = vec2(0.25 * breathe, 0.05 * breathe);',
+    '  vec2 b3 = vec2(0.15 * breathe, 0.12 * breathe);',
+    '  d = min(d, sdSegment(fp, a3, b3));',
+    '  ',
+    '  vec2 a4 = vec2(0.15 * breathe, 0.12 * breathe);',
+    '  vec2 b4 = vec2(0.0, 0.0);',
+    '  d = min(d, sdSegment(fp, a4, b4));',
+    '  ',
+    '  // Concentric rings at key radii',
+    '  float ring1 = abs(length(p) - 0.5 * breathe);',
+    '  float ring2 = abs(length(p) - 0.32 * breathe);',
+    '  float ring3 = abs(length(p) - 0.15 * breathe);',
+    '  d = min(d, ring1);',
+    '  d = min(d, ring2);',
+    '  d = min(d, ring3);',
+    '  ',
+    '  return d / scale;',
+    '}',
+    '',
+    '// ── Convert SDF distance to glowing line ──',
+    'vec3 glowLine(float d, vec3 coreColor, vec3 bloomColor, float lineWidth, float bloomWidth) {',
+    '  // Bright crisp core',
+    '  float core = lineWidth / (abs(d) + lineWidth);',
+    '  core = pow(core, 2.0);',
+    '  // Soft bloom halo',
+    '  float bloom = bloomWidth / (abs(d) + bloomWidth);',
+    '  bloom = pow(bloom, 1.5);',
+    '  return coreColor * core + bloomColor * bloom * 0.4;',
+    '}',
+    '',
+    'void main() {',
+    '  vec2 uv = (gl_FragCoord.xy - u_res * 0.5) / min(u_res.x, u_res.y);',
+    '  float t = u_time;',
+    '  float rotSpeed = u_rotationSpeed;',
+    '  float complexity = u_complexity;',
+    '  ',
+    '  // Background — deep warm black',
+    '  vec3 col = vec3(0.02, 0.015, 0.01);',
+    '  ',
+    '  // ════════════════════════════════════════════',
+    '  // LAYER 1: Large hexagonal star tiling — outermost, slowest',
+    '  // The grand architectural framework',
+    '  // ════════════════════════════════════════════',
+    '  ',
+    '  float rot1 = t * rotSpeed * 0.04;',
+    '  float d1 = hexTileStars(uv, 2.5 * complexity, t, rot1);',
+    '  ',
+    '  vec3 dimGold = vec3(0.25, 0.18, 0.08);',
+    '  vec3 medGold = vec3(0.55, 0.40, 0.18);',
+    '  col += glowLine(d1, medGold * 0.7, dimGold, 0.0015, 0.012);',
+    '  ',
+    '  // ════════════════════════════════════════════',
+    '  // LAYER 2: Square 8-fold tiling — counter-rotating middle layer',
+    '  // The secondary pattern that creates interference',
+    '  // ════════════════════════════════════════════',
+    '  ',
+    '  float rot2 = -t * rotSpeed * 0.06;',
+    '  float d2 = squareTileStars(uv, 3.5 * complexity, t, rot2);',
+    '  ',
+    '  vec3 brightGold = vec3(0.78, 0.58, 0.24);',
+    '  col += glowLine(d2, brightGold * 0.6, dimGold * 0.8, 0.0012, 0.010);',
+    '  ',
+    '  // ════════════════════════════════════════════',
+    '  // LAYER 3: Girih decagonal overlay — finest detail, faster rotation',
+    '  // The ornate filigree that breathes',
+    '  // ════════════════════════════════════════════',
+    '  ',
+    '  float rot3 = t * rotSpeed * 0.09;',
+    '  float d3 = girihPattern(uv, 4.0 * complexity, t);',
+    '  vec2 uvRot3 = rot(rot3) * uv;',
+    '  float d3r = girihPattern(uvRot3, 4.0 * complexity, t);',
+    '  ',
+    '  vec3 coreGlow = vec3(1.0, 0.82, 0.55);',
+    '  col += glowLine(d3r, coreGlow * 0.4, medGold * 0.5, 0.001, 0.008);',
+    '  ',
+    '  // ════════════════════════════════════════════',
+    '  // LAYER 4: Central rosette — the crown jewel',
+    '  // A single large star that anchors everything',
+    '  // ════════════════════════════════════════════',
+    '  ',
+    '  float centralRot = t * rotSpeed * 0.03;',
+    '  vec2 centralUV = rot(centralRot) * uv;',
+    '  float dCentral = starPattern8(centralUV, 2.2, t);',
+    '  ',
+    '  // Central pattern is brighter',
+    '  float centralFade = smoothstep(0.5, 0.15, length(uv));',
+    '  vec3 hotGold = vec3(1.0, 0.92, 0.72);',
+    '  col += glowLine(dCentral, hotGold * 0.5, coreGlow * 0.3, 0.002, 0.018) * centralFade;',
+    '  ',
+    '  // ════════════════════════════════════════════',
+    '  // LAYER 5: Second hexagonal layer — counter-rotating, different scale',
+    '  // Creates the moire interference with Layer 1',
+    '  // ════════════════════════════════════════════',
+    '  ',
+    '  float rot5 = -t * rotSpeed * 0.035;',
+    '  float d5 = hexTileStars(uv, 3.0 * complexity, t, rot5);',
+    '  ',
+    '  col += glowLine(d5, medGold * 0.45, dimGold * 0.5, 0.001, 0.008);',
+    '  ',
+    '  // ════════════════════════════════════════════',
+    '  // LAYER 6: Fine concentric ring lattice — breathing geometry',
+    '  // Subtle radial structure that pulses',
+    '  // ════════════════════════════════════════════',
+    '  ',
+    '  float r = length(uv);',
+    '  float breathe = 1.0 + 0.04 * sin(t * 0.4);',
+    '  ',
+    '  // Concentric polygon rings at different radii',
+    '  float ringD = 1e9;',
+    '  float rScale = 0.12 * breathe;',
+    '  // Unrolled loop to avoid variable array indexing issues',
+    '  float pr0 = abs(sdPolygon(rot(t * rotSpeed * 0.02) * uv, rScale * 1.0, 6.0));',
+    '  float pr1 = abs(sdPolygon(rot(-t * rotSpeed * 0.025) * uv, rScale * 2.0, 8.0));',
+    '  float pr2 = abs(sdPolygon(rot(t * rotSpeed * 0.015) * uv, rScale * 3.0, 12.0));',
+    '  float pr3 = abs(sdPolygon(rot(-t * rotSpeed * 0.018) * uv, rScale * 4.0, 6.0));',
+    '  ringD = min(ringD, pr0);',
+    '  ringD = min(ringD, pr1);',
+    '  ringD = min(ringD, pr2);',
+    '  ringD = min(ringD, pr3);',
+    '  ',
+    '  col += glowLine(ringD, brightGold * 0.3, dimGold * 0.3, 0.001, 0.006);',
+    '  ',
+    '  // ════════════════════════════════════════════',
+    '  // AMBIENT EFFECTS',
+    '  // ════════════════════════════════════════════',
+    '  ',
+    '  // Radial warm glow from center — like light through the lattice',
+    '  float centerGlow = exp(-r * r * 4.0) * 0.08;',
+    '  col += vec3(0.55, 0.40, 0.18) * centerGlow;',
+    '  ',
+    '  // Subtle pulse on the overall brightness',
+    '  float pulse = 0.92 + 0.08 * sin(t * 0.3);',
+    '  col *= pulse;',
+    '  ',
+    '  // Vignette — darker edges for depth',
+    '  float vig = 1.0 - r * r * 0.6;',
+    '  vig = max(vig, 0.0);',
+    '  col *= (0.5 + vig * 0.5);',
+    '  ',
+    '  // ── Tone mapping — preserve bright golden peaks ──',
+    '  col = col / (1.0 + col * 0.3);',
+    '  ',
+    '  // ── Warmth boost ──',
+    '  col = pow(col, vec3(0.95, 0.98, 1.06));',
+    '  ',
+    '  gl_FragColor = vec4(col, 1.0);',
+    '}'
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error('Shader compile error:', gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error('Program link error:', gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uRotationSpeed = gl.getUniformLocation(prog, 'u_rotationSpeed');
+  var uComplexity = gl.getUniformLocation(prog, 'u_complexity');
+
+  var rotationSpeedVal = 0.3;
+  var complexityVal = 1.0;
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2) * pixelScale;
+  var paused = false;
+
+  function resize() {
+    var w = Math.round(canvas.clientWidth * dpr);
+    var h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  function render(now) {
+    if (paused) {
+      requestAnimationFrame(render);
+      return;
+    }
+    resize();
+    gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uRotationSpeed, rotationSpeedVal);
+    gl.uniform1f(uComplexity, complexityVal);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  // ── Visibility pause ──
+  document.addEventListener('visibilitychange', function() {
+    paused = document.hidden;
+  });
+
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'ROTATION_SPEED': rotationSpeedVal = e.data.value; break;
+        case 'PATTERN_COMPLEXITY': complexityVal = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

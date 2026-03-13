@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chrome Drip</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Chrome Drip</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// Chrome Drip — Liquid chrome/mercury surface with metallic reflections
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var urlParams = new URLSearchParams(window.location.search);
+  var pixelScale = parseFloat(urlParams.get('p')) || 1;
+
+  var gl = canvas.getContext('webgl', { alpha: true, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  // Tunable parameters
+  var FLOW_SPEED = 0.3;
+  var REFLECTIVITY = 1.0;
+
+  var vertSrc = [
+    'attribute vec2 a_pos;',
+    'void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }'
+  ].join('\n');
+
+  var fragSrc = [
+    'precision highp float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform float u_flowSpeed;',
+    'uniform float u_reflectivity;',
+    '',
+    '#define PI 3.14159265359',
+    '',
+    '// ── Hash ──',
+    'float hash(vec2 p) {',
+    '  vec3 p3 = fract(vec3(p.xyx) * 0.1031);',
+    '  p3 += dot(p3, p3.yzx + 33.33);',
+    '  return fract((p3.x + p3.y) * p3.z);',
+    '}',
+    '',
+    '// ── Smooth value noise ──',
+    'float noise(vec2 p) {',
+    '  vec2 i = floor(p);',
+    '  vec2 f = fract(p);',
+    '  f = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);',
+    '  float a = hash(i);',
+    '  float b = hash(i + vec2(1.0, 0.0));',
+    '  float c = hash(i + vec2(0.0, 1.0));',
+    '  float d = hash(i + vec2(1.0, 1.0));',
+    '  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);',
+    '}',
+    '',
+    '// ── FBM — 4 octaves for performance ──',
+    'float fbm(vec2 p, float t) {',
+    '  float v = 0.0, a = 0.5;',
+    '  mat2 rot = mat2(0.8, 0.6, -0.6, 0.8);',
+    '  for (int i = 0; i < 4; i++) {',
+    '    v += a * noise(p + t * 0.03);',
+    '    p = rot * p * 2.05 + vec2(1.7, 9.2);',
+    '    a *= 0.5;',
+    '  }',
+    '  return v;',
+    '}',
+    '',
+    '// ── Domain-warped heightfield ──',
+    '// Two layers of domain warping create organic pooling/rivulet shapes',
+    'float heightField(vec2 p, float t) {',
+    '  // First warp — large slow-moving currents',
+    '  vec2 q = vec2(',
+    '    fbm(p + vec2(0.0, 0.0), t * 0.4),',
+    '    fbm(p + vec2(5.2, 1.3), t * 0.35)',
+    '  );',
+    '',
+    '  // Second warp — medium detail, creates rivulets and pools',
+    '  vec2 r = vec2(',
+    '    fbm(p + 3.5 * q + vec2(1.7, 9.2), t * 0.5),',
+    '    fbm(p + 3.5 * q + vec2(8.3, 2.8), t * 0.45)',
+    '  );',
+    '',
+    '  // Final heightfield',
+    '  float f = fbm(p + 2.8 * r, t * 0.3);',
+    '',
+    '  // Combine all warp layers for rich surface detail',
+    '  return f * 0.5 + length(q) * 0.3 + length(r) * 0.2;',
+    '}',
+    '',
+    '// ── Compute pseudo-normal from heightfield gradient ──',
+    'vec3 getNormal(vec2 p, float t) {',
+    '  float eps = 0.004;',
+    '  float hC = heightField(p, t);',
+    '  float hR = heightField(p + vec2(eps, 0.0), t);',
+    '  float hU = heightField(p + vec2(0.0, eps), t);',
+    '  return normalize(vec3(',
+    '    (hC - hR) / eps * 0.6,',
+    '    (hC - hU) / eps * 0.6,',
+    '    1.0',
+    '  ));',
+    '}',
+    '',
+    '// ── Schlick Fresnel ──',
+    'float fresnel(float cosTheta, float f0) {',
+    '  return f0 + (1.0 - f0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);',
+    '}',
+    '',
+    '// ── Procedural environment map ──',
+    '// Warm gradient environment that creates the "world" reflected in the chrome',
+    'vec3 envMap(vec3 reflDir) {',
+    '  float y = reflDir.y * 0.5 + 0.5;',
+    '  // Ground: deep warm dark',
+    '  vec3 ground = vec3(0.02, 0.015, 0.01);',
+    '  // Horizon: warm amber glow',
+    '  vec3 horizon = vec3(0.20, 0.12, 0.06);',
+    '  // Sky: subtle amber ceiling',
+    '  vec3 sky = vec3(0.08, 0.05, 0.03);',
+    '  // Hot band near horizon',
+    '  vec3 hotBand = vec3(0.50, 0.35, 0.18);',
+    '',
+    '  vec3 col = mix(ground, horizon, smoothstep(0.0, 0.45, y));',
+    '  col = mix(col, hotBand, smoothstep(0.35, 0.52, y) * smoothstep(0.65, 0.52, y));',
+    '  col = mix(col, sky, smoothstep(0.55, 1.0, y));',
+    '',
+    '  // Horizontal variation for more interesting reflections',
+    '  float xVar = reflDir.x * 0.5 + 0.5;',
+    '  col *= 0.85 + 0.3 * smoothstep(0.3, 0.7, xVar);',
+    '',
+    '  return col;',
+    '}',
+    '',
+    'void main() {',
+    '  vec2 uv = (gl_FragCoord.xy - u_res * 0.5) / min(u_res.x, u_res.y);',
+    '  float t = u_time * u_flowSpeed;',
+    '  float refl = u_reflectivity;',
+    '',
+    '  // ── Heightfield & surface normal ──',
+    '  vec2 samplePos = uv * 2.5;',
+    '  float height = heightField(samplePos, t);',
+    '  vec3 N = getNormal(samplePos, t);',
+    '',
+    '  // ── View direction (looking straight at surface) ──',
+    '  vec3 V = normalize(vec3(0.0, 0.0, 1.0));',
+    '  float NdotV = max(dot(N, V), 0.0);',
+    '',
+    '  // ── Reflection vector for environment mapping ──',
+    '  vec3 R = reflect(-V, N);',
+    '',
+    '  // ── Chrome material: very high base reflectance ──',
+    '  // Real chrome F0 is ~0.6-0.7; we push it for visual punch',
+    '  float f0 = 0.65;',
+    '  float fres = fresnel(NdotV, f0) * refl;',
+    '',
+    '  // ── Chrome base colors (warm amber palette) ──',
+    '  vec3 chromeDark = vec3(0.078, 0.059, 0.047);',
+    '  vec3 chromeMid = vec3(0.314, 0.235, 0.157);',
+    '  vec3 chromeLight = vec3(0.784, 0.584, 0.424);',
+    '  vec3 specHighlight = vec3(1.0, 0.863, 0.667);',
+    '',
+    '  // ── Three-light rig for dramatic chrome highlights ──',
+    '  // Key light: upper-right, the main specular source',
+    '  vec3 L1 = normalize(vec3(0.5, 0.6, 0.9));',
+    '  vec3 H1 = normalize(L1 + V);',
+    '  float spec1 = pow(max(dot(N, H1), 0.0), 180.0);',
+    '',
+    '  // Fill light: upper-left, softer',
+    '  vec3 L2 = normalize(vec3(-0.6, 0.4, 0.7));',
+    '  vec3 H2 = normalize(L2 + V);',
+    '  float spec2 = pow(max(dot(N, H2), 0.0), 100.0);',
+    '',
+    '  // Rim/back light: low angle sweep for dramatic edge highlights',
+    '  vec3 L3 = normalize(vec3(sin(t * 0.15) * 0.8, -0.3, 0.4));',
+    '  vec3 H3 = normalize(L3 + V);',
+    '  float spec3 = pow(max(dot(N, H3), 0.0), 250.0);',
+    '',
+    '  // ── Diffuse-like base tone from height ──',
+    '  // Chrome is mostly specular, but we modulate base color by surface shape',
+    '  float heightNorm = smoothstep(0.3, 1.5, height);',
+    '  vec3 baseColor = mix(chromeDark, chromeMid, smoothstep(0.0, 0.4, heightNorm));',
+    '  baseColor = mix(baseColor, chromeLight * 0.5, smoothstep(0.4, 0.8, heightNorm));',
+    '',
+    '  // ── Broad diffuse illumination ──',
+    '  float NdotL1 = max(dot(N, L1), 0.0);',
+    '  float NdotL2 = max(dot(N, L2), 0.0);',
+    '  vec3 diffuse = baseColor * (NdotL1 * 0.5 + NdotL2 * 0.3 + 0.2);',
+    '',
+    '  // ── Specular: chrome-tinted with white-hot peaks ──',
+    '  vec3 specColor = mix(chromeLight, specHighlight, 0.5);',
+    '  vec3 specular = specColor * spec1 * 1.4',
+    '                + specColor * spec2 * 0.5',
+    '                + specHighlight * spec3 * 1.8;',
+    '',
+    '  // ── Environment reflection ──',
+    '  vec3 envRefl = envMap(R);',
+    '  // Chrome tints its reflections slightly',
+    '  envRefl *= mix(vec3(1.0), chromeLight * 1.5, 0.3);',
+    '',
+    '  // ── Combine: chrome = environment reflection + specular highlights ──',
+    '  // Chrome is almost entirely reflective; diffuse contributes in dark areas',
+    '  vec3 col = diffuse * (1.0 - fres) * 0.3',
+    '           + envRefl * fres * 0.8',
+    '           + specular * fres;',
+    '',
+    '  // ── Additional sweeping highlight — slow, bright caustic-like band ──',
+    '  // Creates the premium "light sweep" effect across the chrome surface',
+    '  float sweepAngle = t * 0.12;',
+    '  vec2 sweepDir = vec2(cos(sweepAngle), sin(sweepAngle));',
+    '  float sweepPos = dot(N.xy, sweepDir);',
+    '  float sweep = smoothstep(0.3, 0.35, sweepPos) * smoothstep(0.45, 0.35, sweepPos);',
+    '  col += specHighlight * sweep * 0.6 * refl;',
+    '',
+    '  // ── Pooling effect: darker, calmer areas where chrome "pools" ──',
+    '  // In low-gradient areas the surface flattens into dark mirror pools',
+    '  float gradMag = length(N.xy);',
+    '  float poolMask = 1.0 - smoothstep(0.02, 0.15, gradMag);',
+    '  vec3 poolColor = chromeDark * 0.5 + envRefl * 0.2;',
+    '  col = mix(col, poolColor, poolMask * 0.4);',
+    '',
+    '  // ── Fresnel rim glow: bright edges where surface curves away ──',
+    '  float rimFres = pow(1.0 - NdotV, 4.0);',
+    '  col += chromeLight * rimFres * 0.25 * refl;',
+    '',
+    '  // ── Vignette: subtle, premium darkening at edges ──',
+    '  float dist = length(uv);',
+    '  float vignette = 1.0 - smoothstep(0.4, 1.3, dist);',
+    '  col *= 0.4 + vignette * 0.6;',
+    '',
+    '  // ── Film grain: very subtle, adds tactile quality ──',
+    '  float grain = (hash(gl_FragCoord.xy + fract(t * 37.0) * 1000.0) - 0.5) * 0.015;',
+    '  col += grain;',
+    '',
+    '  // ── Tone mapping (ACES-like) ──',
+    '  col = max(col, vec3(0.0));',
+    '  col = col * (2.51 * col + 0.03) / (col * (2.43 * col + 0.59) + 0.14);',
+    '',
+    '  // ── Warm push in shadows, keep chrome neutral in highlights ──',
+    '  col = pow(col, vec3(0.96, 1.0, 1.05));',
+    '',
+    '  gl_FragColor = vec4(col, 1.0);',
+    '}'
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error('Shader compile error:', gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error('Program link error:', gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uFlowSpeed = gl.getUniformLocation(prog, 'u_flowSpeed');
+  var uReflectivity = gl.getUniformLocation(prog, 'u_reflectivity');
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  function resize() {
+    var scale = 1.0 / pixelScale;
+    var w = Math.round(canvas.clientWidth * dpr * scale);
+    var h = Math.round(canvas.clientHeight * dpr * scale);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  var running = true;
+
+  function render(now) {
+    if (!running) { requestAnimationFrame(render); return; }
+    resize();
+    gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uFlowSpeed, FLOW_SPEED);
+    gl.uniform1f(uReflectivity, REFLECTIVITY);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  // ── Pause when offscreen ──
+  document.addEventListener('visibilitychange', function () {
+    running = !document.hidden;
+  });
+
+  // ── PostMessage API for parameter control ──
+  window.addEventListener('message', function (e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'FLOW_SPEED': FLOW_SPEED = e.data.value; break;
+        case 'REFLECTIVITY': REFLECTIVITY = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>
