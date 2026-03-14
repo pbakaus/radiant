@@ -44,8 +44,8 @@
 
 	const layouts: { id: Layout; label: string; icon: string }[] = [
 		{ id: 'full', label: 'Full screen', icon: '⬜' },
-		{ id: 'hero', label: 'Hero section', icon: '◧' },
 		{ id: 'background', label: 'Background', icon: '▣' },
+		{ id: 'hero', label: 'Hero section', icon: '◧' },
 		{ id: 'accent', label: 'Accent', icon: '◨' }
 	];
 
@@ -481,6 +481,21 @@
 		}
 		.actions-section {
 			flex-direction: row;
+		}
+		/* Color scheme: dots only on mobile */
+		.scheme-swatch {
+			width: 16px;
+			height: 16px;
+		}
+		.ctrl-btn:has(.scheme-swatch) .ctrl-text {
+			display: none;
+		}
+		.ctrl-btn:has(.scheme-swatch) {
+			padding: 0.25rem;
+			border-radius: 50%;
+		}
+		.ctrl-btn:has(.scheme-swatch).active {
+			border-color: rgba(255, 255, 255, 0.6);
 		}
 	}
 </style>
