@@ -178,27 +178,30 @@ vec4 shadeDisk(vec3 hit, vec3 vel, float time) {
     float phi = atan(hit.z, hit.x);
     float lr = log2(max(r, 0.1));
 
-    // Keplerian angular velocity: omega = sqrt(GM/r³)
-    // 12x multiplier so the orbiting flow is clearly visible
+    // Keplerian angular velocity with a floor so outer disk still moves
     float keplerOmega = sqrt(0.5 * RS / (r * r * r));
-    float rotAngle = time * keplerOmega * 12.0;
+    float baseOmega = 0.04; // minimum rotation for outer rings
+    float omega = max(keplerOmega, baseOmega) * 10.0;
+    float rotAngle = time * omega;
     float ca = cos(rotAngle), sa = sin(rotAngle);
     vec2 rotXZ = vec2(hit.x * ca - hit.z * sa, hit.x * sa + hit.z * ca);
 
-    // FBM turbulence is the PRIMARY texture — gives cloudy, organic feel
-    // The Keplerian rotation of the sample coords makes it flow visibly
+    // FBM turbulence — the primary texture, gives cloudy organic feel
+    // Sampled at Keplerian-rotated coords for orbital flow
     float turb = fbm(rotXZ * 1.2 + vec2(lr * 3.0));
     turb = 0.25 + 0.75 * turb;
 
-    // Fine-grain turbulent detail
-    float detail = fbm(rotXZ * 4.0 + vec2(100.0, time * 0.05));
+    // Time-evolving detail layer — ensures visible change even where
+    // orbital rotation is slow. Simulates internal turbulence/accretion.
+    float timeShift = time * 0.15;
+    float detail = fbm(rotXZ * 3.5 + vec2(100.0 + timeShift, timeShift * 0.7));
     turb *= 0.7 + 0.3 * detail;
 
-    // Concentric ring modulation — subtle, blended with the turbulence
+    // Concentric ring modulation — visible structure within the clouds
     float ringPhase1 = sin(r * 10.0 + rotAngle * r * 0.3) * 0.5 + 0.5;
     float ringPhase2 = sin(r * 20.0 - rotAngle * r * 0.15) * 0.5 + 0.5;
-    float rings = ringPhase1 * 0.6 + ringPhase2 * 0.4;
-    rings = 0.65 + 0.35 * rings;
+    float rings = ringPhase1 * 0.55 + ringPhase2 * 0.45;
+    rings = 0.5 + 0.5 * rings;
     turb *= rings;
 
     // Doppler beaming from Keplerian orbital motion
