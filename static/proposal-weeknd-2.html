@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Burning Film</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Burning Film</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// Burning Film — Celluloid catching fire in a projector
+// Amber burn holes spread across dark film stock
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var gl = canvas.getContext('webgl', { alpha: false, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  var vertSrc = [
+    'attribute vec2 a_pos;',
+    'void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }'
+  ].join('\n');
+
+  var fragSrc = [
+    'precision highp float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform float u_burnSpeed;',
+    'uniform float u_emberGlow;',
+    '',
+    '// ── Hash functions ──',
+    'float hash21(vec2 p) {',
+    '  p = fract(p * vec2(443.897, 441.423));',
+    '  p += dot(p, p + 19.19);',
+    '  return fract(p.x * p.y);',
+    '}',
+    '',
+    'vec2 hash22(vec2 p) {',
+    '  vec3 a = fract(p.xyx * vec3(443.897, 441.423, 437.195));',
+    '  a += dot(a, a.yzx + 19.19);',
+    '  return fract((a.xx + a.yz) * a.zy);',
+    '}',
+    '',
+    '// ── Value noise ──',
+    'float noise(vec2 p) {',
+    '  vec2 i = floor(p);',
+    '  vec2 f = fract(p);',
+    '  f = f * f * (3.0 - 2.0 * f);',
+    '  float a = hash21(i);',
+    '  float b = hash21(i + vec2(1.0, 0.0));',
+    '  float c = hash21(i + vec2(0.0, 1.0));',
+    '  float d = hash21(i + vec2(1.0, 1.0));',
+    '  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);',
+    '}',
+    '',
+    '// ── FBM with domain warping ──',
+    'float fbm(vec2 p) {',
+    '  float v = 0.0;',
+    '  float a = 0.5;',
+    '  vec2 shift = vec2(100.0);',
+    '  mat2 rot = mat2(0.866, 0.5, -0.5, 0.866);',
+    '  for (int i = 0; i < 6; i++) {',
+    '    v += a * noise(p);',
+    '    p = rot * p * 2.0 + shift;',
+    '    a *= 0.5;',
+    '  }',
+    '  return v;',
+    '}',
+    '',
+    '// ── Domain-warped noise for organic burn patterns ──',
+    'float warpedNoise(vec2 p, float t) {',
+    '  // First warp layer',
+    '  vec2 q = vec2(',
+    '    fbm(p + vec2(0.0, 0.0)),',
+    '    fbm(p + vec2(5.2, 1.3))',
+    '  );',
+    '',
+    '  // Second warp layer with slow time evolution',
+    '  vec2 r = vec2(',
+    '    fbm(p + 4.0 * q + vec2(1.7, 9.2) + 0.05 * t),',
+    '    fbm(p + 4.0 * q + vec2(8.3, 2.8) + 0.06 * t)',
+    '  );',
+    '',
+    '  return fbm(p + 4.0 * r);',
+    '}',
+    '',
+    '// ── Ember / hot background noise ──',
+    'float emberNoise(vec2 p, float t) {',
+    '  float n1 = noise(p * 3.0 + vec2(t * 0.3, t * 0.2));',
+    '  float n2 = noise(p * 7.0 - vec2(t * 0.5, t * 0.15));',
+    '  float n3 = noise(p * 15.0 + vec2(t * 0.8, -t * 0.4));',
+    '  return n1 * 0.5 + n2 * 0.35 + n3 * 0.15;',
+    '}',
+    '',
+    '// ── Film grain ──',
+    'float filmGrain(vec2 uv, float t) {',
+    '  float grain = hash21(uv * u_res * 0.5 + fract(t * 137.0));',
+    '  return grain;',
+    '}',
+    '',
+    '// ── Sprocket hole indicators (film strip detail) ──',
+    'float sprocketHoles(vec2 uv) {',
+    '  float edge = 0.0;',
+    '  // Left edge holes',
+    '  if (uv.x < 0.06) {',
+    '    float y = fract(uv.y * 8.0);',
+    '    float hole = smoothstep(0.08, 0.06, length(vec2(uv.x - 0.03, y - 0.5) * vec2(1.0, 1.5)));',
+    '    edge = hole * 0.15;',
+    '  }',
+    '  // Right edge holes',
+    '  if (uv.x > 0.94) {',
+    '    float y = fract(uv.y * 8.0);',
+    '    float hole = smoothstep(0.08, 0.06, length(vec2(uv.x - 0.97, y - 0.5) * vec2(1.0, 1.5)));',
+    '    edge = max(edge, hole * 0.15);',
+    '  }',
+    '  return edge;',
+    '}',
+    '',
+    'void main() {',
+    '  vec2 uv = gl_FragCoord.xy / u_res;',
+    '  float t = u_time;',
+    '',
+    '  // ── Burn cycle ──',
+    '  // Cycle period: burns spread then reset',
+    '  float cycleDuration = 12.0 / max(u_burnSpeed, 0.1);',
+    '  float cycleT = mod(t, cycleDuration);',
+    '  float cyclePhase = cycleT / cycleDuration;',
+    '',
+    '  // Threshold decreases over time (more area burns)',
+    '  // Starts high (~0.85) → goes to low (~0.15)',
+    '  // Uses smoothstep for gradual start, aggressive mid, gentle end',
+    '  float burnThreshold = mix(0.88, 0.08, smoothstep(0.0, 0.85, cyclePhase));',
+    '',
+    '  // Fade everything to black at end of cycle for clean reset',
+    '  float resetFade = smoothstep(0.88, 1.0, cyclePhase);',
+    '  // Fade in at start of cycle',
+    '  float startFade = smoothstep(0.0, 0.05, cyclePhase);',
+    '',
+    '  // ── Compute burn pattern (domain-warped noise) ──',
+    '  // Use aspect-corrected coordinates for the noise',
+    '  float aspect = u_res.x / u_res.y;',
+    '  vec2 noiseUV = uv * vec2(aspect, 1.0) * 2.5;',
+    '',
+    '  // Slow evolution offset per cycle so pattern differs',
+    '  float cycleIndex = floor(t / cycleDuration);',
+    '  vec2 cycleOffset = vec2(cycleIndex * 7.31, cycleIndex * 3.17);',
+    '',
+    '  float burnNoise = warpedNoise(noiseUV + cycleOffset, cycleT * u_burnSpeed * 0.3);',
+    '',
+    '  // ── Burn regions ──',
+    '  // Where noise > threshold, film is burned away',
+    '  float burnAmount = smoothstep(burnThreshold, burnThreshold - 0.12, burnNoise);',
+    '',
+    '  // Edge detection: the glow zone around the burn frontier',
+    '  float edgeWidth = 0.06;',
+    '  float edgeInner = smoothstep(burnThreshold, burnThreshold - edgeWidth, burnNoise);',
+    '  float edgeOuter = smoothstep(burnThreshold + edgeWidth * 0.5, burnThreshold, burnNoise);',
+    '  float edgeMask = edgeInner * (1.0 - burnAmount * 0.7);',
+    '',
+    '  // Narrow bright edge right at the burn frontier',
+    '  float hotEdge = smoothstep(burnThreshold + 0.01, burnThreshold - 0.01, burnNoise)',
+    '                - smoothstep(burnThreshold - 0.01, burnThreshold - 0.04, burnNoise);',
+    '  hotEdge = max(hotEdge, 0.0);',
+    '',
+    '  // ── Film base (unburned areas) ──',
+    '  // Very dark with subtle film grain',
+    '  float grain = filmGrain(uv, t);',
+    '  float grainStrength = 0.035;',
+    '  vec3 filmBase = vec3(0.035, 0.03, 0.028);',
+    '  filmBase += (grain - 0.5) * grainStrength;',
+    '',
+    '  // Subtle film texture - slight horizontal scan lines',
+    '  float scanline = sin(uv.y * u_res.y * 0.5) * 0.5 + 0.5;',
+    '  filmBase *= 0.95 + scanline * 0.05;',
+    '',
+    '  // Sprocket holes on edges',
+    '  float sprocket = sprocketHoles(uv);',
+    '  filmBase += sprocket;',
+    '',
+    '  // ── Burn edge glow ──',
+    '  // White-hot at the frontier, fading through orange to amber',
+    '  vec3 whiteHot = vec3(1.0, 0.88, 0.67);    // #ffe0aa',
+    '  vec3 orangeGlow = vec3(1.0, 0.533, 0.2);   // #ff8833',
+    '  vec3 amberEdge = vec3(0.784, 0.584, 0.424); // #c8956c',
+    '  vec3 deepAmber = vec3(0.5, 0.25, 0.08);',
+    '',
+    '  // Gradient from white-hot center to amber edge',
+    '  vec3 edgeColor = mix(amberEdge, orangeGlow, smoothstep(0.0, 0.5, edgeMask));',
+    '  edgeColor = mix(edgeColor, whiteHot, hotEdge);',
+    '',
+    '  // Add secondary noise to edge for organic irregularity',
+    '  float edgeNoise = noise(noiseUV * 8.0 + cycleOffset + t * 0.5);',
+    '  edgeColor *= 0.8 + edgeNoise * 0.4;',
+    '',
+    '  // Pulsing intensity on the edge',
+    '  float edgePulse = 0.85 + 0.15 * sin(t * 3.0 + burnNoise * 10.0);',
+    '  edgeColor *= edgePulse;',
+    '',
+    '  // ── Ember field (visible through burn holes) ──',
+    '  float ember = emberNoise(noiseUV, t);',
+    '',
+    '  // Color: deep ember red/black with occasional bright orange spots',
+    '  vec3 emberDark = vec3(0.1, 0.02, 0.0);     // near black',
+    '  vec3 emberRed = vec3(0.4, 0.04, 0.0);       // #661100',
+    '  vec3 emberOrange = vec3(0.85, 0.35, 0.05);   // bright ember',
+    '  vec3 emberWhite = vec3(1.0, 0.7, 0.3);       // hottest spots',
+    '',
+    '  vec3 emberColor = mix(emberDark, emberRed, smoothstep(0.2, 0.5, ember));',
+    '  emberColor = mix(emberColor, emberOrange, smoothstep(0.55, 0.75, ember));',
+    '  emberColor = mix(emberColor, emberWhite, smoothstep(0.8, 0.95, ember) * 0.5);',
+    '',
+    '  // Embers pulse and shift',
+    '  float emberPulse = 0.7 + 0.3 * sin(t * 2.0 + ember * 8.0 + burnNoise * 5.0);',
+    '  emberColor *= emberPulse * u_emberGlow;',
+    '',
+    '  // Embers are brighter near the burn edge (oxygen feeding the fire)',
+    '  float edgeProximity = smoothstep(0.3, 0.0, abs(burnNoise - burnThreshold + 0.15));',
+    '  emberColor += orangeGlow * edgeProximity * 0.4 * u_emberGlow;',
+    '',
+    '  // ── Compose layers ──',
+    '  vec3 col = filmBase;',
+    '',
+    '  // Pre-heat glow: subtle amber warming ahead of burn front',
+    '  float preheat = smoothstep(burnThreshold + 0.15, burnThreshold + 0.02, burnNoise);',
+    '  preheat *= (1.0 - burnAmount);',
+    '  col += deepAmber * preheat * 0.4;',
+    '',
+    '  // Blend in embers where burned through',
+    '  col = mix(col, emberColor, burnAmount);',
+    '',
+    '  // Add bright edge glow on top',
+    '  col += edgeColor * edgeMask * 1.8;',
+    '',
+    '  // Extra white-hot bloom at the very edge',
+    '  col += whiteHot * hotEdge * 1.2;',
+    '',
+    '  // ── Curling burn pattern detail ──',
+    '  // Small-scale noise adds crispy curling edges',
+    '  float curl = noise(noiseUV * 20.0 + cycleOffset);',
+    '  float curlEdge = smoothstep(burnThreshold + 0.03, burnThreshold - 0.02, burnNoise);',
+    '  curlEdge *= (1.0 - burnAmount * 0.8);',
+    '  col += vec3(0.6, 0.3, 0.1) * curl * curlEdge * 0.3;',
+    '',
+    '  // ── Floating sparks / embers ──',
+    '  // Small bright points that drift upward near burn edges',
+    '  for (float i = 0.0; i < 4.0; i++) {',
+    '    vec2 sparkUV = uv * vec2(aspect, 1.0);',
+    '    float sparkScale = 30.0 + i * 15.0;',
+    '    vec2 sparkPos = sparkUV * sparkScale;',
+    '    sparkPos.y -= t * (1.5 + i * 0.8);',
+    '    sparkPos.x += sin(t * (1.0 + i * 0.3) + i * 3.0) * 0.5;',
+    '',
+    '    vec2 sparkId = floor(sparkPos);',
+    '    vec2 sparkFrac = fract(sparkPos) - 0.5;',
+    '',
+    '    float sparkHash = hash21(sparkId + i * 100.0);',
+    '    // Only some cells have sparks, and only near burn areas',
+    '    float sparkActive = step(0.85, sparkHash);',
+    '',
+    '    vec2 sparkOffset = hash22(sparkId + i * 50.0) - 0.5;',
+    '    float sparkDist = length(sparkFrac - sparkOffset * 0.3);',
+    '    float sparkSize = 0.03 + sparkHash * 0.02;',
+    '    float spark = smoothstep(sparkSize, sparkSize * 0.2, sparkDist);',
+    '',
+    '    // Sparks flicker',
+    '    float sparkFlicker = sin(t * 15.0 + sparkHash * 50.0) * 0.5 + 0.5;',
+    '    spark *= sparkFlicker * sparkActive;',
+    '',
+    '    // Only show sparks near burn regions',
+    '    float nearBurn = smoothstep(0.6, 0.3, abs(burnNoise - burnThreshold));',
+    '    spark *= nearBurn;',
+    '',
+    '    vec3 sparkColor = mix(orangeGlow, whiteHot, sparkHash);',
+    '    col += sparkColor * spark * 0.6 * u_emberGlow;',
+    '  }',
+    '',
+    '  // ── Vignette ──',
+    '  vec2 vc = uv - 0.5;',
+    '  float vig = 1.0 - dot(vc, vc) * 1.6;',
+    '  vig = clamp(vig, 0.0, 1.0);',
+    '  vig = pow(vig, 0.6);',
+    '  col *= vig;',
+    '',
+    '  // ── Cycle fades ──',
+    '  col *= startFade;',
+    '  col *= 1.0 - resetFade;',
+    '',
+    '  // ── Subtle overall film warmth ──',
+    '  col = mix(col, col * vec3(1.05, 0.95, 0.85), 0.15);',
+    '',
+    '  // ── Tone mapping (keep embers punchy) ──',
+    '  col = col / (1.0 + col * 0.2);',
+    '',
+    '  // ── Gamma ──',
+    '  col = pow(max(col, 0.0), vec3(0.95));',
+    '',
+    '  gl_FragColor = vec4(col, 1.0);',
+    '}',
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error(gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error(gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uBurnSpeed = gl.getUniformLocation(prog, 'u_burnSpeed');
+  var uEmberGlow = gl.getUniformLocation(prog, 'u_emberGlow');
+
+  var burnSpeedVal = 0.5;
+  var emberGlowVal = 1.0;
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  function resize() {
+    var w = Math.round(canvas.clientWidth * dpr);
+    var h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  var running = true;
+
+  function render(now) {
+    if (!running) return;
+    resize();
+    var t = prefersReduced ? 0.0 : now * 0.001;
+    gl.uniform1f(uTime, t);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uBurnSpeed, burnSpeedVal);
+    gl.uniform1f(uEmberGlow, emberGlowVal);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  // ── Pause when offscreen ──
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) {
+      running = false;
+    } else {
+      running = true;
+      requestAnimationFrame(render);
+    }
+  });
+
+  // ── PostMessage API for parameter control ──
+  window.addEventListener('message', function (e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'BURN_SPEED': burnSpeedVal = e.data.value; break;
+        case 'EMBER_GLOW': emberGlowVal = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>
