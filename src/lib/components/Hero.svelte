@@ -42,24 +42,33 @@
 		iframeEl?.contentWindow?.postMessage({ type: 'param', name, value }, '*');
 	}
 
-	// Mouse-based tilt/rotate
+	// Drag-based tilt/rotate
 	let targetTilt = 0;
 	let targetRotate = 0;
 	let currentTilt = 0;
 	let currentRotate = 0;
 	let rafId = 0;
+	let dragging = $state(false);
+	let dragStart = { x: 0, y: 0, tilt: 0, rotate: 0 };
 
-	function onMouseMove(e: MouseEvent) {
-		const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-		const nx = (e.clientX - rect.left) / rect.width * 2 - 1;  // -1 to 1
-		const ny = (e.clientY - rect.top) / rect.height * 2 - 1;  // -1 to 1
-		targetRotate = nx * 0.4;
-		targetTilt = -ny * 0.25;
+	function onMouseDown(e: MouseEvent) {
+		if ((e.target as HTMLElement).closest('.controls, .ctas')) return;
+		dragging = true;
+		dragStart = { x: e.clientX, y: e.clientY, tilt: targetTilt, rotate: targetRotate };
 	}
 
-	function onMouseLeave() {
-		targetRotate = 0;
-		targetTilt = 0;
+	function onMouseMove(e: MouseEvent) {
+		if (!dragging) return;
+		const dx = e.clientX - dragStart.x;
+		const dy = e.clientY - dragStart.y;
+		targetRotate = dragStart.rotate + dx * 0.003;
+		targetTilt = dragStart.tilt - dy * 0.002;
+		targetTilt = Math.max(-0.5, Math.min(0.5, targetTilt));
+		targetRotate = Math.max(-0.8, Math.min(0.8, targetRotate));
+	}
+
+	function onMouseUp() {
+		dragging = false;
 	}
 
 	function smoothUpdate() {
@@ -90,7 +99,7 @@
 	}
 </script>
 
-<section class="hero" onmousemove={onMouseMove} onmouseleave={onMouseLeave}>
+<section class="hero" class:dragging onmousedown={onMouseDown} onmousemove={onMouseMove} onmouseup={onMouseUp} onmouseleave={onMouseUp}>
 	<iframe
 		use:hideLabel
 		use:sendHeroParams
@@ -119,7 +128,7 @@
 			<span>Speed</span>
 			<input type="range" min="0.05" max="1" step="0.05" value={speed} oninput={onSpeed} />
 		</label>
-		<span class="hint">Move mouse to rotate</span>
+		<span class="hint">Drag to rotate</span>
 	</div>
 </section>
 
@@ -128,7 +137,10 @@
 		position: relative;
 		height: 100dvh;
 		overflow: hidden;
-		cursor: crosshair;
+		cursor: grab;
+	}
+	.hero.dragging {
+		cursor: grabbing;
 	}
 	iframe {
 		position: absolute;
