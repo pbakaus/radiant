@@ -16,7 +16,7 @@
 	/** Sends heroConfig params to reposition the black hole. */
 	function sendHeroParams(node: HTMLIFrameElement) {
 		const params = [
-			{ name: 'BH_CENTER_X', value: 0.68 },
+			{ name: 'BH_CENTER_X', value: 0.73 },
 			{ name: 'BH_CENTER_Y', value: 0.45 },
 			{ name: 'BH_SCALE', value: 2.4 },
 			{ name: 'DISK_INTENSITY', value: 1.0 },
@@ -67,7 +67,7 @@
 	.overlay {
 		position: absolute;
 		inset: 0;
-		background: linear-gradient(to right, rgba(10, 10, 10, 0.7) 0%, rgba(10, 10, 10, 0.3) 50%, transparent 100%);
+		background: linear-gradient(to right, rgba(10, 10, 10, 0.55) 0%, rgba(10, 10, 10, 0.15) 45%, transparent 70%);
 		pointer-events: none;
 	}
 	.content {
