@@ -179,30 +179,26 @@ vec4 shadeDisk(vec3 hit, vec3 vel, float time) {
     float lr = log2(max(r, 0.1));
 
     // Keplerian angular velocity: omega = sqrt(GM/r³)
-    // Inner rings rotate MUCH faster than outer rings
+    // 12x multiplier so the orbiting flow is clearly visible
     float keplerOmega = sqrt(0.5 * RS / (r * r * r));
-    float rotAngle = time * keplerOmega * 8.0; // 8x for visible flow
+    float rotAngle = time * keplerOmega * 12.0;
     float ca = cos(rotAngle), sa = sin(rotAngle);
     vec2 rotXZ = vec2(hit.x * ca - hit.z * sa, hit.x * sa + hit.z * ca);
 
-    // Concentric ring structure — the primary visual feature
-    // Multiple frequency bands with Keplerian time evolution
-    // Each ring band flows at its own orbital speed
+    // FBM turbulence is the PRIMARY texture — gives cloudy, organic feel
+    // The Keplerian rotation of the sample coords makes it flow visibly
+    float turb = fbm(rotXZ * 1.2 + vec2(lr * 3.0));
+    turb = 0.25 + 0.75 * turb;
+
+    // Fine-grain turbulent detail
+    float detail = fbm(rotXZ * 4.0 + vec2(100.0, time * 0.05));
+    turb *= 0.7 + 0.3 * detail;
+
+    // Concentric ring modulation — subtle, blended with the turbulence
     float ringPhase1 = sin(r * 10.0 + rotAngle * r * 0.3) * 0.5 + 0.5;
-    float ringPhase2 = sin(r * 22.0 - rotAngle * r * 0.15) * 0.5 + 0.5;
-    float ringPhase3 = sin(r * 6.0 + rotAngle * r * 0.5) * 0.5 + 0.5;
-    float rings = ringPhase1 * 0.5 + ringPhase2 * 0.3 + ringPhase3 * 0.2;
-    rings = 0.3 + 0.7 * rings;
-
-    // Subtle FBM turbulence — much lighter than before so rings dominate
-    float turb = fbm(rotXZ * 1.0 + vec2(lr * 2.0));
-    turb = 0.6 + 0.4 * turb; // less variation range
-
-    // Fine turbulent wisps (very subtle)
-    float detail = fbm(rotXZ * 3.5 + vec2(100.0, time * 0.03));
-    turb *= 0.85 + 0.15 * detail;
-
-    // Combine: rings are the dominant structure, FBM adds organic variation
+    float ringPhase2 = sin(r * 20.0 - rotAngle * r * 0.15) * 0.5 + 0.5;
+    float rings = ringPhase1 * 0.6 + ringPhase2 * 0.4;
+    rings = 0.65 + 0.35 * rings;
     turb *= rings;
 
     // Doppler beaming from Keplerian orbital motion
