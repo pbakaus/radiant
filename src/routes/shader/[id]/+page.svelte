@@ -221,13 +221,13 @@
 		flex: 1;
 		min-height: 0;
 		display: flex;
-		align-items: center;
+		align-items: stretch;
 		justify-content: center;
 		padding: 1.5rem;
 	}
 	.preview-area > :global(*) {
 		width: 100%;
-		max-height: 100%;
+		height: 100%;
 	}
 
 	/* Sidebar — anchored right, full height */

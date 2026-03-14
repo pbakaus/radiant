@@ -144,6 +144,10 @@
 		width: 100%;
 		aspect-ratio: 16 / 9;
 	}
+	.full-layout {
+		aspect-ratio: unset;
+		height: 100%;
+	}
 
 	iframe {
 		border: none;
