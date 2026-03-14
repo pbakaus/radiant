@@ -458,7 +458,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'event-horizon',
-		file: 'proposal-weeknd-1.html',
+		file: 'event-horizon.html',
 		title: 'Event Horizon',
 		desc: 'Physics-based black hole with raytraced gravitational lensing, volumetric accretion disk, and Doppler beaming.',
 		inspiration: 'The Weeknd',
