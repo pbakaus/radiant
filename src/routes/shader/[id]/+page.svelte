@@ -13,6 +13,15 @@
 	const shader = $derived(data.shader);
 	const number = $derived(getShaderNumber(shader));
 
+	let isMobile = $state(false);
+	import { onMount } from 'svelte';
+	onMount(() => {
+		const check = () => { isMobile = window.innerWidth < 768; };
+		check();
+		window.addEventListener('resize', check);
+		return () => window.removeEventListener('resize', check);
+	});
+
 	let activeLayout: Layout = $state('full');
 	let activeScheme = $state(colorSchemes[0]);
 	let showSource = $state(false);
@@ -105,11 +114,13 @@
 				<span class="sidebar-label">Layout</span>
 				<div class="sidebar-buttons">
 					{#each layouts as layout}
+						{@const desktopOnly = layout.id === 'hero' || layout.id === 'accent'}
 						<button
 							class="ctrl-btn"
 							class:active={activeLayout === layout.id}
-							onclick={() => (activeLayout = layout.id)}
-							title={layout.label}
+							class:disabled={isMobile && desktopOnly}
+							onclick={() => { if (!(isMobile && desktopOnly)) activeLayout = layout.id; }}
+							title={isMobile && desktopOnly ? 'Desktop only' : layout.label}
 						>
 							<span class="ctrl-icon">{layout.icon}</span>
 							<span class="ctrl-text">{layout.label}</span>
@@ -322,6 +333,10 @@
 		border-color: rgba(200, 149, 108, 0.5);
 		color: #c8956c;
 		background: rgba(200, 149, 108, 0.06);
+	}
+	.ctrl-btn.disabled {
+		opacity: 0.3;
+		cursor: not-allowed;
 	}
 	.ctrl-icon {
 		font-size: 0.8rem;
