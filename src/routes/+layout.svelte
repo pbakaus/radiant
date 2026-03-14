@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Nav from '$lib/components/Nav.svelte';
 	let { children } = $props();
 </script>
 
@@ -8,6 +9,7 @@
 	<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet" />
 </svelte:head>
 
+<Nav />
 {@render children()}
 
 <style>
@@ -45,5 +47,11 @@
 	:global(html) {
 		scrollbar-width: thin;
 		scrollbar-color: rgba(200, 149, 108, 0.2) transparent;
+		--nav-height: 56px;
+	}
+	@media (prefers-reduced-motion: no-preference) {
+		:global(html) {
+			scroll-behavior: smooth;
+		}
 	}
 </style>
