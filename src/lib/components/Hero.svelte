@@ -33,10 +33,11 @@
 	/** Sends heroConfig params to reposition the black hole. */
 	function sendHeroParams(node: HTMLIFrameElement) {
 		iframeEl = node;
+		const isMobile = window.innerWidth < 640;
 		const params = [
-			{ name: 'BH_CENTER_X', value: 0.73 },
-			{ name: 'BH_CENTER_Y', value: 0.45 },
-			{ name: 'BH_SCALE', value: 2.4 },
+			{ name: 'BH_CENTER_X', value: isMobile ? 0.5 : 0.73 },
+			{ name: 'BH_CENTER_Y', value: isMobile ? 0.38 : 0.45 },
+			{ name: 'BH_SCALE', value: isMobile ? 1.6 : 2.4 },
 			{ name: 'DISK_INTENSITY', value: intensity },
 			{ name: 'ROTATION_SPEED', value: speed },
 			{ name: 'CHROMATIC', value: chromatic }
@@ -342,16 +343,45 @@
 	@media (max-width: 640px) {
 		.content {
 			padding: 0 1.5rem;
+			justify-content: flex-start;
+			padding-top: calc(var(--nav-height, 56px) + 2rem);
+			max-width: none;
+		}
+		h1 {
+			font-size: 2.5rem;
+		}
+		.tagline {
+			font-size: 0.9rem;
+		}
+		.ctas {
+			margin-top: 1.25rem;
+		}
+		.overlay {
+			background: linear-gradient(
+				to bottom,
+				rgba(10, 10, 10, 0.6) 0%,
+				rgba(10, 10, 10, 0.2) 35%,
+				transparent 55%
+			);
 		}
 		.controls {
-			gap: 0.75rem;
-			padding: 0.5rem 1rem;
+			gap: 0.5rem;
+			padding: 0.5rem 0.75rem;
 			flex-wrap: wrap;
 			justify-content: center;
 			border-radius: 16px;
 			width: calc(100% - 2rem);
 		}
+		.control span {
+			display: none;
+		}
+		.control input[type="range"] {
+			width: 50px;
+		}
 		.hint {
+			display: none;
+		}
+		.divider {
 			display: none;
 		}
 	}
