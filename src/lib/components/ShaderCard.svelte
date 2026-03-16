@@ -2,16 +2,15 @@
 	import { getShaderNumber, type Shader } from '$lib/shaders';
 	import { onMount } from 'svelte';
 
-	let { shader, active = false, filter = 'none' }: { shader: Shader; active?: boolean; filter?: string } = $props();
+	let { shader, active = false, preload = false, filter = 'none' }: { shader: Shader; active?: boolean; preload?: boolean; filter?: string } = $props();
 
 	const number = $derived(getShaderNumber(shader));
 
 	let inViewport = $state(false);
 	let posterUrl: string | null = $state(null);
 
-	// Only load iframe when in viewport AND active row
-	// Poster capture happens when the row becomes active
-	const shouldLoad = $derived(inViewport && active);
+	// Load iframe when in viewport AND (active row OR preloading adjacent row for poster capture)
+	const shouldLoad = $derived(inViewport && (active || preload));
 
 	function observe(node: HTMLElement) {
 		const observer = new IntersectionObserver(

@@ -2,7 +2,7 @@
 	<div class="footer-top">
 		<div class="wordmark">Radiant</div>
 		<nav class="footer-links">
-			<a href="#gallery">Gallery</a>
+			<a href="/gallery">Gallery</a>
 			<a href="#pricing">Pricing</a>
 		</nav>
 		<div class="social">

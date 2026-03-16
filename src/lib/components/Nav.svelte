@@ -1,7 +1,7 @@
 <nav>
 	<a href="/" class="logo">Radiant</a>
 	<div class="links">
-		<a href="/#gallery">Gallery</a>
+		<a href="/gallery">Gallery</a>
 		<a href="/#pricing">Pricing</a>
 	</div>
 </nav>

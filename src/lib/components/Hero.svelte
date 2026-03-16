@@ -68,6 +68,7 @@
 
 	function onMouseDown(e: MouseEvent) {
 		if ((e.target as HTMLElement).closest('.controls, .ctas')) return;
+		e.preventDefault();
 		dragging = true;
 		dragStart = { x: e.clientX, y: e.clientY, tilt: targetTilt, rotate: targetRotate };
 	}
@@ -129,7 +130,7 @@
 		<h1>Radiant</h1>
 		<p class="tagline">Production-ready generative animations for the web. No dependencies. Just drop in.</p>
 		<div class="ctas">
-			<a href="#gallery" class="btn btn-solid">Browse Collection</a>
+			<a href="/gallery" class="btn btn-solid">Browse Collection</a>
 			<a href="#pricing" class="btn btn-ghost">View Pricing</a>
 		</div>
 	</div>
@@ -171,6 +172,7 @@
 	}
 	.hero.dragging {
 		cursor: grabbing;
+		user-select: none;
 	}
 	iframe {
 		position: absolute;
