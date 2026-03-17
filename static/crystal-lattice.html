@@ -33,6 +33,49 @@
   var gl = canvas.getContext('webgl', { alpha: true, antialias: false, preserveDrawingBuffer: false });
   if (!gl) return;
 
+  // ── Mouse-drag rotation state ──
+  var mouseX = 0, mouseY = 0;
+  var isDragging = false;
+  var dragStartX = 0, dragStartY = 0;
+  var rotX = 0, rotY = 0;
+
+  canvas.addEventListener('mousedown', function(e) {
+    isDragging = true;
+    dragStartX = e.clientX;
+    dragStartY = e.clientY;
+  });
+  canvas.addEventListener('mousemove', function(e) {
+    if (!isDragging) return;
+    var dx = e.clientX - dragStartX;
+    var dy = e.clientY - dragStartY;
+    rotX += dx * 0.005;
+    rotY += dy * 0.005;
+    dragStartX = e.clientX;
+    dragStartY = e.clientY;
+  });
+  canvas.addEventListener('mouseup', function() { isDragging = false; });
+  canvas.addEventListener('mouseleave', function() { isDragging = false; });
+
+  // ── Touch support ──
+  canvas.addEventListener('touchstart', function(e) {
+    if (e.touches.length === 1) {
+      isDragging = true;
+      dragStartX = e.touches[0].clientX;
+      dragStartY = e.touches[0].clientY;
+    }
+  });
+  canvas.addEventListener('touchmove', function(e) {
+    if (!isDragging || e.touches.length !== 1) return;
+    e.preventDefault();
+    var dx = e.touches[0].clientX - dragStartX;
+    var dy = e.touches[0].clientY - dragStartY;
+    rotX += dx * 0.005;
+    rotY += dy * 0.005;
+    dragStartX = e.touches[0].clientX;
+    dragStartY = e.touches[0].clientY;
+  }, { passive: false });
+  canvas.addEventListener('touchend', function() { isDragging = false; });
+
   var vertSrc = [
     'attribute vec2 a_pos;',
     'void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }'
@@ -44,6 +87,8 @@
     'uniform vec2 u_res;',
     'uniform float u_growthSpeed;',
     'uniform float u_refraction;',
+    'uniform float u_rotX;',
+    'uniform float u_rotY;',
     '',
     '#define PI 3.14159265359',
     '#define TAU 6.28318530718',
@@ -206,18 +251,30 @@
     '      d = min(d, crystalShaft(cp, 0.11 * ga, 0.45 * ga, 2.1)); }',
     '  }',
     '  ',
-    '  // --- Procedural ring of tiny crystals (density > 1.4) ---',
+    '  // --- Outer ring of medium crystals (density > 1.4) ---',
     '  if (density > 1.4) {',
-    '    for (int i = 0; i < 3; i++) {',
+    '    { vec3 cp = p - vec3(0.8, -1.0, 0.0); cp.xy = rot2(-0.55) * cp.xy; cp.xz = rot2(0.1) * cp.xz;',
+    '      d = min(d, crystalShaft(cp, 0.28 * ga, 1.6 * ga, 2.0)); }',
+    '    { vec3 cp = p - vec3(-0.7, -1.0, 0.4); cp.xy = rot2(0.5) * cp.xy; cp.xz = rot2(-0.4) * cp.xz;',
+    '      d = min(d, crystalShaft(cp, 0.25 * ga, 1.4 * ga, 2.1)); }',
+    '    { vec3 cp = p - vec3(0.2, -1.0, 0.75); cp.xy = rot2(-0.2) * cp.xy; cp.yz = rot2(0.5) * cp.yz;',
+    '      d = min(d, crystalShaft(cp, 0.22 * ga, 1.2 * ga, 2.3)); }',
+    '    { vec3 cp = p - vec3(-0.3, -1.0, -0.7); cp.xy = rot2(0.45) * cp.xy; cp.yz = rot2(-0.4) * cp.yz;',
+    '      d = min(d, crystalShaft(cp, 0.24 * ga, 1.3 * ga, 1.9)); }',
+    '  }',
+    '  ',
+    '  // --- Dense procedural crystal bed (density > 1.7) ---',
+    '  if (density > 1.7) {',
+    '    for (int i = 0; i < 8; i++) {',
     '      float fi = float(i);',
-    '      float angle = fi * 0.785 + 0.3;',
-    '      float dist = 0.55 + sin(fi * 2.7) * 0.15;',
+    '      float angle = fi * 0.785 + 0.15;',
+    '      float dist = 0.65 + sin(fi * 2.7) * 0.2;',
     '      vec3 cp = p - vec3(cos(angle) * dist, -1.0, sin(angle) * dist);',
-    '      float tiltAngle = 0.5 + sin(fi * 3.1) * 0.2;',
+    '      float tiltAngle = 0.6 + sin(fi * 3.1) * 0.25;',
     '      cp.xy = rot2(cos(angle) * tiltAngle) * cp.xy;',
     '      cp.yz = rot2(sin(angle) * tiltAngle * 0.5) * cp.yz;',
-    '      float r = (0.06 + sin(fi * 4.3) * 0.03) * ga;',
-    '      float h = (0.25 + sin(fi * 2.1) * 0.1) * ga;',
+    '      float r = (0.08 + sin(fi * 4.3) * 0.04) * ga;',
+    '      float h = (0.4 + sin(fi * 2.1) * 0.15) * ga;',
     '      d = min(d, crystalShaft(cp, r, h, 2.0));',
     '    }',
     '  }',
@@ -348,9 +405,9 @@
     '  float slowT = t * 0.2;',
     '  ',
     '  // ── Camera: slowly orbiting the crystal cluster ──',
-    '  float camAngle = slowT * 0.3;',
+    '  float camAngle = slowT * 0.3 + u_rotX;',
     '  float camRadius = 5.5;',
-    '  float camHeight = 1.0 + sin(slowT * 0.4) * 0.4;',
+    '  float camHeight = clamp(1.0 + sin(slowT * 0.4) * 0.4 + u_rotY, -1.5, 4.0);',
     '  vec3 ro = vec3(',
     '    sin(camAngle) * camRadius,',
     '    camHeight,',
@@ -538,9 +595,13 @@
   var uRes = gl.getUniformLocation(prog, 'u_res');
   var uGrowthSpeed = gl.getUniformLocation(prog, 'u_growthSpeed');
   var uRefraction = gl.getUniformLocation(prog, 'u_refraction');
+  var uRotX = gl.getUniformLocation(prog, 'u_rotX');
+  var uRotY = gl.getUniformLocation(prog, 'u_rotY');
 
   var growthSpeedVal = 1.0;
   var refractionVal = 1.0;
+  var tiltXVal = 0.0;
+  var tiltYVal = 0.0;
 
   var dpr = Math.min(window.devicePixelRatio || 1, 2) * pixelScale;
 
@@ -560,6 +621,8 @@
     gl.uniform2f(uRes, canvas.width, canvas.height);
     gl.uniform1f(uGrowthSpeed, growthSpeedVal);
     gl.uniform1f(uRefraction, refractionVal);
+    gl.uniform1f(uRotX, rotX + tiltXVal);
+    gl.uniform1f(uRotY, rotY + tiltYVal);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     requestAnimationFrame(render);
   }
@@ -579,6 +642,8 @@
       switch (e.data.name) {
         case 'GROWTH_SPEED': growthSpeedVal = e.data.value; break;
         case 'REFRACTION': refractionVal = e.data.value; break;
+        case 'TILT_X': tiltXVal = e.data.value; break;
+        case 'TILT_Y': tiltYVal = e.data.value; break;
       }
     }
   });

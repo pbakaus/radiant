@@ -730,8 +730,10 @@ export const shaders: Shader[] = [
 		tags: ['object', 'geometric'],
 		technique: 'webgl',
 		params: [
-			{ name: 'GROWTH_SPEED', label: 'Crystal Count', min: 0.3, max: 2.0, step: 0.1, default: 1.2 },
-			{ name: 'REFRACTION', label: 'Prismatic', min: 0.0, max: 2.0, step: 0.1, default: 1.0 }
+			{ name: 'GROWTH_SPEED', label: 'Crystal Count', min: 0.3, max: 2.0, step: 0.1, default: 1.0 },
+			{ name: 'REFRACTION', label: 'Prismatic', min: 0.0, max: 2.0, step: 0.1, default: 1.0 },
+			{ name: 'TILT_X', label: 'Tilt X', min: -1.5, max: 1.5, step: 0.1, default: 0.0 },
+			{ name: 'TILT_Y', label: 'Tilt Y', min: -0.5, max: 0.5, step: 0.1, default: 0.0 }
 		]
 	},
 	{
