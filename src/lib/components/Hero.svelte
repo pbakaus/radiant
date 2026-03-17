@@ -20,8 +20,14 @@
 	function hideLabel(node: HTMLIFrameElement) {
 		function onLoad() {
 			try {
-				const label = node.contentDocument?.querySelector('.label') as HTMLElement | null;
+				const doc = node.contentDocument;
+				if (!doc) return;
+				const label = doc.querySelector('.label') as HTMLElement | null;
 				if (label) label.style.display = 'none';
+				// Inject FPS counter
+				const s = doc.createElement('script');
+				s.textContent = `(function(){var f=0,lt=performance.now(),el=document.createElement("div");el.style.cssText="position:fixed;bottom:4px;right:6px;font:9px/1 monospace;color:rgba(255,255,255,0.35);z-index:999;pointer-events:none;text-shadow:0 1px 2px rgba(0,0,0,0.8)";document.body.appendChild(el);function t(){f++;var n=performance.now();if(n-lt>=1000){el.textContent=f+" fps";f=0;lt=n;}requestAnimationFrame(t);}requestAnimationFrame(t);})();`;
+				doc.body.appendChild(s);
 			} catch {
 				/* cross-origin — ignore */
 			}

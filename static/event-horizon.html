@@ -92,11 +92,18 @@ float gNoise(vec2 p) {
 float fbm(vec2 p) {
     float v = 0.0, a = 0.5;
     mat2 rot = mat2(0.866, 0.5, -0.5, 0.866); // 30 deg rotation
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 4; i++) {
         v += a * gNoise(p);
         p = rot * p * 2.03 + vec2(47.0, 13.0);
         a *= 0.49;
     }
+    return v;
+}
+// Lightweight 2-octave noise for subtle effects (nebula etc.)
+float fbmLite(vec2 p) {
+    float v = 0.5 * gNoise(p);
+    p = mat2(0.866, 0.5, -0.5, 0.866) * p * 2.03 + vec2(47.0, 13.0);
+    v += 0.25 * gNoise(p);
     return v;
 }
 
@@ -318,6 +325,9 @@ void main() {
     int diskCrossings = 0;
     float minR = 1000.0; // track closest approach for photon ring
 
+    // Pre-compute loop invariant
+    float gravCoeff = -1.5 * RS * L2;
+
     for (int i = 0; i < 200; i++) {
         float r = length(pos);
 
@@ -325,14 +335,16 @@ void main() {
         float h = 0.16 * clamp(r - 0.4 * RS, 0.06, 3.5);
 
         // Schwarzschild geodesic: a = -1.5·RS·L²/r⁵ · x
-        float invR5 = 1.0 / (r * r * r * r * r);
-        vec3 acc = (-1.5 * RS * L2 * invR5) * pos;
+        float invR2 = 1.0 / (r * r);
+        float invR5 = invR2 * invR2 / r;
+        vec3 acc = (gravCoeff * invR5) * pos;
 
         // Velocity-Verlet integration (symplectic, energy-preserving)
         vec3 p1 = pos + vel * h + 0.5 * acc * h * h;
         float r1 = length(p1);
-        float invR15 = 1.0 / (r1 * r1 * r1 * r1 * r1);
-        vec3 acc1 = (-1.5 * RS * L2 * invR15) * p1;
+        float invR12 = 1.0 / (r1 * r1);
+        float invR15 = invR12 * invR12 / r1;
+        vec3 acc1 = (gravCoeff * invR15) * p1;
         vec3 v1 = vel + 0.5 * (acc + acc1) * h;
 
         // Track closest approach
@@ -359,18 +371,22 @@ void main() {
             diskCrossings++;
         }
 
-        // ── Soft ambient glow near BH (very diffuse, no sharp peak) ──
-        float pDist = abs(r1 - 1.5 * RS);
-        // Use squared distance to spread glow wider and prevent accumulation spikes
-        float psGlow = 1.0 / (1.0 + pDist * pDist * 20.0) * h * 0.001 / max(r1 * r1, 0.2);
-        glow += vec3(0.8, 0.6, 0.35) * psGlow;
+        // ── Glow calculations only when close to BH (negligible contribution beyond r=6) ──
+        if (r1 < 6.0) {
+            // Soft ambient glow near BH (very diffuse, no sharp peak)
+            float pDist = abs(r1 - 1.5 * RS);
+            float psGlow = 1.0 / (1.0 + pDist * pDist * 20.0) * h * 0.001 / max(r1 * r1, 0.2);
+            glow += vec3(0.8, 0.6, 0.35) * psGlow;
 
-        // ── Event horizon proximity glow ──
-        float hzGlow = exp(-(r1 - RS) * 3.5) * h * 0.003;
-        glow += vec3(0.5, 0.25, 0.08) * max(hzGlow, 0.0);
+            // Event horizon proximity glow
+            float hzGlow = exp(-(r1 - RS) * 3.5) * h * 0.003;
+            glow += vec3(0.5, 0.25, 0.08) * max(hzGlow, 0.0);
+        }
 
         // ── Termination ──
         if (r1 < RS * 0.35) { absorbed = true; break; }
+        // Early escape: ray moving outward past disk range, deflection negligible
+        if (r1 > 25.0 && r1 > r) break;
         if (r1 > 55.0) break;
 
         pos = p1;

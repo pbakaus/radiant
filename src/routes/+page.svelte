@@ -20,6 +20,9 @@
 			.filter((s): s is NonNullable<typeof s> => s != null)
 	);
 
+	// Featured cards only render when hero is off-screen
+	const featuredActive = $derived(featuredInView && !heroVisible);
+
 	onMount(() => {
 		var heroObs = new IntersectionObserver(([e]) => { heroVisible = e.isIntersecting; }, { threshold: 0.05 });
 		if (heroEl) heroObs.observe(heroEl);
@@ -49,7 +52,7 @@
 	</header>
 	<div class="featured-grid">
 		{#each featuredShaders as shader (shader.id)}
-			<ShaderCard {shader} active={featuredInView} filter={activeScheme.filter} />
+			<ShaderCard {shader} active={featuredActive} filter={activeScheme.filter} />
 		{/each}
 	</div>
 	<div class="browse-cta">
