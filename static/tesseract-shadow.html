@@ -252,15 +252,19 @@
     var breathe = Math.sin(time * 0.15) * 0.25 + Math.sin(time * 0.37) * 0.1;
     var projDepth = PROJECTION_DEPTH + breathe;
 
-    // Rotation speed with subtle surges
-    var speedMod = 1.0 + 0.15 * Math.sin(time * 0.11) + 0.08 * Math.sin(time * 0.29);
-    var spd = ROTATION_SPEED * speedMod;
+    // Rotation speed with subtle surges (integrated for smooth motion)
+    // Integral of (1 + 0.15*sin(0.11*t) + 0.08*sin(0.29*t)) dt
+    //   = t - (0.15/0.11)*cos(0.11*t) + (0.08/0.29)*cos(0.29*t) + C
+    var integratedTime = time
+      - (0.15 / 0.11) * Math.cos(time * 0.11)
+      - (0.08 / 0.29) * Math.cos(time * 0.29);
+    var spd = ROTATION_SPEED;
 
     // Rotation angles in different 4D planes
-    var angleXW = time * spd * 0.7;
-    var angleYZ = time * spd * 0.5;
-    var angleXY = time * spd * 0.23;
-    var angleZW = time * spd * 0.17;
+    var angleXW = integratedTime * spd * 0.7;
+    var angleYZ = integratedTime * spd * 0.5;
+    var angleXY = integratedTime * spd * 0.23;
+    var angleZW = integratedTime * spd * 0.17;
 
     // Set breathing projection for this frame
     currentProjDepth = projDepth;
@@ -542,13 +546,26 @@
       var sx = cx + v.x * scale;
       var sy = cy + v.y * scale;
 
-      var glowSize = 6 + v.depth * 18;
-      var glowAlpha = 0.1 + v.depth * 0.4;
+      // Determine dominant axis color for this vertex based on its position
+      // Use the strongest varying axis for tinting
+      var vPulse = 0.85 + 0.15 * Math.sin(time * 1.5 + i * 0.4);
 
-      // Outer glow
+      var glowSize = (8 + v.depth * 24) * vPulse;
+      var glowAlpha = (0.12 + v.depth * 0.5) * vPulse;
+
+      // Wide outer halo
+      var halo = ctx.createRadialGradient(sx, sy, 0, sx, sy, glowSize * 1.5);
+      halo.addColorStop(0, 'rgba(160, 180, 220, ' + (glowAlpha * 0.2) + ')');
+      halo.addColorStop(1, 'rgba(160, 180, 220, 0)');
+      ctx.fillStyle = halo;
+      ctx.beginPath();
+      ctx.arc(sx, sy, glowSize * 1.5, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Inner glow
       var glow = ctx.createRadialGradient(sx, sy, 0, sx, sy, glowSize);
-      glow.addColorStop(0, 'rgba(176, 192, 224, ' + glowAlpha + ')');
-      glow.addColorStop(0.3, 'rgba(176, 192, 224, ' + (glowAlpha * 0.4) + ')');
+      glow.addColorStop(0, 'rgba(200, 210, 240, ' + glowAlpha + ')');
+      glow.addColorStop(0.35, 'rgba(176, 192, 224, ' + (glowAlpha * 0.45) + ')');
       glow.addColorStop(1, 'rgba(176, 192, 224, 0)');
       ctx.fillStyle = glow;
       ctx.beginPath();
@@ -556,9 +573,9 @@
       ctx.fill();
 
       // Bright core
-      var coreSize = 1.5 + v.depth * 2.5;
-      var coreAlpha = 0.3 + v.depth * 0.6;
-      ctx.fillStyle = 'rgba(210, 220, 240, ' + coreAlpha + ')';
+      var coreSize = 1.8 + v.depth * 3.0;
+      var coreAlpha = (0.4 + v.depth * 0.6) * vPulse;
+      ctx.fillStyle = 'rgba(230, 235, 255, ' + coreAlpha + ')';
       ctx.beginPath();
       ctx.arc(sx, sy, coreSize, 0, Math.PI * 2);
       ctx.fill();
