@@ -119,10 +119,6 @@ export const inspirationPalettes: Record<string, InspirationPalette> = {
 		primary: '#B0B8D0',
 		colors: ['#B0B0C0', '#B0B8D0', '#8898C0']
 	},
-	'sydney-sweeney': {
-		primary: '#E8B898',
-		colors: ['#E8B898', '#D4B878', '#A0C0E0']
-	},
 	'jenna-ortega': {
 		primary: '#5A2858',
 		colors: ['#282030', '#5A2858', '#A0A0B8']

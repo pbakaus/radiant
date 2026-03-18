@@ -835,7 +835,7 @@ export const shaders: Shader[] = [
 		file: 'bioluminescence.html',
 		title: 'Bioluminescence',
 		desc: 'Deep sea jellyfish pulsing with bioluminescent glow and drifting plankton.',
-		inspiration: 'Sydney Sweeney',
+		inspiration: 'Zendaya',
 		tags: ['fill', 'organic', 'particles'],
 		technique: 'webgl',
 		params: [
