@@ -15,7 +15,7 @@
 	let featuredEl: HTMLElement | undefined = $state(undefined);
 	let featuredInView = $state(false);
 
-	const featuredIds = ['event-horizon', 'gilded-fracture', 'rain-umbrella', 'flow-field', 'torn-paper', 'glitter-storm'];
+	const featuredIds = ['event-horizon', 'gilded-fracture', 'kinetic-grid', 'flow-field', 'torn-paper', 'silk-cascade'];
 	const featuredShaders = $derived(
 		featuredIds
 			.map((id) => shaders.find((s) => s.id === id))
