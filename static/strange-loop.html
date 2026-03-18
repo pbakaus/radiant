@@ -173,21 +173,11 @@ vec2 penroseSDF(vec3 p) {
   float d1 = sdSegment(p, b1a, b1b) - BEAM_R;
   float d2 = sdSegment(p, b2a, b2b) - BEAM_R;
 
-  // Corner join spheres
-  float cR = BEAM_R * 1.5;
-  float cv0 = length(p - v0) - cR;
-  float cv1 = length(p - v1) - cR;
-  float cv2 = length(p - v2) - cR;
-
-  float dMin = d0;
+  // Sharp min — clean beam intersections, no blobby corners
+  float dMin = min(d0, min(d1, d2));
   float id = 0.0;
-  if (d1 < dMin) { dMin = d1; id = 1.0; }
-  if (d2 < dMin) { dMin = d2; id = 2.0; }
-
-  float k = 0.08;
-  dMin = smin(dMin, cv0, k);
-  dMin = smin(dMin, cv1, k);
-  dMin = smin(dMin, cv2, k);
+  if (d1 <= dMin) id = 1.0;
+  if (d2 <= dMin) id = 2.0;
 
   return vec2(dMin, id);
 }
@@ -254,18 +244,36 @@ float flowGlow(vec3 rp, float time) {
   float glow = 0.0;
   float flowT = time * u_flowSpeed;
 
-  for (float n = 0.0; n < 12.0; n += 1.0) {
-    float phase = fract(flowT * 0.18 + n / 12.0);
+  for (float n = 0.0; n < 8.0; n += 1.0) {
+    float phase = fract(flowT * 0.15 + n / 8.0);
     vec3 pp = pathPos(phase);
     float dist = length(rp - pp);
 
-    // Sharp bright core + wider halo
-    float core = exp(-dist * dist * 1200.0) * 2.5;
-    float halo = exp(-dist * dist * 60.0) * 0.5;
+    // Bright core + wide halo
+    float core = exp(-dist * dist * 800.0) * 3.5;
+    float halo = exp(-dist * dist * 40.0) * 0.8;
 
-    // Slight pulsing per particle
-    float pulse = 0.6 + 0.4 * sin(n * 3.17 + flowT * 2.0);
-    glow += (core + halo) * pulse;
+    // Trailing wake
+    float trailPhase = fract(flowT * 0.15 + n / 8.0 - 0.018);
+    vec3 tp = pathPos(trailPhase);
+    float tDist = length(rp - tp);
+    float trail = exp(-tDist * tDist * 35.0) * 0.4;
+
+    float pulse = 0.65 + 0.35 * sin(n * 3.17 + flowT * 2.0);
+    glow += (core + halo + trail) * pulse;
+  }
+  return glow;
+}
+
+// Cheap volumetric glow (fewer particles, no trails)
+float flowGlowCheap(vec3 rp, float time) {
+  float glow = 0.0;
+  float flowT = time * u_flowSpeed;
+  for (float n = 0.0; n < 4.0; n += 1.0) {
+    float phase = fract(flowT * 0.15 + n / 4.0);
+    vec3 pp = pathPos(phase);
+    float dist = length(rp - pp);
+    glow += exp(-dist * dist * 12.0) * 1.2;
   }
   return glow;
 }
@@ -275,9 +283,9 @@ float flowGlow(vec3 rp, float time) {
 // ─────────────────────────────────────────────
 float calcAO(vec3 p, vec3 n, float time) {
   float ao = 1.0;
-  for (int i = 1; i <= 4; i++) {
+  for (int i = 1; i <= 3; i++) {
     float fi = float(i);
-    float d = 0.05 * fi;
+    float d = 0.06 * fi;
     float sd = sceneSDF(p + n * d, time).x;
     ao -= (d - sd) * (0.25 / fi);
   }
