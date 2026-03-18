@@ -1054,6 +1054,45 @@ export const shaders: Shader[] = [
 			{ name: 'WAVE_SPEED', label: 'Wave Speed', min: 0.1, max: 1.5, step: 0.05, default: 0.5 },
 			{ name: 'PARTICLE_DENSITY', label: 'Particle Density', min: 0.3, max: 2.0, step: 0.1, default: 1.0 }
 		]
+	},
+	{
+		id: 'silk-threads',
+		file: 'silk-threads.html',
+		title: 'Silk Threads',
+		desc: 'Flowing luminous wave lines with organic noise perturbation and warm amber glow.',
+		inspiration: 'Cate Blanchett',
+		tags: ['fill', 'geometric'],
+		technique: 'webgl',
+		params: [
+			{ name: 'WAVE_SPEED', label: 'Wave Speed', min: 0.2, max: 3.0, step: 0.1, default: 1.0 },
+			{ name: 'LINE_COUNT', label: 'Line Count', min: 3, max: 12, step: 1, default: 10 }
+		]
+	},
+	{
+		id: 'resonance',
+		file: 'resonance.html',
+		title: 'Resonance',
+		desc: 'Radial pulsing wave rings emanating from a central glow, breathing and undulating like sound resonance patterns.',
+		inspiration: 'Meryl Streep',
+		tags: ['fill', 'geometric'],
+		technique: 'webgl',
+		params: [
+			{ name: 'PULSE_SPEED', label: 'Pulse Speed', min: 0.2, max: 3.0, step: 0.1, default: 1.0 },
+			{ name: 'RING_COUNT', label: 'Ring Count', min: 3, max: 10, step: 1, default: 8 }
+		]
+	},
+	{
+		id: 'harmonic-drift',
+		file: 'harmonic-drift.html',
+		title: 'Harmonic Drift',
+		desc: 'Atmospheric flowing energy currents with turbulent organic paths, warm amber glow, and teal accents.',
+		inspiration: 'Lupita Nyong\'o',
+		tags: ['fill', 'noise', 'organic'],
+		technique: 'webgl',
+		params: [
+			{ name: 'DRIFT_SPEED', label: 'Drift Speed', min: 0.1, max: 2.0, step: 0.05, default: 0.8 },
+			{ name: 'TURBULENCE', label: 'Turbulence', min: 0.0, max: 2.0, step: 0.1, default: 1.0 }
+		]
 	}
 ];
 

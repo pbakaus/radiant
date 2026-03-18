@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Resonance</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Resonance</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// Resonance — Radial pulsing wave rings emanating from center
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var urlParams = new URLSearchParams(window.location.search);
+  var pixelScale = parseFloat(urlParams.get('p')) || 1;
+
+  var gl = canvas.getContext('webgl', { alpha: false, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  var pulseSpeedVal = 1.0;
+  var ringCountVal = 8.0;
+  var running = true;
+
+  var vertSrc = [
+    'attribute vec2 a_pos;',
+    'void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }'
+  ].join('\n');
+
+  var fragSrc = [
+    'precision highp float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform float u_pulseSpeed;',
+    'uniform float u_ringCount;',
+    '',
+    '#define PI 3.14159265359',
+    '#define MAX_RINGS 10',
+    '',
+    '// ── Hash for subtle noise ──',
+    'float hash(vec2 p) {',
+    '  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);',
+    '}',
+    '',
+    '// ── Value noise ──',
+    'float noise(vec2 p) {',
+    '  vec2 i = floor(p);',
+    '  vec2 f = fract(p);',
+    '  f = f * f * (3.0 - 2.0 * f);',
+    '  float a = hash(i);',
+    '  float b = hash(i + vec2(1.0, 0.0));',
+    '  float c = hash(i + vec2(0.0, 1.0));',
+    '  float d = hash(i + vec2(1.0, 1.0));',
+    '  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);',
+    '}',
+    '',
+    'void main() {',
+    '  vec2 uv = gl_FragCoord.xy / u_res;',
+    '  float aspect = u_res.x / u_res.y;',
+    '  vec2 p = (uv - 0.5) * vec2(aspect, 1.0);',
+    '  float t = u_time * u_pulseSpeed;',
+    '',
+    '  // Polar coordinates',
+    '  float r = length(p);',
+    '  float angle = atan(p.y, p.x);',
+    '',
+    '  // ── Background ──',
+    '  vec3 col = vec3(0.025, 0.02, 0.018);',
+    '',
+    '  // ── Accumulate ring contributions ──',
+    '  float ringSpacing = 0.52 / u_ringCount;',
+    '',
+    '  for (int i = 0; i < MAX_RINGS; i++) {',
+    '    if (float(i) >= u_ringCount) break;',
+    '    float fi = float(i);',
+    '    float idx = fi + 1.0;',
+    '',
+    '    // Base radius for this ring',
+    '    float baseR = idx * ringSpacing + 0.04;',
+    '',
+    '    // Per-ring oscillation parameters',
+    '    float speed = 0.6 + fi * 0.08;',
+    '    float angFreq = 2.0 + fi * 0.7;',
+    '    float amp = 0.012 + fi * 0.004;',
+    '',
+    '    // Secondary wobble layer',
+    '    float speed2 = 0.4 + fi * 0.05;',
+    '    float angFreq2 = 3.0 + fi * 1.1;',
+    '    float amp2 = 0.006 + fi * 0.002;',
+    '',
+    '    // Breathing: radius oscillates slowly',
+    '    float breath = sin(t * speed * 0.7 + fi * 0.9) * amp;',
+    '    float breath2 = sin(t * speed2 * 0.5 + fi * 1.7) * amp2;',
+    '',
+    '    // Angular undulation',
+    '    float angWarp = sin(angle * angFreq + t * speed + fi * 1.3) * amp;',
+    '    float angWarp2 = sin(angle * angFreq2 - t * speed2 * 0.8 + fi * 2.1) * amp2;',
+    '',
+    '    // Subtle noise for organic feel',
+    '    float n = noise(vec2(angle * 2.0 + fi * 5.0, t * 0.3 + fi)) * 0.008;',
+    '',
+    '    // Final ring radius at this angle',
+    '    float ringR = baseR + breath + breath2 + angWarp + angWarp2 + n;',
+    '',
+    '    // Distance from fragment to ring',
+    '    float d = abs(r - ringR);',
+    '',
+    '    // ── Line rendering: thin bright core + wider soft bloom ──',
+    '    // Core line',
+    '    float coreWidth = 0.0015;',
+    '    float core = smoothstep(coreWidth, 0.0, d);',
+    '',
+    '    // Inner glow',
+    '    float glowWidth = 0.008 + fi * 0.001;',
+    '    float glow = exp(-d * d / (glowWidth * glowWidth));',
+    '',
+    '    // Outer bloom',
+    '    float bloomWidth = 0.025 + fi * 0.003;',
+    '    float bloom = exp(-d * d / (bloomWidth * bloomWidth));',
+    '',
+    '    // ── Color: inner rings warmer/brighter, outer rings cooler/dimmer ──',
+    '    float warmth = 1.0 - fi / 10.0;',
+    '',
+    '    // Warm amber core for inner rings',
+    '    vec3 warmColor = vec3(0.95, 0.70, 0.30);',
+    '    // Mid-tone gold',
+    '    vec3 midColor = vec3(0.78, 0.55, 0.28);',
+    '    // Cool lavender/blue for outer rings',
+    '    vec3 coolColor = vec3(0.45, 0.40, 0.65);',
+    '',
+    '    vec3 ringCoreColor = mix(coolColor, warmColor, warmth);',
+    '    vec3 ringGlowColor = mix(coolColor * 0.5, midColor * 0.7, warmth);',
+    '    vec3 ringBloomColor = mix(coolColor * 0.2, midColor * 0.3, warmth);',
+    '',
+    '    // Brightness falloff for outer rings',
+    '    float brightness = 0.5 + warmth * 0.5;',
+    '',
+    '    // Accumulate',
+    '    col += ringCoreColor * core * 2.5 * brightness;',
+    '    col += ringGlowColor * glow * 0.8 * brightness;',
+    '    col += ringBloomColor * bloom * 0.35 * brightness;',
+    '  }',
+    '',
+    '  // ── Central glow point ──',
+    '  float centerPulse = 0.7 + 0.3 * sin(t * 1.2);',
+    '  float centerDist = r;',
+    '  float centerGlow = exp(-centerDist * centerDist * 80.0) * centerPulse;',
+    '  float centerBloom = exp(-centerDist * centerDist * 12.0) * centerPulse;',
+    '  vec3 centerColor = vec3(0.95, 0.75, 0.35);',
+    '  col += centerColor * centerGlow * 1.2;',
+    '  col += centerColor * 0.4 * centerBloom * 0.3;',
+    '',
+    '  // ── Outer edge vignette fade ──',
+    '  float vig = 1.0 - smoothstep(0.35, 0.85, r);',
+    '  col *= 0.3 + 0.7 * vig;',
+    '',
+    '  // ── Tone mapping ──',
+    '  col = col / (1.0 + col * 0.3);',
+    '  col = pow(max(col, vec3(0.0)), vec3(0.95));',
+    '',
+    '  gl_FragColor = vec4(col, 1.0);',
+    '}'
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error('Shader compile error:', gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error('Program link error:', gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uPulseSpeed = gl.getUniformLocation(prog, 'u_pulseSpeed');
+  var uRingCount = gl.getUniformLocation(prog, 'u_ringCount');
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2) * pixelScale;
+
+  function resize() {
+    var w = Math.round(canvas.clientWidth * dpr);
+    var h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  function render(now) {
+    if (!running) return;
+    resize();
+    gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uPulseSpeed, pulseSpeedVal);
+    gl.uniform1f(uRingCount, ringCountVal);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  document.addEventListener('visibilitychange', function() {
+    if (document.hidden) {
+      running = false;
+    } else {
+      running = true;
+      requestAnimationFrame(render);
+    }
+  });
+
+  var observer = new IntersectionObserver(function(entries) {
+    entries.forEach(function(entry) {
+      if (entry.isIntersecting) {
+        if (!running) {
+          running = true;
+          requestAnimationFrame(render);
+        }
+      } else {
+        running = false;
+      }
+    });
+  }, { threshold: 0.1 });
+  observer.observe(canvas);
+
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'PULSE_SPEED': pulseSpeedVal = e.data.value; break;
+        case 'RING_COUNT': ringCountVal = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>
