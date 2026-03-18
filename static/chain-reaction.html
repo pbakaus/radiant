@@ -43,6 +43,11 @@
 
   var width, height, dpr, cx, cy, minDim;
 
+  // ── Bloom offscreen canvas ──
+  var bloomCanvas = document.createElement('canvas');
+  var bloomCtx = bloomCanvas.getContext('2d');
+  var BLOOM_SCALE = 0.25; // render bloom at quarter resolution
+
   function resize() {
     dpr = Math.min(window.devicePixelRatio || 1, 2);
     width = window.innerWidth;
@@ -55,6 +60,10 @@
     cx = width / 2;
     cy = height / 2;
     minDim = Math.min(width, height);
+
+    // Resize bloom canvas
+    bloomCanvas.width = Math.round(width * dpr * BLOOM_SCALE);
+    bloomCanvas.height = Math.round(height * dpr * BLOOM_SCALE);
   }
 
   window.addEventListener('resize', resize);
@@ -122,7 +131,6 @@
   var particles = [];
   var flashes = [];
   var fissionLines = [];
-  var trails = []; // persistent trail dots
 
   // Hue shifts per generation (in degrees, applied to base amber)
   var GEN_HUES = [
@@ -153,16 +161,15 @@
   var reactionOriginY = 0;
 
   // Timing
-  var SEED_DURATION = 1.5;
+  var SEED_DURATION = 0.8;
   var FADE_DURATION = 2.0;
-  var PAUSE_DURATION = 0.8;
+  var PAUSE_DURATION = 0.4;
   var SPLIT_TRAVEL_DISTANCE = 120; // distance before splitting (in px at 1x)
 
   function startNewReaction() {
     particles = [];
     flashes = [];
     fissionLines = [];
-    trails = [];
     shockwaves = [];
     globalAlpha = 1.0;
 
@@ -178,6 +185,8 @@
       y: reactionOriginY,
       vx: 0,
       vy: 0,
+      prevX: reactionOriginX,
+      prevY: reactionOriginY,
       generation: 0,
       age: 0,
       splitAge: -1,
@@ -190,7 +199,7 @@
       size: GEN_SIZES[0] * _pad,
       brightness: 1.0,
       temperature: 1.0,
-      trailTimer: 0
+      isHot: false
     });
 
     state = STATE_SEED;
@@ -248,11 +257,16 @@
       var newSize = GEN_SIZES[Math.min(gen, GEN_SIZES.length - 1)] * _pad;
       newSize *= (0.85 + Math.random() * 0.3);
 
+      // Occasional "hot" particle (10% chance)
+      var isHot = Math.random() < 0.10;
+
       particles.push({
         x: p.x,
         y: p.y,
         vx: Math.cos(angle) * speed,
         vy: Math.sin(angle) * speed,
+        prevX: p.x,
+        prevY: p.y,
         generation: gen,
         age: 0,
         splitAge: -1,
@@ -263,9 +277,9 @@
         parentX: p.x,
         parentY: p.y,
         size: newSize,
-        brightness: 1.0,
+        brightness: isHot ? 1.4 : 1.0,
         temperature: 1.0,
-        trailTimer: 0
+        isHot: isHot
       });
     }
 
@@ -288,6 +302,15 @@
       var p = particles[i];
       p.age += dt * speedMult;
 
+      // Store previous position for trail rendering
+      p.prevX = p.x;
+      p.prevY = p.y;
+
+      // Turbulence: slight random wobble to velocity each frame
+      var wobbleStr = 0.15 * dt * 60;
+      p.vx += (Math.random() - 0.5) * wobbleStr;
+      p.vy += (Math.random() - 0.5) * wobbleStr;
+
       // Move particle
       p.x += p.vx * dt * 60;
       p.y += p.vy * dt * 60;
@@ -301,8 +324,11 @@
       p.temperature = Math.max(0, 1.0 - p.age * 0.35);
 
       // Brightness fades after splitting or with age
+      // Hot particles stay brighter longer
       if (p.hasSplit) {
         p.brightness = Math.max(0.08, p.brightness - dt * speedMult * 0.3);
+      } else if (p.isHot) {
+        p.brightness = Math.max(0.5, p.brightness - dt * 0.04);
       } else {
         p.brightness = Math.max(0.3, 1.0 - p.age * 0.08);
       }
@@ -310,20 +336,6 @@
       // Gentle drag so particles coast far
       p.vx *= (1 - dt * 0.15);
       p.vy *= (1 - dt * 0.15);
-
-      // Emit trail dots
-      p.trailTimer += dt;
-      if (p.trailTimer > 0.02 && p.brightness > 0.1 && !p.hasSplit) {
-        p.trailTimer = 0;
-        trails.push({
-          x: p.x,
-          y: p.y,
-          life: 1.0,
-          size: p.size * 0.5,
-          generation: p.generation,
-          temperature: p.temperature
-        });
-      }
 
       // Check if it's time to split
       if (!p.hasSplit && p.generation < SPLIT_GENERATIONS && state === STATE_REACTING) {
@@ -342,20 +354,6 @@
     }
   }
 
-  function updateTrails(dt) {
-    var i = trails.length;
-    while (i--) {
-      trails[i].life -= dt * 1.5;
-      if (trails[i].life <= 0) {
-        trails.splice(i, 1);
-      }
-    }
-    // Cap trails to prevent perf issues
-    if (trails.length > 5000) {
-      trails.splice(0, trails.length - 5000);
-    }
-  }
-
   function updateFlashes(dt) {
     var i = flashes.length;
     while (i--) {
@@ -369,7 +367,7 @@
   function updateFissionLines(dt) {
     var i = fissionLines.length;
     while (i--) {
-      fissionLines[i].life -= dt * REACTION_SPEED * 0.25;
+      fissionLines[i].life -= dt * REACTION_SPEED * 0.15; // fade more slowly
       if (fissionLines[i].life <= 0) {
         fissionLines.splice(i, 1);
       }
@@ -410,7 +408,12 @@
     var t = p.temperature;
     var gc = GEN_HUES[Math.min(p.generation, GEN_HUES.length - 1)];
     var r, g, b;
-    if (t > 0.6) {
+    if (p.isHot) {
+      // Hot particles are white-core with slight amber tint
+      r = 255;
+      g = Math.round(250 - (1 - t) * 30);
+      b = Math.round(240 - (1 - t) * 60);
+    } else if (t > 0.6) {
       // White-hot blend
       var s = (t - 0.6) / 0.4;
       r = Math.round(gc[0] + (255 - gc[0]) * s);
@@ -425,49 +428,117 @@
     return 'rgba(' + r + ',' + g + ',' + b + ',' + alpha + ')';
   }
 
+  function getParticleRGB(p) {
+    var t = p.temperature;
+    var gc = GEN_HUES[Math.min(p.generation, GEN_HUES.length - 1)];
+    var r, g, b;
+    if (p.isHot) {
+      r = 255;
+      g = Math.round(250 - (1 - t) * 30);
+      b = Math.round(240 - (1 - t) * 60);
+    } else if (t > 0.6) {
+      var s = (t - 0.6) / 0.4;
+      r = Math.round(gc[0] + (255 - gc[0]) * s);
+      g = Math.round(gc[1] + (255 - gc[1]) * s);
+      b = Math.round(gc[2] + (240 - gc[2]) * s);
+    } else {
+      var s = t / 0.6;
+      r = Math.round(gc[0] * (0.5 + s * 0.5));
+      g = Math.round(gc[1] * (0.4 + s * 0.6));
+      b = Math.round(gc[2] * (0.4 + s * 0.6));
+    }
+    return [r, g, b];
+  }
+
+  // ── Draw continuous motion-blurred trails ──
   function drawTrails() {
-    for (var i = 0; i < trails.length; i++) {
-      var t = trails[i];
-      var alpha = t.life * t.life * 0.4;
-      if (alpha < 0.01) continue;
-      var gc = GEN_HUES[Math.min(t.generation, GEN_HUES.length - 1)];
-      var fade = 0.4 + t.temperature * 0.6;
-      ctx.fillStyle = 'rgba(' +
-        Math.round(gc[0] * fade) + ',' +
-        Math.round(gc[1] * fade) + ',' +
-        Math.round(gc[2] * fade) + ',' + alpha + ')';
+    for (var i = 0; i < particles.length; i++) {
+      var p = particles[i];
+      if (p.brightness < 0.05) continue;
+      if (p.generation === 0 && !p.hasSplit && state === STATE_SEED) continue;
+
+      var dx = p.x - p.prevX;
+      var dy = p.y - p.prevY;
+      var dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < 0.5) continue;
+
+      // Extend the trail behind the particle along the velocity direction
+      var speed = Math.sqrt(p.vx * p.vx + p.vy * p.vy);
+      if (speed < 0.1) continue;
+
+      var trailLen = Math.min(speed * 8, 80) * _pad;
+      var angle = Math.atan2(p.vy, p.vx);
+
+      var tailX = p.x - Math.cos(angle) * trailLen;
+      var tailY = p.y - Math.sin(angle) * trailLen;
+
+      var rgb = getParticleRGB(p);
+      var alpha = p.brightness * (0.4 + p.temperature * 0.3);
+      if (p.hasSplit) alpha *= 0.3;
+
+      // Gradient from bright at particle to transparent at tail
+      var grad = ctx.createLinearGradient(p.x, p.y, tailX, tailY);
+      grad.addColorStop(0, 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + alpha + ')');
+      grad.addColorStop(0.3, 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + (alpha * 0.4) + ')');
+      grad.addColorStop(1, 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',0)');
+
+      var lineW = Math.max(0.8, p.size * 0.6);
+
       ctx.beginPath();
-      ctx.arc(t.x, t.y, t.size * t.life, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.moveTo(p.x, p.y);
+      ctx.lineTo(tailX, tailY);
+      ctx.strokeStyle = grad;
+      ctx.lineWidth = lineW;
+      ctx.lineCap = 'round';
+      ctx.stroke();
     }
   }
 
   function drawFissionLines() {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
     for (var i = 0; i < fissionLines.length; i++) {
       var fl = fissionLines[i];
-      var alpha = fl.life * 0.7 * (1 - fl.generation / (SPLIT_GENERATIONS + 2));
+      var alpha = fl.life * fl.life * 0.8 * (1 - fl.generation / (SPLIT_GENERATIONS + 2));
       if (alpha < 0.01) continue;
+
+      var gc = GEN_HUES[Math.min(fl.generation, GEN_HUES.length - 1)];
+
+      // Gradient from dim at origin to bright at split point
+      var grad = ctx.createLinearGradient(fl.x1, fl.y1, fl.x2, fl.y2);
+      grad.addColorStop(0, 'rgba(' + gc[0] + ',' + gc[1] + ',' + gc[2] + ',' + (alpha * 0.15) + ')');
+      grad.addColorStop(0.6, 'rgba(' + gc[0] + ',' + gc[1] + ',' + gc[2] + ',' + (alpha * 0.6) + ')');
+      grad.addColorStop(1, 'rgba(' + gc[0] + ',' + gc[1] + ',' + gc[2] + ',' + alpha + ')');
 
       ctx.beginPath();
       ctx.moveTo(fl.x1, fl.y1);
       ctx.lineTo(fl.x2, fl.y2);
-      ctx.strokeStyle = getGenColor(fl.generation, alpha);
+      ctx.strokeStyle = grad;
       ctx.lineWidth = Math.max(0.8, (4 - fl.generation * 0.4) * _pad);
       ctx.stroke();
 
       // Bright core line
-      if (fl.life > 0.5) {
+      if (fl.life > 0.3) {
+        var coreGrad = ctx.createLinearGradient(fl.x1, fl.y1, fl.x2, fl.y2);
+        var coreAlpha = (fl.life - 0.3) * 0.7;
+        coreGrad.addColorStop(0, 'rgba(255, 250, 235, 0)');
+        coreGrad.addColorStop(0.7, 'rgba(255, 250, 235, ' + (coreAlpha * 0.4) + ')');
+        coreGrad.addColorStop(1, 'rgba(255, 250, 235, ' + coreAlpha + ')');
+
         ctx.beginPath();
         ctx.moveTo(fl.x1, fl.y1);
         ctx.lineTo(fl.x2, fl.y2);
-        ctx.strokeStyle = 'rgba(255, 250, 235, ' + (fl.life - 0.5) * 0.6 + ')';
+        ctx.strokeStyle = coreGrad;
         ctx.lineWidth = Math.max(0.5, (2 - fl.generation * 0.2) * _pad);
         ctx.stroke();
       }
     }
+    ctx.restore();
   }
 
   function drawActiveConnections() {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
     for (var i = 0; i < particles.length; i++) {
       var p = particles[i];
       if (p.generation === 0 && p.travelDist < 3) continue;
@@ -476,23 +547,38 @@
       var alpha = p.brightness * 0.5 * (1 - p.generation / (SPLIT_GENERATIONS + 2));
       if (alpha < 0.01) continue;
 
+      var rgb = getParticleRGB(p);
+
+      // Gradient: dim at birth, bright at particle
+      var grad = ctx.createLinearGradient(p.birthX, p.birthY, p.x, p.y);
+      grad.addColorStop(0, 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + (alpha * 0.15) + ')');
+      grad.addColorStop(0.5, 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + (alpha * 0.5) + ')');
+      grad.addColorStop(1, 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + alpha + ')');
+
       ctx.beginPath();
       ctx.moveTo(p.birthX, p.birthY);
       ctx.lineTo(p.x, p.y);
-      ctx.strokeStyle = getParticleColor(p, alpha);
+      ctx.strokeStyle = grad;
       ctx.lineWidth = Math.max(0.5, (3 - p.generation * 0.3) * _pad);
       ctx.stroke();
 
       // Bright white core for fresh connections
       if (p.temperature > 0.5) {
+        var coreAlpha = (p.temperature - 0.5) * p.brightness * 0.4;
+        var coreGrad = ctx.createLinearGradient(p.birthX, p.birthY, p.x, p.y);
+        coreGrad.addColorStop(0, 'rgba(255, 250, 235, 0)');
+        coreGrad.addColorStop(0.6, 'rgba(255, 250, 235, ' + (coreAlpha * 0.3) + ')');
+        coreGrad.addColorStop(1, 'rgba(255, 250, 235, ' + coreAlpha + ')');
+
         ctx.beginPath();
         ctx.moveTo(p.birthX, p.birthY);
         ctx.lineTo(p.x, p.y);
-        ctx.strokeStyle = 'rgba(255, 250, 235, ' + (p.temperature - 0.5) * p.brightness * 0.4 + ')';
+        ctx.strokeStyle = coreGrad;
         ctx.lineWidth = Math.max(0.3, (1.5 - p.generation * 0.15) * _pad);
         ctx.stroke();
       }
     }
+    ctx.restore();
   }
 
   function drawShockwaves() {
@@ -531,6 +617,7 @@
     ctx.restore();
   }
 
+  // ── Draw elongated spark particles ──
   function drawParticles() {
     // Glow pass (additive blending for bloom)
     ctx.save();
@@ -539,49 +626,102 @@
       var p = particles[i];
       if (p.brightness < 0.05) continue;
 
+      var speed = Math.sqrt(p.vx * p.vx + p.vy * p.vy);
+      var angle = Math.atan2(p.vy, p.vx);
+
+      // Elongation factor based on speed
+      var elongation = 1 + Math.min(speed * 1.5, 4);
+
       var glowSize = p.size * (3 + p.temperature * 5) * _pad;
-      var alpha = p.brightness * (0.3 + p.temperature * 0.5);
+      var hotBoost = p.isHot ? 1.3 : 1.0;
+      var alpha = p.brightness * (0.3 + p.temperature * 0.5) * hotBoost;
       ctx.globalAlpha = Math.min(alpha, 0.85);
-      ctx.drawImage(glowCanvas, p.x - glowSize, p.y - glowSize, glowSize * 2, glowSize * 2);
+
+      // Draw glow sprite with elongation along velocity direction
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(angle);
+      ctx.scale(elongation, 1);
+      ctx.drawImage(glowCanvas, -glowSize, -glowSize, glowSize * 2, glowSize * 2);
+      ctx.restore();
     }
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
     ctx.restore();
 
-    // Core pass
+    // Core pass — elongated spark shapes
     for (var i = 0; i < particles.length; i++) {
       var p = particles[i];
       if (p.brightness < 0.05) continue;
 
+      var speed = Math.sqrt(p.vx * p.vx + p.vy * p.vy);
+      var angle = Math.atan2(p.vy, p.vx);
+
+      // Elongation: faster = more stretched
+      var elongation = 1 + Math.min(speed * 1.2, 3.5);
+
       var coreAlpha = p.brightness * (0.8 + p.temperature * 0.2);
+      var hotBoost = p.isHot ? 1.2 : 1.0;
+      coreAlpha = Math.min(coreAlpha * hotBoost, 1.0);
+
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(angle);
+
+      // Tapered spark shape: ellipse wider at front, narrower at back
+      // We draw an ellipse stretched along the velocity axis
+      var hw = p.size * elongation; // half-width along velocity
+      var hh = p.size * (0.5 + 0.5 / elongation); // half-height perpendicular, shrinks with elongation
 
       // Colored outer core
       ctx.fillStyle = getParticleColor(p, coreAlpha);
       ctx.beginPath();
-      ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+      ctx.ellipse(0, 0, hw, hh, 0, 0, Math.PI * 2);
       ctx.fill();
 
-      // Bright white center for hot particles
-      if (p.temperature > 0.3) {
-        var whiteAlpha = (p.temperature - 0.3) / 0.7 * p.brightness * 0.9;
+      // Bright white center for hot particles or high temperature
+      var whiteThreshold = p.isHot ? 0.0 : 0.3;
+      if (p.temperature > whiteThreshold) {
+        var whiteAlpha = p.isHot ?
+          p.brightness * 0.95 :
+          (p.temperature - 0.3) / 0.7 * p.brightness * 0.9;
         ctx.fillStyle = 'rgba(255, 253, 245, ' + whiteAlpha + ')';
         ctx.beginPath();
-        ctx.arc(p.x, p.y, p.size * 0.5, 0, Math.PI * 2);
+        ctx.ellipse(0, 0, hw * 0.5, hh * 0.5, 0, 0, Math.PI * 2);
         ctx.fill();
       }
+
+      ctx.restore();
     }
   }
 
+  // ── Seed glow with pulsing rings and orbiting sparks ──
   function drawSeedGlow(time) {
     if (state !== STATE_SEED) return;
 
     var pulse = 0.5 + 0.5 * Math.sin(time * 8);
     var progress = Math.min(1, stateTime / (SEED_DURATION / REACTION_SPEED));
-    var intensity = progress * (0.6 + pulse * 0.4);
+    // Add subtle flicker noise to brightness
+    var flicker = 0.9 + 0.1 * Math.sin(time * 37.3) * Math.sin(time * 23.7);
+    var intensity = progress * (0.6 + pulse * 0.4) * flicker;
 
     var glowRadius = (40 + progress * 80) * _pad;
 
-    // Bright pulsing glow at the seed
+    // Layer 1: Wide ambient glow
+    var ambientRadius = glowRadius * 2.2;
+    var ambGrad = ctx.createRadialGradient(
+      reactionOriginX, reactionOriginY, 0,
+      reactionOriginX, reactionOriginY, ambientRadius
+    );
+    ambGrad.addColorStop(0, 'rgba(255, 200, 120, ' + (intensity * 0.15) + ')');
+    ambGrad.addColorStop(0.3, 'rgba(200, 149, 108, ' + (intensity * 0.08) + ')');
+    ambGrad.addColorStop(1, 'rgba(200, 149, 108, 0)');
+    ctx.fillStyle = ambGrad;
+    ctx.beginPath();
+    ctx.arc(reactionOriginX, reactionOriginY, ambientRadius, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Layer 2: Main bright pulsing glow
     var grad = ctx.createRadialGradient(
       reactionOriginX, reactionOriginY, 0,
       reactionOriginX, reactionOriginY, glowRadius
@@ -596,11 +736,103 @@
     ctx.arc(reactionOriginX, reactionOriginY, glowRadius, 0, Math.PI * 2);
     ctx.fill();
 
+    // Layer 3: Tight inner hot glow
+    var innerRadius = glowRadius * 0.4;
+    var innerGrad = ctx.createRadialGradient(
+      reactionOriginX, reactionOriginY, 0,
+      reactionOriginX, reactionOriginY, innerRadius
+    );
+    innerGrad.addColorStop(0, 'rgba(255, 255, 252, ' + (intensity * 0.9) + ')');
+    innerGrad.addColorStop(0.5, 'rgba(255, 240, 200, ' + (intensity * 0.4) + ')');
+    innerGrad.addColorStop(1, 'rgba(255, 220, 160, 0)');
+    ctx.fillStyle = innerGrad;
+    ctx.beginPath();
+    ctx.arc(reactionOriginX, reactionOriginY, innerRadius, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Pulsing rings
+    var numRings = 3;
+    for (var r = 0; r < numRings; r++) {
+      var ringPhase = time * 4 + r * (Math.PI * 2 / numRings);
+      var ringProgress = (Math.sin(ringPhase) * 0.5 + 0.5);
+      var ringRadius = (20 + ringProgress * 60 + r * 15) * _pad * progress;
+      var ringAlpha = intensity * (0.2 + 0.15 * Math.sin(ringPhase)) * (1 - ringProgress * 0.5);
+      if (ringAlpha < 0.01) continue;
+
+      ctx.beginPath();
+      ctx.arc(reactionOriginX, reactionOriginY, ringRadius, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(255, 230, 180, ' + ringAlpha + ')';
+      ctx.lineWidth = Math.max(0.8, (2.5 - r * 0.5) * _pad);
+      ctx.stroke();
+    }
+
+    // Orbiting energy sparks
+    var numSparks = 5;
+    for (var s = 0; s < numSparks; s++) {
+      var sparkAngle = time * (3 + s * 0.7) + s * (Math.PI * 2 / numSparks);
+      var sparkDist = (20 + 15 * Math.sin(time * 2.3 + s)) * _pad * progress;
+      var sparkX = reactionOriginX + Math.cos(sparkAngle) * sparkDist;
+      var sparkY = reactionOriginY + Math.sin(sparkAngle) * sparkDist;
+      var sparkAlpha = intensity * (0.4 + 0.3 * Math.sin(time * 5 + s * 2));
+      var sparkSize = (1.5 + Math.sin(time * 7 + s) * 0.8) * _pad;
+
+      ctx.fillStyle = 'rgba(255, 250, 230, ' + sparkAlpha + ')';
+      ctx.beginPath();
+      ctx.arc(sparkX, sparkY, sparkSize, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Tiny glow around each spark
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = sparkAlpha * 0.3;
+      var sparkGlowSize = sparkSize * 6;
+      ctx.drawImage(glowCanvas, sparkX - sparkGlowSize, sparkY - sparkGlowSize, sparkGlowSize * 2, sparkGlowSize * 2);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.restore();
+    }
+
     // White hot center dot
     ctx.fillStyle = 'rgba(255, 255, 250, ' + (intensity * 0.9) + ')';
     ctx.beginPath();
     ctx.arc(reactionOriginX, reactionOriginY, GEN_SIZES[0] * _pad * (0.8 + pulse * 0.2), 0, Math.PI * 2);
     ctx.fill();
+  }
+
+  // ── Screen-level bloom pass ──
+  function applyBloom() {
+    var bw = bloomCanvas.width;
+    var bh = bloomCanvas.height;
+    var sw = canvas.width;
+    var sh = canvas.height;
+
+    // Step 1: Draw main canvas scaled down to bloom canvas
+    bloomCtx.clearRect(0, 0, bw, bh);
+    bloomCtx.drawImage(canvas, 0, 0, sw, sh, 0, 0, bw, bh);
+
+    // Step 2: Cheap multi-pass blur by drawing it down and back up a couple times
+    // First downscale pass
+    var halfW = Math.round(bw / 2);
+    var halfH = Math.round(bh / 2);
+    bloomCtx.drawImage(bloomCanvas, 0, 0, bw, bh, 0, 0, halfW, halfH);
+    bloomCtx.drawImage(bloomCanvas, 0, 0, halfW, halfH, 0, 0, bw, bh);
+
+    // Second downscale pass for more blur
+    bloomCtx.drawImage(bloomCanvas, 0, 0, bw, bh, 0, 0, halfW, halfH);
+    bloomCtx.drawImage(bloomCanvas, 0, 0, halfW, halfH, 0, 0, bw, bh);
+
+    // Step 3: Composite bloom back onto main canvas additively
+    ctx.save();
+    // Reset transform to work in pixel space
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = 0.35;
+    ctx.drawImage(bloomCanvas, 0, 0, bw, bh, 0, 0, sw, sh);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+    // Restore dpr transform
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.restore();
   }
 
   function drawVignette() {
@@ -673,7 +905,6 @@
     // Update
     updateState(dt);
     updateParticles(dt);
-    updateTrails(dt);
     updateFlashes(dt);
     updateFissionLines(dt);
     updateShockwaves(dt);
@@ -697,6 +928,9 @@
       ctx.restore();
     }
 
+    // Screen-level bloom pass
+    applyBloom();
+
     drawVignette();
 
     // During full fade, draw opaque background to fully reset
@@ -711,6 +945,13 @@
   // Start the first reaction
   startNewReaction();
   requestAnimationFrame(render);
+
+  // ── Visibility change handler ──
+  document.addEventListener('visibilitychange', function() {
+    if (!document.hidden) {
+      lastTime = 0;
+    }
+  });
 
   // ── PostMessage listener for parameter updates ──
   window.addEventListener('message', function(e) {
