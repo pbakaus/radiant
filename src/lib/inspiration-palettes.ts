@@ -57,10 +57,6 @@ export const inspirationPalettes: Record<string, InspirationPalette> = {
 		primary: '#C8A0B8',
 		colors: ['#C8A0B8', '#E8D8E8', '#8A7088']
 	},
-	'post-malone': {
-		primary: '#B89848',
-		colors: ['#C8944C', '#B89848', '#6080A0']
-	},
 	'chappell-roan': {
 		primary: '#E83878',
 		colors: ['#E83878', '#88CC28', '#C8A038']

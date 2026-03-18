@@ -607,11 +607,11 @@ export const shaders: Shader[] = [
 		]
 	},
 	{
-		id: 'slow-burn',
+		id: 'smolder',
 		file: 'proposal-postmalone-1.html',
-		title: 'Slow Burn',
+		title: 'Smolder',
 		desc: 'Radial warmth radiating through animated turbulence with heat shimmer, ember particles, and cool blue edges.',
-		inspiration: 'Post Malone',
+		inspiration: 'Pedro Pascal',
 		tags: ['fill', 'noise'],
 		technique: 'webgl',
 		params: [
@@ -624,7 +624,7 @@ export const shaders: Shader[] = [
 		file: 'proposal-postmalone-3.html',
 		title: 'Signal Decay',
 		desc: 'Clean amber waveforms progressively degrading into gorgeous warm noise — order dissolving into beautiful chaos.',
-		inspiration: 'Post Malone',
+		inspiration: 'Billie Eilish',
 		tags: ['fill', 'geometric'],
 		technique: 'webgl',
 		params: [
