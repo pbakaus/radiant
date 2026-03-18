@@ -384,19 +384,6 @@ export const shaders: Shader[] = [
 		]
 	},
 	{
-		id: 'celestial-drift',
-		file: 'celestial-drift.html',
-		title: 'Celestial Drift',
-		desc: 'Luminous bodies in gravitational orbit with fading trails and star field.',
-		inspiration: 'SZA',
-		tags: ['fill', 'particles', 'physics'],
-		technique: 'canvas-2d',
-		params: [
-			{ name: 'GRAVITY_STRENGTH', label: 'Gravity', min: 0.2, max: 3.0, step: 0.1, default: 1.0 },
-			{ name: 'TRAIL_LENGTH', label: 'Trail Length', min: 50, max: 500, step: 25, default: 200 }
-		]
-	},
-	{
 		id: 'moonlit-ripple',
 		file: 'moonlit-ripple.html',
 		title: 'Moonlit Ripple',
