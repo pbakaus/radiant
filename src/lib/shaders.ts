@@ -818,19 +818,6 @@ export const shaders: Shader[] = [
 		]
 	},
 	{
-		id: 'dark-nebula',
-		file: 'dark-nebula.html',
-		title: 'Dark Nebula',
-		desc: 'Cosmic dust clouds with hidden forming stars and parallax depth.',
-		inspiration: 'Oscar Isaac',
-		tags: ['fill', 'noise'],
-		technique: 'webgl',
-		params: [
-			{ name: 'DUST_DENSITY', label: 'Dust Density', min: 0.2, max: 1.0, step: 0.05, default: 0.6 },
-			{ name: 'STAR_BRIGHTNESS', label: 'Star Brightness', min: 0.3, max: 2.0, step: 0.1, default: 1.0 }
-		]
-	},
-	{
 		id: 'aurora-veil',
 		file: 'aurora-veil.html',
 		title: 'Aurora Veil',
