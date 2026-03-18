@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Luminous Silt</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Luminous Silt</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// Luminous Silt — Dense particle color clouds
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var ctx = canvas.getContext('2d');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // ── Tunable params ──
+  var DRIFT_SPEED = 0.6;
+  var DENSITY = 1.0;
+
+  // ── DPR capped at 1.5 for perf with 18K particles ──
+  var dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+  var W, H;
+  var BASE_COUNT = 18000;
+  var particleCount;
+
+  // ── Particle data in typed arrays ──
+  var posX, posY, velScale, brightnessIdx;
+
+  // ── Noise implementation ──
+  // Perlin-style hash-based 2D value noise
+  var PERM = new Uint8Array(512);
+  var GRAD = [
+    [1, 1], [-1, 1], [1, -1], [-1, -1],
+    [1, 0], [-1, 0], [0, 1], [0, -1]
+  ];
+
+  function initNoise(seed) {
+    var p = new Uint8Array(256);
+    var i, j, tmp;
+    for (i = 0; i < 256; i++) p[i] = i;
+    for (i = 255; i > 0; i--) {
+      seed = (seed * 16807 + 0) % 2147483647;
+      j = seed % (i + 1);
+      tmp = p[i]; p[i] = p[j]; p[j] = tmp;
+    }
+    for (i = 0; i < 512; i++) PERM[i] = p[i & 255];
+  }
+
+  function fade(t) { return t * t * t * (t * (t * 6 - 15) + 10); }
+
+  function noise2D(x, y) {
+    var xi = Math.floor(x);
+    var yi = Math.floor(y);
+    var xf = x - xi;
+    var yf = y - yi;
+    xi = xi & 255;
+    yi = yi & 255;
+    var u = fade(xf);
+    var v = fade(yf);
+
+    var g00 = GRAD[PERM[PERM[xi] + yi] & 7];
+    var g10 = GRAD[PERM[PERM[xi + 1] + yi] & 7];
+    var g01 = GRAD[PERM[PERM[xi] + yi + 1] & 7];
+    var g11 = GRAD[PERM[PERM[xi + 1] + yi + 1] & 7];
+
+    var n00 = g00[0] * xf + g00[1] * yf;
+    var n10 = g10[0] * (xf - 1) + g10[1] * yf;
+    var n01 = g01[0] * xf + g01[1] * (yf - 1);
+    var n11 = g11[0] * (xf - 1) + g11[1] * (yf - 1);
+
+    var nx0 = n00 + u * (n10 - n00);
+    var nx1 = n01 + u * (n11 - n01);
+    return nx0 + v * (nx1 - nx0);
+  }
+
+  // 2-octave FBM
+  function fbm2(x, y) {
+    return noise2D(x, y) * 0.667 + noise2D(x * 2.0, y * 2.0) * 0.333;
+  }
+
+  initNoise(42);
+
+  // ── Color palette: INSOMNIA-inspired ──
+  // 5 colors x 4 alpha levels = 20 pre-computed fill styles
+  var COLORS = [
+    [26, 51, 179],    // deep cobalt blue
+    [217, 102, 26],   // warm burnt orange
+    [179, 204, 255],  // cool white-blue
+    [230, 153, 51],   // amber gold
+    [26, 128, 128]    // teal
+  ];
+  var NUM_COLORS = COLORS.length;
+  var ALPHA_LEVELS = [0.012, 0.018, 0.025, 0.035];
+  var NUM_ALPHAS = ALPHA_LEVELS.length;
+
+  // COLOR_STRINGS[colorIdx * NUM_ALPHAS + alphaIdx]
+  var COLOR_STRINGS = new Array(NUM_COLORS * NUM_ALPHAS);
+  for (var ci = 0; ci < NUM_COLORS; ci++) {
+    for (var ai = 0; ai < NUM_ALPHAS; ai++) {
+      COLOR_STRINGS[ci * NUM_ALPHAS + ai] = 'rgba(' + COLORS[ci][0] + ',' + COLORS[ci][1] + ',' + COLORS[ci][2] + ',' + ALPHA_LEVELS[ai] + ')';
+    }
+  }
+
+  // ── Bucketing: fixed-size typed arrays to avoid GC ──
+  // Each bucket stores particle indices; bucketLen tracks count per bucket
+  var NUM_BUCKETS = NUM_COLORS * NUM_ALPHAS;
+  var bucketData;   // Uint32Array, flat: each bucket gets MAX_PER_BUCKET slots
+  var bucketLen;    // Uint32Array[NUM_BUCKETS], current count in each
+  var MAX_PER_BUCKET;
+
+  function allocBuckets() {
+    // Worst case: all particles in one bucket, but practically spread out
+    // Allocate particleCount total entries, divided evenly + overhead
+    MAX_PER_BUCKET = particleCount;
+    // Use a flat approach: one big array, offset per bucket
+    bucketData = new Uint32Array(NUM_BUCKETS * MAX_PER_BUCKET);
+    bucketLen = new Uint32Array(NUM_BUCKETS);
+  }
+
+  // ── Color zone grid: updated periodically, not per particle ──
+  // Divides canvas into cells, each cell has a color index
+  var ZONE_CELL = 64; // pixels per cell
+  var zoneCols, zoneRows;
+  var zoneGrid; // Uint8Array, color index per cell
+  var zoneUpdateTimer = 0;
+  var ZONE_UPDATE_INTERVAL = 6; // update every N frames
+
+  function buildZoneGrid(t) {
+    zoneCols = Math.ceil(W / ZONE_CELL) + 1;
+    zoneRows = Math.ceil(H / ZONE_CELL) + 1;
+    if (!zoneGrid || zoneGrid.length < zoneCols * zoneRows) {
+      zoneGrid = new Uint8Array(zoneCols * zoneRows);
+    }
+    for (var row = 0; row < zoneRows; row++) {
+      for (var col = 0; col < zoneCols; col++) {
+        var sx = col * ZONE_CELL;
+        var sy = row * ZONE_CELL;
+        var n = fbm2(sx * 0.0008 + t * 0.02, sy * 0.0008 + t * 0.015);
+        var mapped = (n + 1) * 2.5;
+        var idx = mapped | 0;
+        if (idx < 0) idx = 0;
+        if (idx > 4) idx = 4;
+        zoneGrid[row * zoneCols + col] = idx;
+      }
+    }
+  }
+
+  function getZoneFast(px, py) {
+    var col = (px / ZONE_CELL) | 0;
+    var row = (py / ZONE_CELL) | 0;
+    if (col < 0) col = 0;
+    if (col >= zoneCols) col = zoneCols - 1;
+    if (row < 0) row = 0;
+    if (row >= zoneRows) row = zoneRows - 1;
+    return zoneGrid[row * zoneCols + col];
+  }
+
+  // ── Particle initialization ──
+  function initParticles() {
+    particleCount = Math.round(BASE_COUNT * DENSITY);
+    posX = new Float32Array(particleCount);
+    posY = new Float32Array(particleCount);
+    velScale = new Float32Array(particleCount);
+    brightnessIdx = new Uint8Array(particleCount);
+
+    for (var i = 0; i < particleCount; i++) {
+      posX[i] = Math.random() * W;
+      posY[i] = Math.random() * H;
+      velScale[i] = 0.3 + Math.random() * 0.7;
+      brightnessIdx[i] = (Math.random() * NUM_ALPHAS) | 0;
+    }
+    allocBuckets();
+  }
+
+  // ── Resize ──
+  function resize() {
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = Math.round(W * dpr);
+    canvas.height = Math.round(H * dpr);
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+    initParticles();
+    buildZoneGrid(time);
+  }
+
+  window.addEventListener('resize', resize);
+
+  // ── Animation state ──
+  var time = 0;
+  var paused = false;
+  var frameCount = 0;
+
+  resize();
+
+  // ── Main draw loop ──
+  function draw() {
+    if (paused) {
+      requestAnimationFrame(draw);
+      return;
+    }
+
+    var dt = prefersReduced ? 0 : 1;
+    time += 0.0006 * DRIFT_SPEED * dt;
+    frameCount++;
+
+    // Rebuild zone grid periodically (not every frame)
+    if (frameCount % ZONE_UPDATE_INTERVAL === 0) {
+      buildZoneGrid(time);
+    }
+
+    // Fade overlay: semi-transparent black for trailing effect
+    ctx.fillStyle = 'rgba(0,0,0,0.04)';
+    ctx.fillRect(0, 0, W, H);
+
+    // ── Reset bucket counts ──
+    for (var b = 0; b < NUM_BUCKETS; b++) bucketLen[b] = 0;
+
+    // ── Update particles and assign to buckets ──
+    var noiseScale = 0.003;
+    var speed = 0.8 * DRIFT_SPEED;
+    var PI2 = Math.PI * 2;
+
+    for (var i = 0; i < particleCount; i++) {
+      var px = posX[i];
+      var py = posY[i];
+
+      // Flow field: single noise sample for angle
+      var angle = noise2D(px * noiseScale, py * noiseScale + time * 10) * PI2;
+
+      // Update position
+      var v = velScale[i] * speed;
+      px += Math.cos(angle) * v;
+      py += Math.sin(angle) * v;
+
+      // Wrap around edges
+      if (px < 0) px += W;
+      else if (px >= W) px -= W;
+      if (py < 0) py += H;
+      else if (py >= H) py -= H;
+
+      posX[i] = px;
+      posY[i] = py;
+
+      // Look up color from zone grid
+      var ci = getZoneFast(px, py);
+      var bi = brightnessIdx[i];
+      var bucketId = ci * NUM_ALPHAS + bi;
+      var offset = bucketId * MAX_PER_BUCKET + bucketLen[bucketId];
+      bucketData[offset] = i;
+      bucketLen[bucketId]++;
+    }
+
+    // ── Draw particles batched by color+alpha ──
+    for (var bid = 0; bid < NUM_BUCKETS; bid++) {
+      var count = bucketLen[bid];
+      if (count === 0) continue;
+
+      ctx.fillStyle = COLOR_STRINGS[bid];
+      var baseOffset = bid * MAX_PER_BUCKET;
+
+      for (var k = 0; k < count; k++) {
+        var idx = bucketData[baseOffset + k];
+        ctx.fillRect(posX[idx], posY[idx], 1.5, 1.5);
+      }
+    }
+
+    requestAnimationFrame(draw);
+  }
+
+  // Initial black fill
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+
+  requestAnimationFrame(draw);
+
+  // ── Visibility pause ──
+  document.addEventListener('visibilitychange', function () {
+    paused = document.hidden;
+  });
+
+  // ── PostMessage param API ──
+  window.addEventListener('message', function (e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'DRIFT_SPEED':
+          DRIFT_SPEED = e.data.value;
+          break;
+        case 'DENSITY':
+          DENSITY = e.data.value;
+          initParticles();
+          break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

@@ -1052,33 +1052,106 @@ export const shaders: Shader[] = [
 		technique: 'webgl',
 		params: [
 			{ name: 'WAVE_SPEED', label: 'Wave Speed', min: 0.2, max: 3.0, step: 0.1, default: 1.0 },
-			{ name: 'LINE_COUNT', label: 'Line Count', min: 3, max: 12, step: 1, default: 10 }
+			{ name: 'LINE_COUNT', label: 'Line Count', min: 3, max: 12, step: 1, default: 6 }
 		]
 	},
 	{
-		id: 'resonance',
-		file: 'resonance.html',
-		title: 'Resonance',
-		desc: 'Radial pulsing wave rings emanating from a central glow, breathing and undulating like sound resonance patterns.',
+		id: 'magnetic-field',
+		file: 'magnetic-field.html',
+		title: 'Magnetic Field',
+		desc: 'Dipole field lines curving between slowly rotating poles with silk-thread glow rendering.',
+		inspiration: 'Cate Blanchett',
+		tags: ['fill', 'geometric', 'physics'],
+		technique: 'webgl',
+		params: [
+			{ name: 'WAVE_SPEED', label: 'Animation Speed', min: 0.2, max: 3.0, step: 0.1, default: 1.0 },
+			{ name: 'LINE_COUNT', label: 'Field Lines', min: 3, max: 12, step: 1, default: 8 }
+		]
+	},
+	{
+		id: 'aurora-curtain',
+		file: 'aurora-curtain.html',
+		title: 'Aurora Curtain',
+		desc: 'Vertical luminous threads swaying like aurora borealis curtains with warm-to-cool color gradient.',
 		inspiration: 'Meryl Streep',
+		tags: ['fill', 'organic'],
+		technique: 'webgl',
+		params: [
+			{ name: 'WAVE_SPEED', label: 'Wave Speed', min: 0.2, max: 3.0, step: 0.1, default: 1.0 },
+			{ name: 'LINE_COUNT', label: 'Curtains', min: 3, max: 12, step: 1, default: 6 }
+		]
+	},
+	{
+		id: 'vortex',
+		file: 'vortex.html',
+		title: 'Vortex',
+		desc: 'Logarithmic spiral arms converging on a drifting center with silk-thread glow and undulating perturbation.',
+		inspiration: 'Lupita Nyong\'o',
 		tags: ['fill', 'geometric'],
 		technique: 'webgl',
 		params: [
-			{ name: 'PULSE_SPEED', label: 'Pulse Speed', min: 0.2, max: 3.0, step: 0.1, default: 1.0 },
-			{ name: 'RING_COUNT', label: 'Ring Count', min: 3, max: 10, step: 1, default: 8 }
+			{ name: 'WAVE_SPEED', label: 'Animation Speed', min: 0.2, max: 3.0, step: 0.1, default: 1.0 },
+			{ name: 'LINE_COUNT', label: 'Spiral Arms', min: 3, max: 10, step: 1, default: 6 }
 		]
 	},
 	{
-		id: 'harmonic-drift',
-		file: 'harmonic-drift.html',
-		title: 'Harmonic Drift',
-		desc: 'Atmospheric flowing energy currents with turbulent organic paths, warm amber glow, and teal accents.',
-		inspiration: 'Lupita Nyong\'o',
+		id: 'chromatic-bloom',
+		file: 'chromatic-bloom.html',
+		title: 'Chromatic Bloom',
+		desc: 'Luminous color orbs drifting on pure black with Gaussian glow, additive blending, film grain, and cinematic vignette.',
+		tags: ['fill', 'noise'],
+		technique: 'webgl',
+		params: [
+			{ name: 'DRIFT_SPEED', label: 'Drift Speed', min: 0.1, max: 2.0, step: 0.05, default: 0.5 },
+			{ name: 'GRAIN_AMOUNT', label: 'Film Grain', min: 0.0, max: 1.0, step: 0.05, default: 0.5 }
+		]
+	},
+	{
+		id: 'lens-whisper',
+		file: 'lens-whisper.html',
+		title: 'Lens Whisper',
+		desc: 'Anamorphic lens flares with chromatic color separation, horizontal streaks, bokeh halos, and cinematic film grain on pure black.',
+		tags: ['fill', 'noise'],
+		technique: 'webgl',
+		params: [
+			{ name: 'FLARE_SPREAD', label: 'Flare Spread', min: 0.3, max: 3.0, step: 0.1, default: 1.0 },
+			{ name: 'DRIFT_SPEED', label: 'Drift Speed', min: 0.1, max: 2.0, step: 0.05, default: 0.5 }
+		]
+	},
+	{
+		id: 'velvet-frequency',
+		file: 'velvet-frequency.html',
+		title: 'Velvet Frequency',
+		desc: 'Ridged simplex noise bands flowing like velvet fabric folds in a warm/cool palette.',
 		tags: ['fill', 'noise', 'organic'],
 		technique: 'webgl',
 		params: [
-			{ name: 'DRIFT_SPEED', label: 'Drift Speed', min: 0.1, max: 2.0, step: 0.05, default: 0.8 },
-			{ name: 'TURBULENCE', label: 'Turbulence', min: 0.0, max: 2.0, step: 0.1, default: 1.0 }
+			{ name: 'FLOW_SPEED', label: 'Flow Speed', min: 0.1, max: 2.0, step: 0.05, default: 0.6 },
+			{ name: 'BAND_DENSITY', label: 'Band Density', min: 0.3, max: 2.0, step: 0.05, default: 1.0 }
+		]
+	},
+	{
+		id: 'phantom-glow',
+		file: 'phantom-glow.html',
+		title: 'Phantom Glow',
+		desc: 'Colored light sources drifting behind frosted glass with noise-displaced UV sampling, refraction highlights, film grain, and vignette.',
+		tags: ['fill', 'noise'],
+		technique: 'webgl',
+		params: [
+			{ name: 'DRIFT_SPEED', label: 'Drift Speed', min: 0.1, max: 2.0, step: 0.05, default: 0.4 },
+			{ name: 'DIFFUSION', label: 'Diffusion', min: 0.3, max: 2.0, step: 0.05, default: 1.0 }
+		]
+	},
+	{
+		id: 'luminous-silt',
+		file: 'luminous-silt.html',
+		title: 'Luminous Silt',
+		desc: 'Dense field of 18K particles creating soft color clouds through alpha accumulation over a noise-driven flow field.',
+		tags: ['fill', 'particles', 'noise'],
+		technique: 'canvas-2d',
+		params: [
+			{ name: 'DRIFT_SPEED', label: 'Drift Speed', min: 0.1, max: 2.0, step: 0.05, default: 0.6 },
+			{ name: 'DENSITY', label: 'Density', min: 0.3, max: 2.0, step: 0.05, default: 1.0 }
 		]
 	}
 ];

@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Velvet Frequency</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Velvet Frequency</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// Velvet Frequency — Ridged noise silk bands with warm/cool palette
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var urlParams = new URLSearchParams(window.location.search);
+  var pixelScale = parseFloat(urlParams.get('p')) || 1;
+
+  var gl = canvas.getContext('webgl', { alpha: false, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  var vertSrc = [
+    'attribute vec2 a_pos;',
+    'void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }'
+  ].join('\n');
+
+  var fragSrc = [
+    'precision highp float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform float u_flowSpeed;',
+    'uniform float u_bandDensity;',
+    '',
+    '#define PI 3.14159265359',
+    '',
+    '// ── Simplex 2D noise (Ashima Arts) ──',
+    'vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }',
+    'vec2 mod289v2(vec2 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }',
+    'vec3 permute(vec3 x) { return mod289(((x * 34.0) + 1.0) * x); }',
+    '',
+    'float snoise(vec2 v) {',
+    '  const vec4 C = vec4(0.211324865405187, 0.366025403784439,',
+    '                      -0.577350269189626, 0.024390243902439);',
+    '  vec2 i  = floor(v + dot(v, C.yy));',
+    '  vec2 x0 = v - i + dot(i, C.xx);',
+    '  vec2 i1;',
+    '  i1 = (x0.x > x0.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);',
+    '  vec4 x12 = x0.xyxy + C.xxzz;',
+    '  x12.xy -= i1;',
+    '  i = mod289v2(i);',
+    '  vec3 p = permute(permute(i.y + vec3(0.0, i1.y, 1.0))',
+    '         + i.x + vec3(0.0, i1.x, 1.0));',
+    '  vec3 m = max(0.5 - vec3(dot(x0,x0), dot(x12.xy,x12.xy),',
+    '              dot(x12.zw,x12.zw)), 0.0);',
+    '  m = m * m;',
+    '  m = m * m;',
+    '  vec3 x = 2.0 * fract(p * C.www) - 1.0;',
+    '  vec3 h = abs(x) - 0.5;',
+    '  vec3 ox = floor(x + 0.5);',
+    '  vec3 a0 = x - ox;',
+    '  m *= 1.79284291400159 - 0.85373472095314 * (a0*a0 + h*h);',
+    '  vec3 g;',
+    '  g.x = a0.x * x0.x + h.x * x0.y;',
+    '  g.yz = a0.yz * x12.xz + h.yz * x12.yw;',
+    '  return 130.0 * dot(m, g);',
+    '}',
+    '',
+    '// ── Ridged noise: creates fold/crease lines ──',
+    'float ridged(vec2 p) {',
+    '  float n = snoise(p);',
+    '  return 1.0 - abs(n);',
+    '}',
+    '',
+    '// ── Ridged FBM with layered octaves ──',
+    'float ridgedFBM(vec2 p, float t, float freq, float flowDir, float phase) {',
+    '  float val = 0.0;',
+    '  float amp = 0.55;',
+    '  float f = freq;',
+    '  float weight = 1.0;',
+    '',
+    '  // Flow direction per layer',
+    '  float angle = flowDir;',
+    '  vec2 flow = vec2(cos(angle), sin(angle)) * t;',
+    '',
+    '  for (int i = 0; i < 4; i++) {',
+    '    float fi = float(i);',
+    '    // Each octave drifts in a slightly different direction',
+    '    vec2 offset = flow * (0.6 + fi * 0.15);',
+    '    offset += vec2(sin(t * 0.13 + fi * 2.1), cos(t * 0.11 + fi * 1.7)) * 0.3;',
+    '',
+    '    float n = ridged(p * f + offset + phase);',
+    '    // Weight successive octaves by previous — sharpens creases',
+    '    n = n * n;',
+    '    val += n * amp * weight;',
+    '    weight = clamp(n * 1.2, 0.0, 1.0);',
+    '    f *= 2.15;',
+    '    amp *= 0.5;',
+    '    // Rotate slightly each octave for more organic feel',
+    '    float cs = cos(0.35); float sn = sin(0.35);',
+    '    p = vec2(p.x * cs - p.y * sn, p.x * sn + p.y * cs);',
+    '  }',
+    '  return val;',
+    '}',
+    '',
+    '// ── Color palette mapping ──',
+    '// Maps a value 0..1 through the warm/cool gradient',
+    'vec3 palette(float t) {',
+    '  // Palette stops:',
+    '  // 0.0  = deep blue     (0.08, 0.12, 0.35)',
+    '  // 0.2  = cobalt         (0.15, 0.25, 0.65)',
+    '  // 0.35 = teal accent    (0.1,  0.5,  0.5)',
+    '  // 0.5  = cool white     (0.75, 0.85, 1.0)',
+    '  // 0.7  = amber          (0.9,  0.6,  0.2)',
+    '  // 0.85 = burnt orange   (0.85, 0.4,  0.1)',
+    '  // 1.0  = deep blue      (0.08, 0.12, 0.35) — wraps around',
+    '',
+    '  vec3 c;',
+    '  if (t < 0.2) {',
+    '    c = mix(vec3(0.08, 0.12, 0.35), vec3(0.15, 0.25, 0.65), t / 0.2);',
+    '  } else if (t < 0.35) {',
+    '    c = mix(vec3(0.15, 0.25, 0.65), vec3(0.1, 0.5, 0.5), (t - 0.2) / 0.15);',
+    '  } else if (t < 0.5) {',
+    '    c = mix(vec3(0.1, 0.5, 0.5), vec3(0.75, 0.85, 1.0), (t - 0.35) / 0.15);',
+    '  } else if (t < 0.65) {',
+    '    c = mix(vec3(0.75, 0.85, 1.0), vec3(0.9, 0.6, 0.2), (t - 0.5) / 0.15);',
+    '  } else if (t < 0.8) {',
+    '    c = mix(vec3(0.9, 0.6, 0.2), vec3(0.85, 0.4, 0.1), (t - 0.65) / 0.15);',
+    '  } else {',
+    '    c = mix(vec3(0.85, 0.4, 0.1), vec3(0.08, 0.12, 0.35), (t - 0.8) / 0.2);',
+    '  }',
+    '  return c;',
+    '}',
+    '',
+    '// ── Hash for film grain ──',
+    'float hash(vec2 p) {',
+    '  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);',
+    '}',
+    '',
+    'void main() {',
+    '  vec2 uv = gl_FragCoord.xy / u_res;',
+    '  float aspect = u_res.x / u_res.y;',
+    '  vec2 p = vec2(uv.x * aspect, uv.y);',
+    '  float t = u_time * u_flowSpeed;',
+    '',
+    '  // ── Layer 1: Deep black base ──',
+    '  vec3 col = vec3(0.0);',
+    '',
+    '  // ── Layer 2: Primary flowing bands ──',
+    '  // Large-scale ridged noise, slow drift',
+    '  float n1 = ridgedFBM(p * u_bandDensity * 1.8, t, 1.0, 0.3, 0.0);',
+    '  // Apply power curve for varied fold sharpness',
+    '  float shaped1 = pow(n1, 1.3);',
+    '  // Slowly shift the palette mapping over time for color cycling',
+    '  float palOffset1 = t * 0.02;',
+    '  vec3 band1 = palette(fract(shaped1 * 0.8 + palOffset1));',
+    '  // Modulate brightness by the ridged value itself — bright on ridges, dark in valleys',
+    '  float brightness1 = smoothstep(0.05, 0.6, shaped1);',
+    '  col += band1 * brightness1 * 0.65;',
+    '',
+    '  // ── Layer 3: Secondary finer bands ──',
+    '  // Smaller scale, different flow direction, offset palette',
+    '  float n2 = ridgedFBM(p * u_bandDensity * 3.2, t * 0.85, 1.2, -0.7, 5.3);',
+    '  float shaped2 = pow(n2, 1.5);',
+    '  float palOffset2 = t * 0.03 + 0.35;',
+    '  vec3 band2 = palette(fract(shaped2 * 0.9 + palOffset2));',
+    '  float brightness2 = smoothstep(0.1, 0.55, shaped2);',
+    '  // Layer with transparency — screen blend mode approximation',
+    '  col += band2 * brightness2 * 0.3;',
+    '',
+    '  // ── Layer 4: Tertiary ultra-fine detail ──',
+    '  float n3 = ridgedFBM(p * u_bandDensity * 5.5, t * 0.7, 1.5, 1.9, 11.7);',
+    '  float shaped3 = pow(n3, 2.0);',
+    '  float palOffset3 = t * 0.015 + 0.6;',
+    '  vec3 band3 = palette(fract(shaped3 * 1.1 + palOffset3));',
+    '  float brightness3 = smoothstep(0.15, 0.5, shaped3);',
+    '  col += band3 * brightness3 * 0.15;',
+    '',
+    '  // ── Layer 5: Luminous ridge highlights ──',
+    '  // Emphasize the peak ridges with white/cool highlights',
+    '  // Use the primary noise ridges — peaks are where noise is closest to 1.0',
+    '  float ridgePeak1 = pow(smoothstep(0.55, 0.95, n1), 2.0);',
+    '  float ridgePeak2 = pow(smoothstep(0.5, 0.9, n2), 2.5);',
+    '  // Cool white highlight color',
+    '  vec3 highlight = vec3(0.75, 0.85, 1.0);',
+    '  // Warm highlight for variety — amber catching light',
+    '  vec3 warmHighlight = vec3(0.9, 0.65, 0.3);',
+    '  // Mix highlights based on position',
+    '  float highlightMix = sin(p.x * 2.3 + p.y * 1.7 + t * 0.1) * 0.5 + 0.5;',
+    '  vec3 hlColor = mix(highlight, warmHighlight, highlightMix);',
+    '  col += hlColor * ridgePeak1 * 0.35;',
+    '  col += highlight * ridgePeak2 * 0.15;',
+    '',
+    '  // ── Gentle overall breathing ──',
+    '  float breath = 0.92 + 0.08 * sin(t * 0.4);',
+    '  col *= breath;',
+    '',
+    '  // ── Tone mapping — keep richness without blowout ──',
+    '  col = col / (col + 0.45) * 1.15;',
+    '',
+    '  // ── Layer 6: Vignette ──',
+    '  vec2 vc = (uv - 0.5) * vec2(aspect, 1.0);',
+    '  float vignette = 1.0 - dot(vc, vc) * 0.8;',
+    '  vignette = smoothstep(0.0, 1.0, vignette);',
+    '  col *= vignette;',
+    '',
+    '  // ── Layer 7: Film grain ──',
+    '  float grain = hash(gl_FragCoord.xy + fract(u_time * 100.0)) * 0.06 - 0.03;',
+    '  col += grain;',
+    '',
+    '  // Clamp to valid range',
+    '  col = max(col, vec3(0.0));',
+    '',
+    '  gl_FragColor = vec4(col, 1.0);',
+    '}'
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error('Shader compile error (' + (type === gl.VERTEX_SHADER ? 'vert' : 'frag') + '):', gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error('Program link error:', gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uFlowSpeed = gl.getUniformLocation(prog, 'u_flowSpeed');
+  var uBandDensity = gl.getUniformLocation(prog, 'u_bandDensity');
+
+  var flowSpeedVal = 0.6;
+  var bandDensityVal = 1.0;
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2) * pixelScale;
+  var running = true;
+
+  function resize() {
+    var w = Math.round(canvas.clientWidth * dpr);
+    var h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  function render(now) {
+    if (!running) { requestAnimationFrame(render); return; }
+    resize();
+    gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uFlowSpeed, flowSpeedVal);
+    gl.uniform1f(uBandDensity, bandDensityVal);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  // ── Pause when tab is hidden ──
+  document.addEventListener('visibilitychange', function () {
+    running = !document.hidden;
+  });
+
+  // ── PostMessage API for tunable params ──
+  window.addEventListener('message', function (e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'FLOW_SPEED': flowSpeedVal = e.data.value; break;
+        case 'BAND_DENSITY': bandDensityVal = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

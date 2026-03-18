@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Silk Threads</title>
+<title>Aurora Curtain</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
@@ -24,11 +24,11 @@
 </style>
 </head>
 <body>
-<div class="label">Silk Threads</div>
+<div class="label">Aurora Curtain</div>
 <canvas id="canvas"></canvas>
 <script>
 // ─────────────────────────────────────────────
-// Silk Threads — Flowing luminous wave lines
+// Aurora Curtain — Vertical flowing curtain lines
 // ─────────────────────────────────────────────
 (function () {
   var canvas = document.getElementById('canvas');
@@ -71,12 +71,14 @@
     '',
     '#define S smoothstep',
     '',
-    '// ── Single flowing line (inspired by Shadertoy technique) ──',
-    'vec3 silkLine(vec2 uv, float speed, float height, vec3 c, float t) {',
-    '  uv.y += S(1.0, 0.0, abs(uv.x)) * sin(t * speed + uv.x * height) * 0.2;',
-    '  float lw = 0.06 * S(0.2, 0.9, abs(uv.x));',
-    '  float l = S(lw, 0.0, abs(uv.y) - 0.004);',
-    '  float fade = S(1.0, 0.3, abs(uv.x));',
+    '// ── Single vertical curtain line ──',
+    'vec3 curtainLine(vec2 uv, float speed, float freq, vec3 c, float t) {',
+    '  // Sine displacement on x based on y position (vertical flow)',
+    '  uv.x += S(1.0, 0.0, abs(uv.y)) * sin(t * speed + uv.y * freq) * 0.2;',
+    '  float lw = 0.06 * S(0.2, 0.9, abs(uv.y));',
+    '  float l = S(lw, 0.0, abs(uv.x) - 0.004);',
+    '  // Edge fade top/bottom instead of left/right',
+    '  float fade = S(1.0, 0.3, abs(uv.y));',
     '  return l * c * fade;',
     '}',
     '',
@@ -92,21 +94,26 @@
     '    float fi = float(i);',
     '    float frac = fi / max(u_lineCount - 1.0, 1.0);',
     '',
-    '    // Each line: slightly different speed and frequency',
-    '    float speed = 1.0 + frac * 0.8;',
-    '    float height = 4.0 + frac * 2.0;',
+    '    float speed = 0.6 + frac * 0.5;',
+    '    float freq = 4.0 + frac * 2.0;',
     '',
-    '    // Color: warm amber through to soft lavender',
-    '    vec3 lineCol = vec3(',
-    '      0.2 + frac * 0.7,',
-    '      0.2 + frac * 0.4,',
-    '      0.3 + (1.0 - frac) * 0.15',
-    '    );',
+    '    // Color: warm amber at base (bottom), cool teal at top',
+    '    vec3 warmAmber = vec3(0.85, 0.55, 0.25);',
+    '    vec3 coolTeal = vec3(0.2, 0.6, 0.65);',
+    '    // Blend per-line from amber to teal',
+    '    vec3 lineCol = mix(warmAmber, coolTeal, frac) * (0.5 + frac * 0.5);',
     '',
-    '    // Subtle noise for organic variation',
-    '    float nOff = noise(vec2(uv.x * 2.0 + fi * 3.7, t * 0.1 + fi)) * 0.015;',
+    '    // Also blend per-pixel based on vertical position',
+    '    float yBlend = S(-0.4, 0.5, uv.y);',
+    '    vec3 pixelCol = mix(warmAmber, coolTeal, yBlend) * (0.4 + frac * 0.6);',
+    '    lineCol = mix(lineCol, pixelCol, 0.6);',
     '',
-    '    col += silkLine(uv + vec2(0.0, nOff), speed, height, lineCol, t);',
+    '    // Slow lateral drift',
+    '    float drift = sin(t * 0.15 + fi * 1.3) * 0.03;',
+    '',
+    '    float nOff = noise(vec2(uv.y * 2.0 + fi * 3.7, t * 0.1 + fi)) * 0.015;',
+    '',
+    '    col += curtainLine(uv + vec2(nOff + drift, 0.0), speed, freq, lineCol, t);',
     '  }',
     '',
     '  // ── Vignette ──',

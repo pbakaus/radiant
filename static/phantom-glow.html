@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Phantom Glow</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Phantom Glow</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// Phantom Glow — Colored lights behind frosted glass
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var urlParams = new URLSearchParams(window.location.search);
+  var pixelScale = parseFloat(urlParams.get('p')) || 1;
+
+  var gl = canvas.getContext('webgl', { alpha: false, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  var vertSrc = [
+    'attribute vec2 a_pos;',
+    'void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }'
+  ].join('\n');
+
+  var fragSrc = [
+    'precision highp float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform float u_driftSpeed;',
+    'uniform float u_diffusion;',
+    '',
+    '#define PI 3.14159265359',
+    '#define FROST_SAMPLES 8',
+    '',
+    '// ── Fast hash functions (no trig in inner loop) ──',
+    'vec2 hash2(vec2 p) {',
+    '  p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));',
+    '  return fract(sin(p) * 43758.5453) * 2.0 - 1.0;',
+    '}',
+    '',
+    'float hash(vec2 p) {',
+    '  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);',
+    '}',
+    '',
+    '// ── Value noise (smooth, cheap) ──',
+    'float vnoise(vec2 p) {',
+    '  vec2 i = floor(p);',
+    '  vec2 f = fract(p);',
+    '  f = f * f * (3.0 - 2.0 * f);',
+    '  float a = hash(i);',
+    '  float b = hash(i + vec2(1.0, 0.0));',
+    '  float c = hash(i + vec2(0.0, 1.0));',
+    '  float d = hash(i + vec2(1.0, 1.0));',
+    '  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);',
+    '}',
+    '',
+    '// ── 2D noise displacement for frosted glass ──',
+    '// Returns a vec2 offset by sampling noise at two different seeds',
+    'vec2 frostOffset(vec2 uv, float scale, float seed) {',
+    '  float nx = vnoise(uv * scale + vec2(seed * 7.31, seed * 3.17));',
+    '  float ny = vnoise(uv * scale + vec2(seed * 5.91 + 100.0, seed * 2.63 + 200.0));',
+    '  return (vec2(nx, ny) - 0.5) * 2.0;',
+    '}',
+    '',
+    '// ── Gaussian orb with soft exponential falloff ──',
+    'vec3 singleOrb(vec2 uv, vec2 center, vec3 color, float radius, float intensity) {',
+    '  float d = length(uv - center);',
+    '  float k = 1.0 / (radius * radius);',
+    '  return color * exp(-d * d * k) * intensity;',
+    '}',
+    '',
+    '// ── Color field: sum of all 6 orbs at a given UV position ──',
+    'vec3 colorField(vec2 uv, float t) {',
+    '  vec3 col = vec3(0.0);',
+    '',
+    '  // Orb palette',
+    '  vec3 cobalt  = vec3(0.12, 0.22, 0.75);',
+    '  vec3 orange  = vec3(0.85, 0.40, 0.12);',
+    '  vec3 white   = vec3(0.70, 0.80, 1.00);',
+    '  vec3 amber   = vec3(0.90, 0.65, 0.20);',
+    '  vec3 teal    = vec3(0.10, 0.50, 0.50);',
+    '  vec3 violet  = vec3(0.40, 0.20, 0.60);',
+    '',
+    '  // Slow drifting positions with varied orbital shapes',
+    '  // Each orb uses different trig combinations for unique paths',
+    '',
+    '  // Orb 1: Deep cobalt - wide lazy ellipse',
+    '  vec2 p1 = vec2(',
+    '    cos(t * 0.19 + 0.0) * 0.32 + sin(t * 0.07) * 0.08,',
+    '    sin(t * 0.14 + 0.5) * 0.22 + cos(t * 0.09) * 0.06',
+    '  );',
+    '  col += singleOrb(uv, p1, cobalt, 0.38, 1.3);',
+    '',
+    '  // Orb 2: Warm burnt orange - opposing orbit, slightly tighter',
+    '  vec2 p2 = vec2(',
+    '    cos(t * 0.16 + 2.1) * 0.28 + sin(t * 0.11 + 1.0) * 0.10,',
+    '    sin(t * 0.21 + 1.4) * 0.26 + cos(t * 0.06 + 0.7) * 0.07',
+    '  );',
+    '  col += singleOrb(uv, p2, orange, 0.36, 1.2);',
+    '',
+    '  // Orb 3: Cool white-blue - slow vertical drift',
+    '  vec2 p3 = vec2(',
+    '    cos(t * 0.12 + 4.2) * 0.22 + sin(t * 0.08 + 3.0) * 0.06,',
+    '    sin(t * 0.18 + 3.0) * 0.30 + cos(t * 0.05 + 2.0) * 0.05',
+    '  );',
+    '  col += singleOrb(uv, p3, white, 0.34, 0.9);',
+    '',
+    '  // Orb 4: Amber gold - figure-eight pattern',
+    '  vec2 p4 = vec2(',
+    '    sin(t * 0.14 + 1.0) * cos(t * 0.09 + 0.5) * 0.34,',
+    '    sin(t * 0.11 + 2.5) * 0.24 + cos(t * 0.07 + 1.5) * 0.08',
+    '  );',
+    '  col += singleOrb(uv, p4, amber, 0.35, 1.05);',
+    '',
+    '  // Orb 5: Teal - slow large ellipse',
+    '  vec2 p5 = vec2(',
+    '    cos(t * 0.10 + 5.5) * 0.30 + sin(t * 0.06 + 4.0) * 0.09,',
+    '    sin(t * 0.15 + 4.8) * 0.20 + cos(t * 0.08 + 3.5) * 0.07',
+    '  );',
+    '  col += singleOrb(uv, p5, teal, 0.40, 1.0);',
+    '',
+    '  // Orb 6: Soft violet - drifting offset',
+    '  vec2 p6 = vec2(',
+    '    cos(t * 0.13 + 3.3) * 0.26 + sin(t * 0.10 + 5.0) * 0.08,',
+    '    sin(t * 0.17 + 6.1) * 0.28 + cos(t * 0.07 + 4.2) * 0.06',
+    '  );',
+    '  col += singleOrb(uv, p6, violet, 0.33, 0.95);',
+    '',
+    '  return col;',
+    '}',
+    '',
+    '// ── Film grain ──',
+    'float filmGrain(vec2 uv, float t) {',
+    '  vec2 seed = uv * vec2(1973.0, 9277.0) + vec2(t * 311.7, t * 127.1);',
+    '  return fract(sin(dot(seed, vec2(12.9898, 78.233))) * 43758.5453) - 0.5;',
+    '}',
+    '',
+    'void main() {',
+    '  vec2 uv = (gl_FragCoord.xy - u_res * 0.5) / min(u_res.x, u_res.y);',
+    '  float t = u_time * u_driftSpeed;',
+    '',
+    '  // ═══════════════════════════════════════════',
+    '  // Layer 1: Pure black background',
+    '  // ═══════════════════════════════════════════',
+    '  vec3 col = vec3(0.0);',
+    '',
+    '  // ═══════════════════════════════════════════',
+    '  // Layers 2-4: Frosted glass diffusion',
+    '  // Sample the color field at multiple noise-displaced',
+    '  // UV positions and average. This creates the soft,',
+    '  // diffused, frosted-glass look where colors bleed',
+    '  // into each other organically.',
+    '  // ═══════════════════════════════════════════',
+    '',
+    '  float frostScale = 4.0 + u_diffusion * 1.5;',
+    '  float frostAmount = 0.06 * u_diffusion;',
+    '',
+    '  // Slowly animate the frost texture itself',
+    '  float frostDrift = u_time * 0.03;',
+    '',
+    '  vec3 frosted = vec3(0.0);',
+    '  for (int i = 0; i < FROST_SAMPLES; i++) {',
+    '    float fi = float(i);',
+    '    // Each sample gets a different noise offset',
+    '    vec2 noiseUV = uv * frostScale + vec2(frostDrift, frostDrift * 0.7) + fi * 0.71;',
+    '    vec2 offset = frostOffset(noiseUV, 1.0, fi * 1.13 + 0.5);',
+    '    frosted += colorField(uv + offset * frostAmount, t);',
+    '  }',
+    '  frosted /= float(FROST_SAMPLES);',
+    '',
+    '  col += frosted;',
+    '',
+    '  // ═══════════════════════════════════════════',
+    '  // Layer 5: Refraction highlights',
+    '  // Bright spots along noise ridges where the',
+    '  // frosted glass surface catches light.',
+    '  // ═══════════════════════════════════════════',
+    '',
+    '  // Compute noise gradient at this UV to find ridges',
+    '  float eps = 0.005;',
+    '  vec2 frostUV = uv * frostScale + vec2(frostDrift, frostDrift * 0.7);',
+    '  float nC = vnoise(frostUV);',
+    '  float nR = vnoise(frostUV + vec2(eps, 0.0));',
+    '  float nU = vnoise(frostUV + vec2(0.0, eps));',
+    '',
+    '  // Gradient magnitude: where noise changes quickly = ridges',
+    '  float gradMag = length(vec2(nR - nC, nU - nC)) / eps;',
+    '',
+    '  // Use gradient as highlight intensity: peaks at ridge edges',
+    '  float highlight = smoothstep(0.3, 1.8, gradMag);',
+    '  highlight *= highlight;',
+    '',
+    '  // Make highlights pick up local color, tinted toward white',
+    '  vec3 highlightColor = mix(frosted, vec3(0.85, 0.82, 0.78), 0.7);',
+    '  col += highlightColor * highlight * 0.12 * u_diffusion;',
+    '',
+    '  // Second layer of finer refraction highlights',
+    '  float frostScale2 = frostScale * 2.3;',
+    '  vec2 frostUV2 = uv * frostScale2 + vec2(frostDrift * 1.3, frostDrift * 0.5 + 50.0);',
+    '  float nC2 = vnoise(frostUV2);',
+    '  float nR2 = vnoise(frostUV2 + vec2(eps, 0.0));',
+    '  float nU2 = vnoise(frostUV2 + vec2(0.0, eps));',
+    '  float gradMag2 = length(vec2(nR2 - nC2, nU2 - nC2)) / eps;',
+    '  float highlight2 = smoothstep(0.5, 2.0, gradMag2);',
+    '  highlight2 *= highlight2;',
+    '  col += vec3(0.9, 0.88, 0.85) * highlight2 * 0.06 * u_diffusion;',
+    '',
+    '  // ═══════════════════════════════════════════',
+    '  // Layer 6: Film grain overlay',
+    '  // ═══════════════════════════════════════════',
+    '  float grain = filmGrain(gl_FragCoord.xy * 0.5, u_time * 17.3);',
+    '  col += grain * 0.035;',
+    '',
+    '  // ═══════════════════════════════════════════',
+    '  // Layer 7: Vignette',
+    '  // ═══════════════════════════════════════════',
+    '  float vd = length(uv * vec2(1.05, 1.0));',
+    '  float vignette = 1.0 - smoothstep(0.35, 0.90, vd);',
+    '  col *= vignette;',
+    '',
+    '  // Clamp negatives',
+    '  col = max(col, vec3(0.0));',
+    '',
+    '  // Soft tone mapping to tame hot spots while keeping richness',
+    '  col = col / (col + vec3(1.0)) * 1.85;',
+    '',
+    '  gl_FragColor = vec4(col, 1.0);',
+    '}'
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error('Shader compile error:', gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error('Program link error:', gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uDriftSpeed = gl.getUniformLocation(prog, 'u_driftSpeed');
+  var uDiffusion = gl.getUniformLocation(prog, 'u_diffusion');
+
+  var driftSpeedVal = 0.4;
+  var diffusionVal = 1.0;
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2) * pixelScale;
+
+  function resize() {
+    var w = Math.round(canvas.clientWidth * dpr);
+    var h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+
+  var paused = false;
+
+  function render(now) {
+    if (!paused) {
+      resize();
+      gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+      gl.uniform2f(uRes, canvas.width, canvas.height);
+      gl.uniform1f(uDriftSpeed, driftSpeedVal);
+      gl.uniform1f(uDiffusion, diffusionVal);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    }
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  document.addEventListener('visibilitychange', function () {
+    paused = document.hidden;
+  });
+
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'DRIFT_SPEED': driftSpeedVal = e.data.value; break;
+        case 'DIFFUSION': diffusionVal = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>
