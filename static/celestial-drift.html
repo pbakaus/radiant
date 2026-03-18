@@ -84,14 +84,14 @@
     var h8 = hash(fi * 3.17 + 2.0);
     var h9 = hash(fi * 5.91 + 3.0);
 
-    var semiMajor = 0.1 + fi * 0.085 + h1 * 0.025;
+    var semiMajor = 0.08 + fi * 0.1 + h1 * 0.03;
     var ecc = 0.03 + h2 * 0.15;
     var speed = (0.07 + h3 * 0.05) / (0.6 + semiMajor);
     var phase = h4 * TAU;
     var tilt = (h5 - 0.5) * 0.5;
 
-    // Visual size: larger than original shader
-    var glowRadius = 30 + h6 * 30; // 30-60px base glow radius
+    // Visual size: elegant small orbs
+    var glowRadius = 6 + h6 * 10; // 6-16px base glow radius
 
     // Color: warm amber range, hue 0.06–0.14
     var hue = 0.06 + h7 * 0.08;
@@ -244,13 +244,13 @@
         var nx = (px / nw - 0.5) * 2;
         var ny = (py / nh - 0.5) * 2;
         var n = fbmNoise(nx * 2, ny * 2);
-        var intensity = Math.max(0, n - 0.3) * 0.4;
-        // Warm brown nebula tint
+        var intensity = Math.max(0, n - 0.35) * 0.15;
+        // Very subtle warm nebula tint
         var idx = (py * nw + px) * 4;
-        data[idx] = Math.round(15 * intensity * 255);     // R: subtle warm
-        data[idx + 1] = Math.round(8 * intensity * 255);  // G
-        data[idx + 2] = Math.round(4 * intensity * 255);  // B
-        data[idx + 3] = Math.round(intensity * 255);
+        data[idx] = Math.min(255, Math.round(60 * intensity * 255));
+        data[idx + 1] = Math.min(255, Math.round(35 * intensity * 255));
+        data[idx + 2] = Math.min(255, Math.round(20 * intensity * 255));
+        data[idx + 3] = Math.round(intensity * 80);
       }
     }
     nebulaCtx.putImageData(imgData, 0, 0);
@@ -317,11 +317,11 @@
     var scaledR = r * (minDim / 800);
 
     // Wide soft outer glow
-    var outerR = scaledR * 3.5;
+    var outerR = scaledR * 4.0;
     var grd1 = ctx.createRadialGradient(px, py, 0, px, py, outerR);
-    grd1.addColorStop(0, 'rgba(' + body.r + ',' + body.g + ',' + body.b + ',0.18)');
-    grd1.addColorStop(0.3, 'rgba(' + body.r + ',' + body.g + ',' + body.b + ',0.08)');
-    grd1.addColorStop(0.7, 'rgba(' + body.r + ',' + body.g + ',' + body.b + ',0.02)');
+    grd1.addColorStop(0, 'rgba(' + body.r + ',' + body.g + ',' + body.b + ',0.08)');
+    grd1.addColorStop(0.3, 'rgba(' + body.r + ',' + body.g + ',' + body.b + ',0.03)');
+    grd1.addColorStop(0.7, 'rgba(' + body.r + ',' + body.g + ',' + body.b + ',0.008)');
     grd1.addColorStop(1, 'rgba(' + body.r + ',' + body.g + ',' + body.b + ',0)');
     ctx.beginPath();
     ctx.arc(px, py, outerR, 0, TAU);
@@ -329,10 +329,10 @@
     ctx.fill();
 
     // Inner colored glow
-    var innerR = scaledR * 1.5;
+    var innerR = scaledR * 1.8;
     var grd2 = ctx.createRadialGradient(px, py, 0, px, py, innerR);
-    grd2.addColorStop(0, 'rgba(' + body.r + ',' + body.g + ',' + body.b + ',0.7)');
-    grd2.addColorStop(0.4, 'rgba(' + body.r + ',' + body.g + ',' + body.b + ',0.3)');
+    grd2.addColorStop(0, 'rgba(' + body.r + ',' + body.g + ',' + body.b + ',0.4)');
+    grd2.addColorStop(0.4, 'rgba(' + body.r + ',' + body.g + ',' + body.b + ',0.12)');
     grd2.addColorStop(1, 'rgba(' + body.r + ',' + body.g + ',' + body.b + ',0)');
     ctx.beginPath();
     ctx.arc(px, py, innerR, 0, TAU);
@@ -365,8 +365,8 @@
     var scaledR = r * (minDim / 800) * 1.2;
 
     var grd = ctx.createRadialGradient(px, py, 0, px, py, scaledR);
-    grd.addColorStop(0, 'rgba(' + body.r + ',' + body.g + ',' + body.b + ',' + (alpha * 0.5) + ')');
-    grd.addColorStop(0.5, 'rgba(' + body.r + ',' + body.g + ',' + body.b + ',' + (alpha * 0.2) + ')');
+    grd.addColorStop(0, 'rgba(' + body.r + ',' + body.g + ',' + body.b + ',' + (alpha * 0.25) + ')');
+    grd.addColorStop(0.5, 'rgba(' + body.r + ',' + body.g + ',' + body.b + ',' + (alpha * 0.08) + ')');
     grd.addColorStop(1, 'rgba(' + body.r + ',' + body.g + ',' + body.b + ',0)');
     ctx.beginPath();
     ctx.arc(px, py, scaledR, 0, TAU);
@@ -473,7 +473,7 @@
       var pixel = toPixel(pos.x, pos.y);
 
       // Draw trail glow at current position (accumulates over frames)
-      var trailAlpha = 0.12 + gravityStrength * 0.08; // More gravity = denser trails
+      var trailAlpha = 0.06 + gravityStrength * 0.04; // Subtle trail accumulation
       drawTrailGlow(pixel.x, pixel.y, body, trailAlpha);
 
       // Draw the body itself
