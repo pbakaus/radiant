@@ -284,9 +284,11 @@ export const shaders: Shader[] = [
 		tags: ['fill', 'geometric'],
 		technique: 'webgl',
 		params: [
-			{ name: 'ANIM_MODE', label: 'Animation', min: 0.0, max: 1.0, step: 0.05, default: 1.0 },
+			{ name: 'ANIM_MODE', label: 'Wave Flip', min: 0.0, max: 1.0, step: 1.0, default: 1.0 },
 			{ name: 'TILE_SCALE', label: 'Tile Scale', min: 0.3, max: 2.0, step: 0.1, default: 1.0 },
-			{ name: 'LIGHT_SPEED', label: 'Speed', min: 0.1, max: 1.5, step: 0.1, default: 0.4 }
+			{ name: 'WAVE_SPEED', label: 'Wave Speed', min: 0.5, max: 6.0, step: 0.1, default: 4.0 },
+			{ name: 'WAVE_DELAY', label: 'Wave Delay', min: 0.5, max: 4.0, step: 0.1, default: 1.5 },
+			{ name: 'WAVE_DIR', label: 'Wave Direction', min: 0.0, max: 3.0, step: 1.0, default: 0.0 }
 		]
 	},
 	{
@@ -1117,7 +1119,7 @@ export const shaders: Shader[] = [
 	},
 	{
 		id: 'ink-calligraphy',
-		file: 'proposal-anne-5.html',
+		file: 'ink-calligraphy.html',
 		title: 'Ink Calligraphy',
 		desc: 'Abstract gestural ink strokes with organic diffusion on textured paper and luminous gold leaf highlights.',
 		inspiration: 'Anne Hathaway',
@@ -1125,7 +1127,49 @@ export const shaders: Shader[] = [
 		technique: 'canvas-2d',
 		params: [
 			{ name: 'STROKE_SPEED', label: 'Stroke Speed', min: 0.3, max: 2.0, step: 0.1, default: 1.0 },
-			{ name: 'INK_DENSITY', label: 'Ink Density', min: 0.3, max: 2.0, step: 0.1, default: 1.0 }
+			{ name: 'INK_DENSITY', label: 'Ink Density', min: 0.3, max: 2.0, step: 0.1, default: 1.0 },
+			{ name: 'GOLD_AMOUNT', label: 'Gold Leaf', min: 0.0, max: 2.0, step: 0.1, default: 1.0 },
+			{ name: 'PALETTE', label: 'Dark Mode', min: 0.0, max: 1.0, step: 1.0, default: 0.0 }
+		]
+	},
+	{
+		id: 'velvet-spotlight',
+		file: 'velvet-spotlight.html',
+		title: 'Velvet Spotlight',
+		desc: 'Theatrical dust particles caught in sweeping spotlight cones with volumetric rays and warm scattering haze.',
+		inspiration: 'Anne Hathaway',
+		tags: ['fill', 'particles'],
+		technique: 'canvas-2d',
+		params: [
+			{ name: 'DUST_DENSITY', label: 'Dust Density', min: 0.3, max: 2.0, step: 0.1, default: 1.0 },
+			{ name: 'SWEEP_SPEED', label: 'Sweep Speed', min: 0.1, max: 1.5, step: 0.05, default: 0.5 }
+		]
+	},
+	{
+		id: 'murmuration',
+		file: 'murmuration.html',
+		title: 'Murmuration',
+		desc: 'Thousands of flocking particles forming flowing ribbons with emergent density waves against a warm twilight sky.',
+		inspiration: 'Anne Hathaway',
+		tags: ['fill', 'particles', 'physics'],
+		technique: 'canvas-2d',
+		params: [
+			{ name: 'FLOCK_SIZE', label: 'Flock Size', min: 0.3, max: 2.0, step: 0.1, default: 1.0 },
+			{ name: 'COHESION', label: 'Cohesion', min: 0.3, max: 2.0, step: 0.1, default: 1.0 },
+			{ name: 'PALETTE', label: 'Twilight', min: 0.0, max: 1.0, step: 1.0, default: 1.0 }
+		]
+	},
+	{
+		id: 'frost-veil',
+		file: 'frost-veil.html',
+		title: 'Frost Veil',
+		desc: 'Dendritic frost crystallization spreading across a warm amber surface with prismatic edge highlights.',
+		inspiration: 'Anne Hathaway',
+		tags: ['fill', 'organic'],
+		technique: 'webgl',
+		params: [
+			{ name: 'GROWTH_SPEED', label: 'Growth Speed', min: 0.3, max: 3.0, step: 0.1, default: 1.0 },
+			{ name: 'FROST_DENSITY', label: 'Frost Density', min: 0.3, max: 2.0, step: 0.1, default: 1.0 }
 		]
 	}
 ];
