@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Velvet Spotlight</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed; top: 20px; left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px; letter-spacing: 0.15em; text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5); z-index: 10; pointer-events: none; user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Velvet Spotlight</div>
+<canvas id="canvas"></canvas>
+<script>
+(function() {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var urlParams = new URLSearchParams(window.location.search);
+  var pixelScale = parseFloat(urlParams.get('p')) || 1;
+
+  var ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  var dpr = window.devicePixelRatio || 1;
+  var W, H;
+
+  // ── Tunable params ──
+  var DUST_DENSITY = 1.0;
+  var SWEEP_SPEED = prefersReduced ? 0.1 : 0.5;
+
+  // ── Resize ──
+  function resize() {
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = (W * dpr / pixelScale) | 0;
+    canvas.height = (H * dpr / pixelScale) | 0;
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+    ctx.setTransform(dpr / pixelScale, 0, 0, dpr / pixelScale, 0, 0);
+    initParticles();
+    initSpotlights();
+  }
+
+  // ── Particles ──
+  var particles = [];
+  var brightMotes = [];
+  var BASE_PARTICLE_COUNT = 4000;
+  var BASE_MOTE_COUNT = 20;
+
+  function initParticles() {
+    var count = (BASE_PARTICLE_COUNT * DUST_DENSITY) | 0;
+    count = Math.max(1000, Math.min(count, 8000));
+    particles = [];
+    for (var i = 0; i < count; i++) {
+      particles.push({
+        x: Math.random() * W,
+        y: Math.random() * H,
+        vx: (Math.random() - 0.5) * 0.3,
+        vy: (Math.random() - 0.5) * 0.3,
+        size: 1 + Math.random() * 1.5,
+        brightness: 0.5 + Math.random() * 0.5,
+        noiseOffsetX: Math.random() * 1000,
+        noiseOffsetY: Math.random() * 1000
+      });
+    }
+
+    var moteCount = (BASE_MOTE_COUNT * DUST_DENSITY) | 0;
+    moteCount = Math.max(5, Math.min(moteCount, 40));
+    brightMotes = [];
+    for (var i = 0; i < moteCount; i++) {
+      brightMotes.push({
+        x: Math.random() * W,
+        y: Math.random() * H,
+        vx: (Math.random() - 0.5) * 0.1,
+        vy: (Math.random() - 0.5) * 0.1,
+        size: 3 + Math.random() * 3,
+        brightness: 0.7 + Math.random() * 0.3,
+        noiseOffsetX: Math.random() * 1000,
+        noiseOffsetY: Math.random() * 1000,
+        glowPhase: Math.random() * Math.PI * 2
+      });
+    }
+  }
+
+  // ── Spotlights ──
+  var spotlights = [];
+
+  function initSpotlights() {
+    var diag = Math.sqrt(W * W + H * H);
+    spotlights = [
+      {
+        // Warm amber from upper left
+        ox: -W * 0.1,
+        oy: -H * 0.2,
+        angle: Math.PI * 0.35,
+        angleBase: Math.PI * 0.35,
+        angleRange: 0.4,
+        angleSpeed: 0.13,
+        anglePhase: 0,
+        coneWidth: 0.55,
+        reach: diag * 1.2,
+        r: 240, g: 232, b: 220,  // warm white #f0e8dc
+        intensity: 1.0,
+        breathPhase: 0,
+        breathSpeed: 0.3,
+        rayCount: 10
+      },
+      {
+        // Cool accent from upper right
+        ox: W * 1.1,
+        oy: -H * 0.15,
+        angle: Math.PI * 0.65,
+        angleBase: Math.PI * 0.65,
+        angleRange: 0.35,
+        angleSpeed: 0.09,
+        anglePhase: Math.PI * 0.7,
+        coneWidth: 0.5,
+        reach: diag * 1.1,
+        r: 208, g: 220, b: 232,  // cool #d0dce8
+        intensity: 0.85,
+        breathPhase: Math.PI * 0.5,
+        breathSpeed: 0.25,
+        rayCount: 9
+      },
+      {
+        // Amber from upper center-right
+        ox: W * 0.6,
+        oy: -H * 0.25,
+        angle: Math.PI * 0.5,
+        angleBase: Math.PI * 0.5,
+        angleRange: 0.3,
+        angleSpeed: 0.07,
+        anglePhase: Math.PI * 1.3,
+        coneWidth: 0.45,
+        reach: diag * 1.0,
+        r: 200, g: 149, b: 108,  // amber #c8956c
+        intensity: 0.75,
+        breathPhase: Math.PI,
+        breathSpeed: 0.35,
+        rayCount: 8
+      },
+      {
+        // Warm white from upper-left area, narrower
+        ox: W * 0.15,
+        oy: -H * 0.3,
+        angle: Math.PI * 0.45,
+        angleBase: Math.PI * 0.45,
+        angleRange: 0.25,
+        angleSpeed: 0.11,
+        anglePhase: Math.PI * 2.1,
+        coneWidth: 0.38,
+        reach: diag * 0.9,
+        r: 255, g: 248, b: 240,  // bright warm white
+        intensity: 0.65,
+        breathPhase: Math.PI * 1.5,
+        breathSpeed: 0.28,
+        rayCount: 7
+      }
+    ];
+  }
+
+  // ── Simple pseudo-noise for Brownian motion ──
+  // Not full simplex, just smooth enough for particle drift
+  function smoothNoise(x, y) {
+    var ix = Math.floor(x);
+    var iy = Math.floor(y);
+    var fx = x - ix;
+    var fy = y - iy;
+    // Smoothstep
+    fx = fx * fx * (3 - 2 * fx);
+    fy = fy * fy * (3 - 2 * fy);
+
+    var a = hashf(ix, iy);
+    var b = hashf(ix + 1, iy);
+    var c = hashf(ix, iy + 1);
+    var d = hashf(ix + 1, iy + 1);
+
+    return a + (b - a) * fx + (c - a) * fy + (a - b - c + d) * fx * fy;
+  }
+
+  function hashf(x, y) {
+    var n = x * 374761393 + y * 668265263;
+    n = (n ^ (n >> 13)) * 1274126177;
+    return ((n ^ (n >> 16)) & 0x7fffffff) / 0x7fffffff;
+  }
+
+  // ── Spotlight illumination calculation ──
+  function getSpotlightIllumination(px, py, sl) {
+    var dx = px - sl.ox;
+    var dy = py - sl.oy;
+    var dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist < 1) return 0;
+    if (dist > sl.reach) return 0;
+
+    // Angle from spotlight origin to particle
+    var angleToParticle = Math.atan2(dy, dx);
+
+    // Angular distance from cone center
+    var angleDiff = angleToParticle - sl.angle;
+    // Normalize to -PI..PI
+    while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+    while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+
+    var halfCone = sl.coneWidth * 0.5;
+    if (Math.abs(angleDiff) > halfCone) return 0;
+
+    // Gaussian falloff from center of cone
+    var normalizedAngle = angleDiff / halfCone;
+    var angularFalloff = Math.exp(-normalizedAngle * normalizedAngle * 3);
+
+    // Distance falloff - inverse square-ish but softer
+    var normalizedDist = dist / sl.reach;
+    var distFalloff = 1 - normalizedDist;
+    distFalloff = distFalloff * distFalloff;
+
+    // Combine with a slight widening of the cone with distance (like a real cone)
+    var coneWidthAtDist = halfCone * (0.3 + 0.7 * normalizedDist);
+    var coneNorm = angleDiff / coneWidthAtDist;
+    var coneFalloff = Math.exp(-coneNorm * coneNorm * 2.5);
+
+    return coneFalloff * distFalloff * sl.intensity * sl.currentBreath;
+  }
+
+  // ── Animation state ──
+  var time = 0;
+  var running = true;
+  var lastTime = 0;
+
+  function draw(timestamp) {
+    if (!running) {
+      lastTime = 0;
+      requestAnimationFrame(draw);
+      return;
+    }
+
+    if (!lastTime) lastTime = timestamp;
+    var dt = Math.min((timestamp - lastTime) / 1000, 0.05); // cap at 50ms
+    lastTime = timestamp;
+    time += dt * SWEEP_SPEED;
+
+    // Clear
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = '#0a0a0a';
+    ctx.fillRect(0, 0, W, H);
+
+    // ── Update spotlights ──
+    for (var s = 0; s < spotlights.length; s++) {
+      var sl = spotlights[s];
+      sl.angle = sl.angleBase + Math.sin(time * sl.angleSpeed * 2 + sl.anglePhase) * sl.angleRange;
+      sl.currentBreath = 0.7 + 0.3 * Math.sin(time * sl.breathSpeed * 2 + sl.breathPhase);
+    }
+
+    // ── Draw spotlight cones (atmospheric glow layer) ──
+    ctx.globalCompositeOperation = 'lighter';
+
+    for (var s = 0; s < spotlights.length; s++) {
+      var sl = spotlights[s];
+      drawSpotlightCone(sl);
+    }
+
+    // ── Draw volumetric rays ──
+    for (var s = 0; s < spotlights.length; s++) {
+      drawVolumetricRays(spotlights[s]);
+    }
+
+    // ── Update and draw particles ──
+    drawParticles(dt);
+
+    // ── Draw bright motes ──
+    drawBrightMotes(dt);
+
+    // ── Light scattering haze near spotlight centers ──
+    drawScatteringHaze();
+
+    requestAnimationFrame(draw);
+  }
+
+  function drawSpotlightCone(sl) {
+    // Draw the cone as a filled wedge shape with radial gradient
+    var halfCone = sl.coneWidth * 0.5;
+    var startAngle = sl.angle - halfCone;
+    var endAngle = sl.angle + halfCone;
+    var reach = sl.reach;
+
+    // Create radial gradient from origin outward along cone axis
+    var endX = sl.ox + Math.cos(sl.angle) * reach;
+    var endY = sl.oy + Math.sin(sl.angle) * reach;
+
+    var grad = ctx.createRadialGradient(sl.ox, sl.oy, 0, sl.ox, sl.oy, reach);
+    var baseAlpha = 0.04 * sl.intensity * sl.currentBreath;
+    grad.addColorStop(0, 'rgba(' + sl.r + ',' + sl.g + ',' + sl.b + ',' + (baseAlpha * 2.5).toFixed(4) + ')');
+    grad.addColorStop(0.2, 'rgba(' + sl.r + ',' + sl.g + ',' + sl.b + ',' + (baseAlpha * 1.8).toFixed(4) + ')');
+    grad.addColorStop(0.5, 'rgba(' + sl.r + ',' + sl.g + ',' + sl.b + ',' + (baseAlpha * 1.0).toFixed(4) + ')');
+    grad.addColorStop(0.8, 'rgba(' + sl.r + ',' + sl.g + ',' + sl.b + ',' + (baseAlpha * 0.3).toFixed(4) + ')');
+    grad.addColorStop(1, 'rgba(' + sl.r + ',' + sl.g + ',' + sl.b + ',0)');
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(sl.ox, sl.oy);
+    // Draw arc for the cone
+    var segments = 40;
+    for (var i = 0; i <= segments; i++) {
+      var a = startAngle + (endAngle - startAngle) * (i / segments);
+      var x = sl.ox + Math.cos(a) * reach;
+      var y = sl.oy + Math.sin(a) * reach;
+      ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.fillStyle = grad;
+    ctx.fill();
+    ctx.restore();
+
+    // Draw a second, narrower, brighter inner cone for more depth
+    var innerHalf = halfCone * 0.4;
+    var innerStart = sl.angle - innerHalf;
+    var innerEnd = sl.angle + innerHalf;
+
+    var innerGrad = ctx.createRadialGradient(sl.ox, sl.oy, 0, sl.ox, sl.oy, reach * 0.7);
+    var innerAlpha = 0.03 * sl.intensity * sl.currentBreath;
+    innerGrad.addColorStop(0, 'rgba(' + sl.r + ',' + sl.g + ',' + sl.b + ',' + (innerAlpha * 2.0).toFixed(4) + ')');
+    innerGrad.addColorStop(0.3, 'rgba(' + sl.r + ',' + sl.g + ',' + sl.b + ',' + (innerAlpha * 1.2).toFixed(4) + ')');
+    innerGrad.addColorStop(0.7, 'rgba(' + sl.r + ',' + sl.g + ',' + sl.b + ',' + (innerAlpha * 0.4).toFixed(4) + ')');
+    innerGrad.addColorStop(1, 'rgba(' + sl.r + ',' + sl.g + ',' + sl.b + ',0)');
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(sl.ox, sl.oy);
+    for (var i = 0; i <= segments; i++) {
+      var a = innerStart + (innerEnd - innerStart) * (i / segments);
+      var x = sl.ox + Math.cos(a) * reach * 0.7;
+      var y = sl.oy + Math.sin(a) * reach * 0.7;
+      ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.fillStyle = innerGrad;
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawVolumetricRays(sl) {
+    var halfCone = sl.coneWidth * 0.5;
+    var rayAlpha = 0.012 * sl.intensity * sl.currentBreath;
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.lineWidth = 1;
+
+    for (var r = 0; r < sl.rayCount; r++) {
+      // Distribute rays across the cone with slight randomness based on index
+      var t = (r + 0.5) / sl.rayCount;
+      var rayAngle = sl.angle - halfCone + sl.coneWidth * t;
+      // Add slight wavering
+      rayAngle += Math.sin(time * 0.7 + r * 2.3) * 0.015;
+
+      var reach = sl.reach * (0.6 + 0.4 * hashf(r * 17, sl.rayCount));
+
+      // Vary ray alpha slightly
+      var thisAlpha = rayAlpha * (0.5 + 0.5 * hashf(r * 31, sl.rayCount + 7));
+
+      ctx.beginPath();
+      ctx.moveTo(sl.ox, sl.oy);
+      ctx.lineTo(
+        sl.ox + Math.cos(rayAngle) * reach,
+        sl.oy + Math.sin(rayAngle) * reach
+      );
+      ctx.strokeStyle = 'rgba(' + sl.r + ',' + sl.g + ',' + sl.b + ',' + thisAlpha.toFixed(4) + ')';
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
+  function drawParticles(dt) {
+    ctx.globalCompositeOperation = 'lighter';
+
+    var noiseTime = time * 0.3;
+
+    for (var i = 0; i < particles.length; i++) {
+      var p = particles[i];
+
+      // Brownian motion via noise
+      var nx = smoothNoise(p.noiseOffsetX + noiseTime, p.noiseOffsetY) * 2 - 1;
+      var ny = smoothNoise(p.noiseOffsetX, p.noiseOffsetY + noiseTime) * 2 - 1;
+
+      p.vx += nx * 0.05 * dt;
+      p.vy += ny * 0.05 * dt;
+
+      // Damping
+      p.vx *= 0.995;
+      p.vy *= 0.995;
+
+      // Very slight upward drift (dust tends to float up in warm light)
+      p.vy -= 0.003 * dt;
+
+      p.x += p.vx;
+      p.y += p.vy;
+
+      // Wrap
+      if (p.x < -10) p.x += W + 20;
+      if (p.x > W + 10) p.x -= W + 20;
+      if (p.y < -10) p.y += H + 20;
+      if (p.y > H + 10) p.y -= H + 20;
+
+      // Calculate total illumination from all spotlights
+      var totalIllum = 0;
+      var totalR = 0, totalG = 0, totalB = 0;
+
+      for (var s = 0; s < spotlights.length; s++) {
+        var sl = spotlights[s];
+        var illum = getSpotlightIllumination(p.x, p.y, sl);
+        if (illum > 0) {
+          totalIllum += illum;
+          totalR += sl.r * illum;
+          totalG += sl.g * illum;
+          totalB += sl.b * illum;
+        }
+      }
+
+      if (totalIllum < 0.02) continue;
+
+      // Normalize color by illumination
+      var r = Math.min(255, (totalR / totalIllum) | 0);
+      var g = Math.min(255, (totalG / totalIllum) | 0);
+      var b = Math.min(255, (totalB / totalIllum) | 0);
+
+      // Particle alpha based on illumination and intrinsic brightness
+      var alpha = Math.min(1, totalIllum * p.brightness * 1.5);
+
+      // Boost brightness in overlap zones
+      if (totalIllum > 0.5) {
+        alpha = Math.min(1, alpha * 1.3);
+        // Shift toward white in bright overlaps
+        var whiteBlend = Math.min(1, (totalIllum - 0.5) * 0.8);
+        r = r + (255 - r) * whiteBlend * 0.4;
+        g = g + (255 - g) * whiteBlend * 0.4;
+        b = b + (255 - b) * whiteBlend * 0.4;
+      }
+
+      ctx.fillStyle = 'rgba(' + (r | 0) + ',' + (g | 0) + ',' + (b | 0) + ',' + alpha.toFixed(3) + ')';
+      ctx.fillRect(p.x - p.size * 0.5, p.y - p.size * 0.5, p.size, p.size);
+    }
+  }
+
+  function drawBrightMotes(dt) {
+    ctx.globalCompositeOperation = 'lighter';
+
+    var noiseTime = time * 0.15;
+
+    for (var i = 0; i < brightMotes.length; i++) {
+      var m = brightMotes[i];
+
+      // Slower, more graceful motion
+      var nx = smoothNoise(m.noiseOffsetX + noiseTime, m.noiseOffsetY) * 2 - 1;
+      var ny = smoothNoise(m.noiseOffsetX, m.noiseOffsetY + noiseTime) * 2 - 1;
+
+      m.vx += nx * 0.02 * dt;
+      m.vy += ny * 0.02 * dt;
+      m.vx *= 0.99;
+      m.vy *= 0.99;
+      m.vy -= 0.005 * dt;
+
+      m.x += m.vx;
+      m.y += m.vy;
+
+      // Wrap
+      if (m.x < -20) m.x += W + 40;
+      if (m.x > W + 20) m.x -= W + 40;
+      if (m.y < -20) m.y += H + 40;
+      if (m.y > H + 20) m.y -= H + 40;
+
+      // Illumination
+      var totalIllum = 0;
+      var totalR = 0, totalG = 0, totalB = 0;
+
+      for (var s = 0; s < spotlights.length; s++) {
+        var sl = spotlights[s];
+        var illum = getSpotlightIllumination(m.x, m.y, sl);
+        if (illum > 0) {
+          totalIllum += illum;
+          totalR += sl.r * illum;
+          totalG += sl.g * illum;
+          totalB += sl.b * illum;
+        }
+      }
+
+      if (totalIllum < 0.015) continue;
+
+      var r = Math.min(255, (totalR / totalIllum) | 0);
+      var g = Math.min(255, (totalG / totalIllum) | 0);
+      var b = Math.min(255, (totalB / totalIllum) | 0);
+
+      // Motes have a gentle pulsing glow
+      var pulse = 0.7 + 0.3 * Math.sin(time * 1.5 + m.glowPhase);
+      var alpha = Math.min(1, totalIllum * m.brightness * pulse * 2.0);
+
+      // Shift toward bright white
+      var whiteBlend = Math.min(1, totalIllum * 0.6);
+      r = r + (255 - r) * whiteBlend * 0.5;
+      g = g + (255 - g) * whiteBlend * 0.5;
+      b = b + (255 - b) * whiteBlend * 0.5;
+
+      // Draw soft glow around the mote
+      var glowSize = m.size * 3;
+      var grad = ctx.createRadialGradient(m.x, m.y, 0, m.x, m.y, glowSize);
+      var glowAlpha = alpha * 0.3;
+      grad.addColorStop(0, 'rgba(' + (r | 0) + ',' + (g | 0) + ',' + (b | 0) + ',' + alpha.toFixed(3) + ')');
+      grad.addColorStop(0.3, 'rgba(' + (r | 0) + ',' + (g | 0) + ',' + (b | 0) + ',' + (glowAlpha * 0.7).toFixed(3) + ')');
+      grad.addColorStop(1, 'rgba(' + (r | 0) + ',' + (g | 0) + ',' + (b | 0) + ',0)');
+
+      ctx.beginPath();
+      ctx.arc(m.x, m.y, glowSize, 0, Math.PI * 2);
+      ctx.fillStyle = grad;
+      ctx.fill();
+
+      // Draw the bright core
+      ctx.fillStyle = 'rgba(' + (r | 0) + ',' + (g | 0) + ',' + (b | 0) + ',' + alpha.toFixed(3) + ')';
+      ctx.beginPath();
+      ctx.arc(m.x, m.y, m.size * 0.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function drawScatteringHaze() {
+    ctx.globalCompositeOperation = 'lighter';
+
+    for (var s = 0; s < spotlights.length; s++) {
+      var sl = spotlights[s];
+      // Place haze blob slightly in front of the spotlight origin, along its direction
+      var hazeDist = Math.min(W, H) * 0.25;
+      var hx = sl.ox + Math.cos(sl.angle) * hazeDist;
+      var hy = sl.oy + Math.sin(sl.angle) * hazeDist;
+      var hazeRadius = Math.min(W, H) * 0.3;
+
+      var hazeAlpha = 0.015 * sl.intensity * sl.currentBreath;
+
+      var grad = ctx.createRadialGradient(hx, hy, 0, hx, hy, hazeRadius);
+      grad.addColorStop(0, 'rgba(' + sl.r + ',' + sl.g + ',' + sl.b + ',' + hazeAlpha.toFixed(4) + ')');
+      grad.addColorStop(0.4, 'rgba(' + sl.r + ',' + sl.g + ',' + sl.b + ',' + (hazeAlpha * 0.5).toFixed(4) + ')');
+      grad.addColorStop(1, 'rgba(' + sl.r + ',' + sl.g + ',' + sl.b + ',0)');
+
+      ctx.fillStyle = grad;
+      ctx.fillRect(hx - hazeRadius, hy - hazeRadius, hazeRadius * 2, hazeRadius * 2);
+    }
+  }
+
+  // ── Visibility change pause ──
+  document.addEventListener('visibilitychange', function() {
+    running = !document.hidden;
+    if (running) lastTime = 0;
+  });
+
+  // ── PostMessage param listener ──
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'DUST_DENSITY':
+          DUST_DENSITY = Math.max(0.3, Math.min(2.0, e.data.value));
+          initParticles();
+          break;
+        case 'SWEEP_SPEED':
+          SWEEP_SPEED = Math.max(0.1, Math.min(1.5, e.data.value));
+          break;
+      }
+    }
+  });
+
+  // ── Resize listener ──
+  window.addEventListener('resize', resize);
+
+  // ── Init and start ──
+  resize();
+  requestAnimationFrame(draw);
+})();
+</script>
+</body>
+</html>

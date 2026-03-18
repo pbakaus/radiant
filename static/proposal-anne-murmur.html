@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Murmuration</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Murmuration</div>
+<canvas id="canvas"></canvas>
+<script>
+(function () {
+  var canvas = document.getElementById('canvas');
+  var ctx = canvas.getContext('2d');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var urlParams = new URLSearchParams(window.location.search);
+  var pixelScale = parseFloat(urlParams.get('p')) || 1;
+
+  // ── Tunable params ──
+  var FLOCK_SIZE = 1.0;
+  var COHESION_PARAM = 1.0;
+  var PALETTE = 0; // 0 = dark, 1 = twilight
+
+  // ── Constants ──
+  var BASE_COUNT = 2500;
+  var MAX_SPEED = 240;
+  var MIN_SPEED = 80;
+  var SEPARATION_RADIUS = 14;
+  var NEIGHBOR_RADIUS = 50;
+  var SEPARATION_WEIGHT = 350;
+  var ALIGNMENT_WEIGHT = 5.0;
+  var COHESION_WEIGHT = 0.3;
+  var WIND_SCALE = 0.0003;
+  var WIND_STRENGTH = 120;
+  var CELL_SIZE = 55;
+  var TRAIL_ALPHA = 0.085;
+  var IMPULSE_INTERVAL_MIN = 5000;
+  var IMPULSE_INTERVAL_MAX = 8000;
+  var IMPULSE_SPEED = 300;
+  var IMPULSE_STRENGTH = 140;
+  var IMPULSE_FALLOFF = 0.5;
+
+  // ── State ──
+  var W, H, dpr;
+  var running = true;
+  var time = 0;
+  var lastTime = 0;
+  var frameCount = 0;
+
+  // Particle arrays (SoA for cache friendliness)
+  var px, py, pvx, pvy, psize, pbright;
+  var pcount = 0;
+
+  // Spatial grid
+  var gridData, gridCount;
+  var gridCols, gridRows, gridTotal;
+  var GRID_CAPACITY = 40;
+
+  // Pre-rendered glow sprite
+  var glowCanvas, glowCtx, glowSize = 80;
+
+  // Wandering attractor point
+  var attractX, attractY;
+
+  // Impulse waves
+  var impulses = [];
+  var nextImpulseTime = 0;
+
+  // ── Glow sprite ──
+  function createGlowSprite() {
+    glowCanvas = document.createElement('canvas');
+    glowCanvas.width = glowSize * 2;
+    glowCanvas.height = glowSize * 2;
+    glowCtx = glowCanvas.getContext('2d');
+    var g = glowCtx.createRadialGradient(glowSize, glowSize, 0, glowSize, glowSize, glowSize);
+    g.addColorStop(0, 'rgba(200, 149, 108, 1)');
+    g.addColorStop(0.3, 'rgba(200, 149, 108, 0.5)');
+    g.addColorStop(1, 'rgba(200, 149, 108, 0)');
+    glowCtx.fillStyle = g;
+    glowCtx.fillRect(0, 0, glowSize * 2, glowSize * 2);
+  }
+
+  // ── Value noise for wind field ──
+  var noiseSeed = Math.random() * 65536;
+  function hashN(x, y) {
+    var n = Math.sin(x * 127.1 + y * 311.7 + noiseSeed) * 43758.5453;
+    return n - Math.floor(n);
+  }
+
+  function smoothNoise(x, y) {
+    var ix = Math.floor(x), iy = Math.floor(y);
+    var fx = x - ix, fy = y - iy;
+    fx = fx * fx * (3 - 2 * fx);
+    fy = fy * fy * (3 - 2 * fy);
+    var a = hashN(ix, iy);
+    var b = hashN(ix + 1, iy);
+    var c = hashN(ix, iy + 1);
+    var d = hashN(ix + 1, iy + 1);
+    return a + (b - a) * fx + (c - a) * fy + (a - b - c + d) * fx * fy;
+  }
+
+  function fbmNoise(x, y) {
+    return smoothNoise(x, y) * 0.65 + smoothNoise(x * 2.1, y * 2.1) * 0.25 + smoothNoise(x * 4.3, y * 4.3) * 0.1;
+  }
+
+  // ── Impulse system ──
+  function scheduleImpulse() {
+    nextImpulseTime = time + IMPULSE_INTERVAL_MIN + Math.random() * (IMPULSE_INTERVAL_MAX - IMPULSE_INTERVAL_MIN);
+  }
+
+  function spawnImpulse() {
+    var edge = Math.random() * 4 | 0;
+    var ox, oy, dx, dy;
+    if (edge === 0) { ox = -50; oy = Math.random() * H; dx = 1; dy = (Math.random() - 0.5) * 0.5; }
+    else if (edge === 1) { ox = W + 50; oy = Math.random() * H; dx = -1; dy = (Math.random() - 0.5) * 0.5; }
+    else if (edge === 2) { ox = Math.random() * W; oy = -50; dx = (Math.random() - 0.5) * 0.5; dy = 1; }
+    else { ox = Math.random() * W; oy = H + 50; dx = (Math.random() - 0.5) * 0.5; dy = -1; }
+    var len = Math.sqrt(dx * dx + dy * dy);
+    dx /= len; dy /= len;
+    impulses.push({ ox: ox, oy: oy, dx: dx, dy: dy, born: time, front: 0 });
+    scheduleImpulse();
+  }
+
+  // ── Resize ──
+  function resize() {
+    dpr = Math.min(window.devicePixelRatio || 1, 1.5) * pixelScale;
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = W * dpr;
+    canvas.height = H * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    allocateGrid();
+  }
+
+  function allocateGrid() {
+    gridCols = Math.ceil(W / CELL_SIZE) + 2;
+    gridRows = Math.ceil(H / CELL_SIZE) + 2;
+    gridTotal = gridCols * gridRows;
+    gridCount = new Int32Array(gridTotal);
+    gridData = new Int32Array(gridTotal * GRID_CAPACITY);
+  }
+
+  // ── Particle init ──
+  function initParticles() {
+    pcount = Math.round(BASE_COUNT * FLOCK_SIZE);
+    pcount = Math.max(600, Math.min(pcount, 5000));
+
+    px = new Float32Array(pcount);
+    py = new Float32Array(pcount);
+    pvx = new Float32Array(pcount);
+    pvy = new Float32Array(pcount);
+    psize = new Float32Array(pcount);
+    pbright = new Float32Array(pcount);
+
+    // Start in clusters near center
+    var nc = 2 + (Math.random() * 2 | 0);
+    var cxArr = [], cyArr = [];
+    var baseCX = W * 0.35 + Math.random() * W * 0.3;
+    var baseCY = H * 0.35 + Math.random() * H * 0.3;
+    for (var c = 0; c < nc; c++) {
+      cxArr.push(baseCX + (Math.random() - 0.5) * 200);
+      cyArr.push(baseCY + (Math.random() - 0.5) * 150);
+    }
+
+    for (var i = 0; i < pcount; i++) {
+      var ci = i % nc;
+      var ang = Math.random() * 6.2832;
+      var spread = 20 + Math.random() * 100;
+      px[i] = cxArr[ci] + Math.cos(ang) * spread;
+      py[i] = cyArr[ci] + Math.sin(ang) * spread;
+      var dir = Math.random() * 6.2832;
+      var spd = MIN_SPEED + Math.random() * (MAX_SPEED - MIN_SPEED) * 0.35;
+      pvx[i] = Math.cos(dir) * spd;
+      pvy[i] = Math.sin(dir) * spd;
+      psize[i] = 1.0 + Math.random() * 0.7;
+      pbright[i] = 0.45 + Math.random() * 0.55;
+    }
+  }
+
+  // ── Spatial grid ──
+  function buildGrid() {
+    for (var i = 0; i < gridTotal; i++) gridCount[i] = 0;
+
+    for (var i = 0; i < pcount; i++) {
+      var col = ((px[i] / CELL_SIZE) | 0) + 1;
+      var row = ((py[i] / CELL_SIZE) | 0) + 1;
+      if (col < 0) col = 0;
+      if (col >= gridCols) col = gridCols - 1;
+      if (row < 0) row = 0;
+      if (row >= gridRows) row = gridRows - 1;
+      var cell = row * gridCols + col;
+      var cnt = gridCount[cell];
+      if (cnt < GRID_CAPACITY) {
+        gridData[cell * GRID_CAPACITY + cnt] = i;
+        gridCount[cell] = cnt + 1;
+      }
+    }
+  }
+
+  // ── Update ──
+  function updateParticles(dt) {
+    var cohW = COHESION_WEIGHT * COHESION_PARAM;
+    var nR2 = NEIGHBOR_RADIUS * NEIGHBOR_RADIUS;
+    var sR2 = SEPARATION_RADIUS * SEPARATION_RADIUS;
+    var windT = time * 0.00007;
+
+    buildGrid();
+
+    // Flock center of mass
+    var flockCX = 0, flockCY = 0;
+    for (var i = 0; i < pcount; i++) {
+      flockCX += px[i];
+      flockCY += py[i];
+    }
+    flockCX /= pcount;
+    flockCY /= pcount;
+
+    // Wandering attractor: noise-driven organic drift across canvas
+    var at = time * 0.00015;
+    attractX = W * 0.1 + smoothNoise(at, 3.7) * W * 0.8;
+    attractY = H * 0.1 + smoothNoise(7.1, at) * H * 0.8;
+
+    // Advance impulses
+    var diag = Math.sqrt(W * W + H * H) * 1.3;
+    for (var imp = impulses.length - 1; imp >= 0; imp--) {
+      impulses[imp].front += IMPULSE_SPEED * dt;
+      if (impulses[imp].front > diag) impulses.splice(imp, 1);
+    }
+
+    var maxDim = Math.max(W, H);
+
+    for (var i = 0; i < pcount; i++) {
+      var x = px[i], y = py[i];
+      var vx = pvx[i], vy = pvy[i];
+      var col = ((x / CELL_SIZE) | 0) + 1;
+      var row = ((y / CELL_SIZE) | 0) + 1;
+      if (col < 1) col = 1;
+      if (col >= gridCols - 1) col = gridCols - 2;
+      if (row < 1) row = 1;
+      if (row >= gridRows - 1) row = gridRows - 2;
+
+      var sepX = 0, sepY = 0, sepN = 0;
+      var aliX = 0, aliY = 0, aliN = 0;
+      var cohX = 0, cohY = 0, cohN = 0;
+
+      for (var dc = -1; dc <= 1; dc++) {
+        for (var dr = -1; dr <= 1; dr++) {
+          var cell = (row + dr) * gridCols + (col + dc);
+          var cnt = gridCount[cell];
+          var base = cell * GRID_CAPACITY;
+          for (var k = 0; k < cnt; k++) {
+            var j = gridData[base + k];
+            if (j === i) continue;
+            var ddx = px[j] - x;
+            var ddy = py[j] - y;
+            var d2 = ddx * ddx + ddy * ddy;
+
+            if (d2 < sR2 && d2 > 0.1) {
+              // Separation weighted by 1/d^2 (avoid sqrt)
+              var invD2 = 1.0 / d2;
+              sepX -= ddx * invD2;
+              sepY -= ddy * invD2;
+              sepN++;
+            }
+
+            if (d2 < nR2) {
+              aliX += pvx[j];
+              aliY += pvy[j];
+              aliN++;
+              cohX += px[j];
+              cohY += py[j];
+              cohN++;
+            }
+          }
+        }
+      }
+
+      var ax = 0, ay = 0;
+
+      if (sepN > 0) {
+        ax += sepX * SEPARATION_WEIGHT;
+        ay += sepY * SEPARATION_WEIGHT;
+      }
+
+      if (aliN > 0) {
+        var invAli = 1.0 / aliN;
+        ax += (aliX * invAli - vx) * ALIGNMENT_WEIGHT;
+        ay += (aliY * invAli - vy) * ALIGNMENT_WEIGHT;
+      }
+
+      if (cohN > 0) {
+        var invCoh = 1.0 / cohN;
+        ax += (cohX * invCoh - x) * cohW * 0.5;
+        ay += (cohY * invCoh - y) * cohW * 0.5;
+      }
+
+      // Gentle global cohesion (prevents fragmentation, not convergence)
+      var toFCX = flockCX - x;
+      var toFCY = flockCY - y;
+      var fcDist = Math.sqrt(toFCX * toFCX + toFCY * toFCY);
+      if (fcDist > 120) {
+        var normDist = (fcDist - 120) / maxDim;
+        var fcStr = normDist * 40 * cohW;
+        ax += toFCX / fcDist * fcStr;
+        ay += toFCY / fcDist * fcStr;
+      }
+
+      // Wandering attractor: pull toward the moving target
+      var toAX = attractX - x;
+      var toAY = attractY - y;
+      var aDist = Math.sqrt(toAX * toAX + toAY * toAY);
+      if (aDist > 10) {
+        var aStr = 20 + Math.min(aDist * 0.05, 30);
+        ax += toAX / aDist * aStr;
+        ay += toAY / aDist * aStr;
+      }
+
+      // Spatially varying wind: global direction shifts slowly, with local noise variation
+      // This creates sweeping forces that stretch the flock into streams
+      var globalAngle = smoothNoise(windT * 15, 0) * 6.2832;
+      var localVar = fbmNoise(x * WIND_SCALE, y * WIND_SCALE + windT * 3) * 1.5 - 0.75;
+      var windAngle = globalAngle + localVar;
+      ax += Math.cos(windAngle) * WIND_STRENGTH;
+      ay += Math.sin(windAngle) * WIND_STRENGTH;
+
+      // Impulse waves
+      for (var imp = 0; imp < impulses.length; imp++) {
+        var w = impulses[imp];
+        var rx = x - w.ox;
+        var ry = y - w.oy;
+        var proj = rx * w.dx + ry * w.dy;
+        var dist = Math.abs(proj - w.front);
+        var ww = 150;
+        if (dist < ww && proj > -20) {
+          var inf = 1 - dist / ww;
+          inf *= inf;
+          var age = (time - w.born) * 0.001;
+          var decay = Math.exp(-age * IMPULSE_FALLOFF);
+          ax += w.dx * IMPULSE_STRENGTH * inf * decay;
+          ay += w.dy * IMPULSE_STRENGTH * inf * decay;
+        }
+      }
+
+      // Boundary steering
+      var margin = 100;
+      if (x < margin) ax += (margin - x) * 1.5;
+      else if (x > W - margin) ax -= (x - W + margin) * 1.5;
+      if (y < margin) ay += (margin - y) * 1.5;
+      else if (y > H - margin) ay -= (y - H + margin) * 1.5;
+
+      // Integrate
+      vx += ax * dt;
+      vy += ay * dt;
+
+      var spd = Math.sqrt(vx * vx + vy * vy);
+      if (spd > MAX_SPEED) {
+        var inv = MAX_SPEED / spd;
+        vx *= inv; vy *= inv;
+      } else if (spd < MIN_SPEED && spd > 0.1) {
+        var inv = MIN_SPEED / spd;
+        vx *= inv; vy *= inv;
+      }
+
+      x += vx * dt;
+      y += vy * dt;
+
+      if (x < -80) x += W + 160;
+      else if (x > W + 80) x -= W + 160;
+      if (y < -80) y += H + 160;
+      else if (y > H + 80) y -= H + 160;
+
+      px[i] = x; py[i] = y;
+      pvx[i] = vx; pvy[i] = vy;
+    }
+  }
+
+  // ── Render ──
+  function render() {
+    // Trail fade — color depends on palette
+    if (PALETTE > 0.5) {
+      // Twilight: warm amber sky
+      ctx.fillStyle = 'rgba(180, 140, 100, ' + TRAIL_ALPHA + ')';
+    } else {
+      // Dark: near-black
+      ctx.fillStyle = 'rgba(10, 10, 10, ' + TRAIL_ALPHA + ')';
+    }
+    ctx.fillRect(-1, -1, W + 2, H + 2);
+
+    // Subtle gradient tint (occasional)
+    if (Math.random() < 0.03) {
+      var grd = ctx.createLinearGradient(0, 0, 0, H * 0.4);
+      if (PALETTE > 0.5) {
+        grd.addColorStop(0, 'rgba(200, 160, 110, 0.02)');
+        grd.addColorStop(1, 'rgba(180, 140, 100, 0)');
+      } else {
+        grd.addColorStop(0, 'rgba(10, 10, 20, 0.015)');
+        grd.addColorStop(1, 'rgba(10, 10, 10, 0)');
+      }
+      ctx.fillStyle = grd;
+      ctx.fillRect(0, 0, W, H * 0.4);
+    }
+
+    // Density glow pass (every 3rd frame using pre-rendered sprite) — dark mode only
+    if (frameCount % 3 === 0 && PALETTE < 0.5) {
+      ctx.globalAlpha = 0.025;
+      for (var cell = 0; cell < gridTotal; cell++) {
+        var cnt = gridCount[cell];
+        if (cnt > 12) {
+          var gcx = 0, gcy = 0;
+          var base = cell * GRID_CAPACITY;
+          for (var k = 0; k < cnt; k++) {
+            var idx = gridData[base + k];
+            gcx += px[idx];
+            gcy += py[idx];
+          }
+          gcx /= cnt; gcy /= cnt;
+          var density = Math.min(cnt / 30, 1);
+          var sz = (25 + density * 50) / glowSize;
+          ctx.globalAlpha = density * 0.03;
+          ctx.drawImage(glowCanvas, gcx - glowSize * sz, gcy - glowSize * sz, glowSize * 2 * sz, glowSize * 2 * sz);
+        }
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    // Draw all particles in two batched paths (lines + dots)
+    ctx.lineCap = 'round';
+
+    // All particles as lines in a single pass, two color layers
+    var invMax = 1.0 / MAX_SPEED;
+    var spd100 = 100;
+
+    // Dim particles
+    ctx.strokeStyle = PALETTE > 0.5 ? 'rgba(35, 25, 18, 0.6)' : 'rgba(210, 165, 128, 0.55)';
+    ctx.lineWidth = 1.0;
+    ctx.beginPath();
+    for (var i = 0; i < pcount; i++) {
+      if (pbright[i] >= 0.72) continue;
+      var vx = pvx[i], vy = pvy[i];
+      var spd2 = vx * vx + vy * vy;
+      if (spd2 < spd100) continue;
+      var spd = Math.sqrt(spd2);
+      var tailLen = spd * invMax * 4.5;
+      var inv = 1 / spd;
+      ctx.moveTo(px[i] - vx * inv * tailLen, py[i] - vy * inv * tailLen);
+      ctx.lineTo(px[i] + vx * inv * tailLen * 0.3, py[i] + vy * inv * tailLen * 0.3);
+    }
+    ctx.stroke();
+
+    // Bright particles
+    ctx.strokeStyle = PALETTE > 0.5 ? 'rgba(20, 15, 10, 0.8)' : 'rgba(228, 210, 195, 0.75)';
+    ctx.lineWidth = 1.3;
+    ctx.beginPath();
+    for (var i = 0; i < pcount; i++) {
+      if (pbright[i] < 0.72) continue;
+      var vx = pvx[i], vy = pvy[i];
+      var spd2 = vx * vx + vy * vy;
+      if (spd2 < spd100) continue;
+      var spd = Math.sqrt(spd2);
+      var tailLen = spd * invMax * 4.5;
+      var inv = 1 / spd;
+      ctx.moveTo(px[i] - vx * inv * tailLen, py[i] - vy * inv * tailLen);
+      ctx.lineTo(px[i] + vx * inv * tailLen * 0.3, py[i] + vy * inv * tailLen * 0.3);
+    }
+    ctx.stroke();
+  }
+
+  // ── Background fill ──
+  function fillBackground() {
+    var grd = ctx.createLinearGradient(0, 0, 0, H);
+    grd.addColorStop(0, '#0a0a14');
+    grd.addColorStop(1, '#0a0a0a');
+    ctx.fillStyle = grd;
+    ctx.fillRect(-1, -1, W + 2, H + 2);
+  }
+
+  // ── Main loop ──
+  function loop(ts) {
+    if (!running) { requestAnimationFrame(loop); return; }
+
+    if (lastTime === 0) lastTime = ts;
+    var rawDt = (ts - lastTime) * 0.001;
+    lastTime = ts;
+    var dt = rawDt < 0.05 ? rawDt : 0.05;
+    if (dt <= 0) dt = 0.016;
+    time += dt * 1000;
+    frameCount++;
+
+    if (prefersReduced) {
+      if (Math.random() < 0.02) {
+        updateParticles(dt * 0.1);
+        render();
+      }
+      requestAnimationFrame(loop);
+      return;
+    }
+
+    if (time > nextImpulseTime) spawnImpulse();
+
+    updateParticles(dt);
+    render();
+    requestAnimationFrame(loop);
+  }
+
+  // ── Init ──
+  createGlowSprite();
+  resize();
+  attractX = W * 0.5;
+  attractY = H * 0.5;
+  fillBackground();
+  initParticles();
+  scheduleImpulse();
+  lastTime = 0;
+  requestAnimationFrame(loop);
+
+  window.addEventListener('resize', function () {
+    var oldW = W, oldH = H;
+    resize();
+    fillBackground();
+    if (oldW > 0 && oldH > 0) {
+      var sx = W / oldW, sy = H / oldH;
+      for (var i = 0; i < pcount; i++) {
+        px[i] *= sx;
+        py[i] *= sy;
+      }
+    }
+  });
+
+  document.addEventListener('visibilitychange', function () {
+    running = !document.hidden;
+    if (running) lastTime = 0;
+  });
+
+  window.addEventListener('message', function (e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'FLOCK_SIZE':
+          FLOCK_SIZE = Math.max(0.3, Math.min(2.0, e.data.value));
+          initParticles();
+          break;
+        case 'COHESION':
+          COHESION_PARAM = Math.max(0.3, Math.min(2.0, e.data.value));
+          break;
+        case 'PALETTE':
+          PALETTE = e.data.value;
+          break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

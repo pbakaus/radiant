@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Frost Veil</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed; top: 20px; left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px; letter-spacing: 0.15em; text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5); z-index: 10; pointer-events: none; user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Frost Veil</div>
+<canvas id="canvas"></canvas>
+<script>
+(function() {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var urlParams = new URLSearchParams(window.location.search);
+  var pixelScale = parseFloat(urlParams.get('p')) || 1;
+
+  var gl = canvas.getContext('webgl', { alpha: false, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  // Tunable params
+  var GROWTH_SPEED = 1.0;
+  var FROST_DENSITY = 1.0;
+
+  // PostMessage listener
+  window.addEventListener('message', function(e) {
+    if (e.data && typeof e.data === 'object') {
+      if (e.data.GROWTH_SPEED !== undefined) GROWTH_SPEED = Math.max(0.3, Math.min(3.0, e.data.GROWTH_SPEED));
+      if (e.data.FROST_DENSITY !== undefined) FROST_DENSITY = Math.max(0.3, Math.min(2.0, e.data.FROST_DENSITY));
+    }
+  });
+
+  // Extensions for float textures
+  var floatExt = gl.getExtension('OES_texture_float');
+  var floatLinear = gl.getExtension('OES_texture_float_linear');
+  var halfFloatExt = gl.getExtension('OES_texture_half_float');
+  var halfFloatLinear = gl.getExtension('OES_texture_half_float_linear');
+
+  var useFloat = !!floatExt;
+  var useHalfFloat = !useFloat && !!halfFloatExt;
+
+  // Simulation resolution (half of display for dendrite detail)
+  var SIM_SCALE = 0.5;
+  var simW, simH, dispW, dispH;
+
+  // Fullscreen quad
+  var quadBuf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+
+  function compileShader(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error('Shader compile error:', gl.getShaderInfoLog(s));
+      return null;
+    }
+    return s;
+  }
+
+  function createProgram(vSrc, fSrc) {
+    var v = compileShader(gl.VERTEX_SHADER, vSrc);
+    var f = compileShader(gl.FRAGMENT_SHADER, fSrc);
+    if (!v || !f) return null;
+    var p = gl.createProgram();
+    gl.attachShader(p, v);
+    gl.attachShader(p, f);
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+      console.error('Program link error:', gl.getProgramInfoLog(p));
+      return null;
+    }
+    return p;
+  }
+
+  // Shared vertex shader
+  var vertSrc = [
+    'attribute vec2 a_pos;',
+    'varying vec2 v_uv;',
+    'void main() {',
+    '  v_uv = a_pos * 0.5 + 0.5;',
+    '  gl_Position = vec4(a_pos, 0.0, 1.0);',
+    '}'
+  ].join('\n');
+
+  // ============================================================
+  // INIT SHADER: clears state to all unfrozen
+  // R = frozen (0 or 1), G = age (0-1), B = unused, A = 1
+  // ============================================================
+  var initFragSrc = [
+    'precision highp float;',
+    'varying vec2 v_uv;',
+    'void main() {',
+    '  gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);',
+    '}'
+  ].join('\n');
+
+  // ============================================================
+  // SEED SHADER: plants frozen seed points
+  // ============================================================
+  var seedFragSrc = [
+    'precision highp float;',
+    'varying vec2 v_uv;',
+    'uniform sampler2D u_state;',
+    'uniform vec2 u_seeds[8];',
+    'uniform int u_seedCount;',
+    'uniform float u_seedRadius;',
+    '',
+    'void main() {',
+    '  vec4 state = texture2D(u_state, v_uv);',
+    '  for (int i = 0; i < 8; i++) {',
+    '    if (i >= u_seedCount) break;',
+    '    float d = length(v_uv - u_seeds[i]);',
+    '    if (d < u_seedRadius) {',
+    '      state.r = 1.0;',  // frozen
+    '      state.g = 0.0;',  // age = 0 (will increase over time)
+    '    }',
+    '  }',
+    '  gl_FragColor = state;',
+    '}'
+  ].join('\n');
+
+  // ============================================================
+  // SIMULATION SHADER: DLA cellular automata frost growth
+  // R = frozen (0/1), G = age (increments each frame for frozen pixels)
+  // B = reserved
+  //
+  // The key to dendritic growth: unfrozen pixels adjacent to frozen
+  // pixels freeze with probability inversely proportional to the
+  // number of frozen neighbors. Tips (fewer neighbors) grow faster
+  // than filled edges (many neighbors), creating branching.
+  // ============================================================
+  var simFragSrc = [
+    'precision highp float;',
+    'varying vec2 v_uv;',
+    'uniform sampler2D u_state;',
+    'uniform vec2 u_texel;',
+    'uniform float u_time;',
+    'uniform float u_frame;',
+    'uniform float u_growthRate;',
+    'uniform float u_branchFactor;',
+    'uniform vec2 u_seeds[8];',
+    'uniform int u_seedCount;',
+    '',
+    '// Hash functions for pseudo-randomness',
+    'float hash(vec2 p) {',
+    '  vec3 p3 = fract(vec3(p.xyx) * vec3(443.897, 441.423, 437.195));',
+    '  p3 += dot(p3, p3.yzx + 19.19);',
+    '  return fract((p3.x + p3.y) * p3.z);',
+    '}',
+    '',
+    'float hash2(vec2 p, float seed) {',
+    '  return hash(p + seed * vec2(137.31, 271.17));',
+    '}',
+    '',
+    '// Simple value noise for organic perturbation',
+    'float valueNoise(vec2 p) {',
+    '  vec2 i = floor(p);',
+    '  vec2 f = fract(p);',
+    '  f = f * f * (3.0 - 2.0 * f);',
+    '  float a = hash(i);',
+    '  float b = hash(i + vec2(1.0, 0.0));',
+    '  float c = hash(i + vec2(0.0, 1.0));',
+    '  float d = hash(i + vec2(1.0, 1.0));',
+    '  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);',
+    '}',
+    '',
+    '// Fractal noise (2 octaves for performance)',
+    'float fbm(vec2 p) {',
+    '  float v = 0.0;',
+    '  v += valueNoise(p) * 0.6;',
+    '  v += valueNoise(p * 2.03) * 0.3;',
+    '  v += valueNoise(p * 4.01) * 0.1;',
+    '  return v;',
+    '}',
+    '',
+    'void main() {',
+    '  vec4 state = texture2D(u_state, v_uv);',
+    '  float frozen = state.r;',
+    '  float age = state.g;',
+    '',
+    '  // If already frozen, just increment age and return',
+    '  if (frozen > 0.5) {',
+    '    age = min(age + 0.002, 1.0);',
+    '    gl_FragColor = vec4(frozen, age, state.b, 1.0);',
+    '    return;',
+    '  }',
+    '',
+    '  // Count frozen neighbors (8-connected)',
+    '  float n = 0.0;',
+    '  float s0 = step(0.5, texture2D(u_state, v_uv + vec2(-u_texel.x, -u_texel.y)).r);',
+    '  float s1 = step(0.5, texture2D(u_state, v_uv + vec2(0.0, -u_texel.y)).r);',
+    '  float s2 = step(0.5, texture2D(u_state, v_uv + vec2(u_texel.x, -u_texel.y)).r);',
+    '  float s3 = step(0.5, texture2D(u_state, v_uv + vec2(-u_texel.x, 0.0)).r);',
+    '  float s4 = step(0.5, texture2D(u_state, v_uv + vec2(u_texel.x, 0.0)).r);',
+    '  float s5 = step(0.5, texture2D(u_state, v_uv + vec2(-u_texel.x, u_texel.y)).r);',
+    '  float s6 = step(0.5, texture2D(u_state, v_uv + vec2(0.0, u_texel.y)).r);',
+    '  float s7 = step(0.5, texture2D(u_state, v_uv + vec2(u_texel.x, u_texel.y)).r);',
+    '  n = s0 + s1 + s2 + s3 + s4 + s5 + s6 + s7;',
+    '',
+    '  // No frozen neighbors: nothing to grow from',
+    '  if (n < 0.5) {',
+    '    gl_FragColor = state;',
+    '    return;',
+    '  }',
+    '',
+    '  // ---- BRANCHING RULE ----',
+    '  // Fewer frozen neighbors = higher freeze probability',
+    '  // This is the core mechanic that creates dendrites:',
+    '  // tips (1-2 neighbors) advance quickly, flat edges (3+ neighbors) slow down',
+    '  float branchProb = 1.0 / (1.0 + n * u_branchFactor);',
+    '',
+    '  // ---- ANISOTROPIC CRYSTAL BIAS (6-fold symmetry) ----',
+    '  // Find nearest seed center for crystal axis computation',
+    '  vec2 center = vec2(0.5);',
+    '  float minDist = 999.0;',
+    '  for (int i = 0; i < 8; i++) {',
+    '    if (i >= u_seedCount) break;',
+    '    float d = length(v_uv - u_seeds[i]);',
+    '    if (d < minDist) {',
+    '      minDist = d;',
+    '      center = u_seeds[i];',
+    '    }',
+    '  }',
+    '',
+    '  float angle = atan(v_uv.y - center.y, v_uv.x - center.x);',
+    '  // Add per-seed rotation offset based on seed position',
+    '  float seedPhase = hash(center * 100.0) * 6.2832;',
+    '  // 6-fold symmetry: cos(3*angle) has 6 lobes',
+    '  float crystalBias = pow(abs(cos((angle + seedPhase) * 3.0)), 1.5) * 0.35 + 0.65;',
+    '',
+    '  // ---- NOISE PERTURBATION for organic variation ----',
+    '  float noisePert = fbm(v_uv * 18.0 + u_time * 0.05) * 0.4 + 0.6;',
+    '',
+    '  // ---- DISTANCE-BASED GROWTH FALLOFF ----',
+    '  // Growth slows slightly with distance from seed (natural crystallization)',
+    '  float distFactor = 1.0 - smoothstep(0.0, 0.6, minDist) * 0.2;',
+    '',
+    '  // ---- FINAL PROBABILITY ----',
+    '  float prob = branchProb * crystalBias * noisePert * distFactor * u_growthRate;',
+    '',
+    '  // Pseudo-random per pixel per frame',
+    '  float rand = hash2(floor(v_uv / u_texel), u_frame);',
+    '',
+    '  if (rand < prob) {',
+    '    // Freeze this pixel',
+    '    gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);',
+    '  } else {',
+    '    gl_FragColor = state;',
+    '  }',
+    '}'
+  ].join('\n');
+
+  // ============================================================
+  // DISPLAY SHADER: renders frost visualization with all visual layers
+  // ============================================================
+  var dispFragSrc = [
+    'precision highp float;',
+    'varying vec2 v_uv;',
+    'uniform sampler2D u_state;',
+    'uniform vec2 u_texel;',
+    'uniform vec2 u_simTexel;',
+    'uniform float u_time;',
+    'uniform vec2 u_resolution;',
+    'uniform float u_fadeAlpha;',
+    '',
+    'float hash(vec2 p) {',
+    '  vec3 p3 = fract(vec3(p.xyx) * vec3(443.897, 441.423, 437.195));',
+    '  p3 += dot(p3, p3.yzx + 19.19);',
+    '  return fract((p3.x + p3.y) * p3.z);',
+    '}',
+    '',
+    '// Spectral color from parameter (0-1)',
+    'vec3 spectral(float t) {',
+    '  t = clamp(t, 0.0, 1.0);',
+    '  vec3 c;',
+    '  if (t < 0.2) {',
+    '    c = mix(vec3(0.28, 0.05, 0.55), vec3(0.1, 0.25, 0.85), t / 0.2);',
+    '  } else if (t < 0.4) {',
+    '    c = mix(vec3(0.1, 0.25, 0.85), vec3(0.05, 0.7, 0.4), (t - 0.2) / 0.2);',
+    '  } else if (t < 0.6) {',
+    '    c = mix(vec3(0.05, 0.7, 0.4), vec3(0.85, 0.8, 0.1), (t - 0.4) / 0.2);',
+    '  } else if (t < 0.8) {',
+    '    c = mix(vec3(0.85, 0.8, 0.1), vec3(0.95, 0.4, 0.05), (t - 0.6) / 0.2);',
+    '  } else {',
+    '    c = mix(vec3(0.95, 0.4, 0.05), vec3(0.7, 0.1, 0.2), (t - 0.8) / 0.2);',
+    '  }',
+    '  return c;',
+    '}',
+    '',
+    'void main() {',
+    '  vec4 state = texture2D(u_state, v_uv);',
+    '  float frozen = state.r;',
+    '  float age = state.g;',
+    '',
+    '  // Sample neighbors for gradient/edge detection',
+    '  float fR = texture2D(u_state, v_uv + vec2(u_simTexel.x, 0.0)).r;',
+    '  float fL = texture2D(u_state, v_uv - vec2(u_simTexel.x, 0.0)).r;',
+    '  float fU = texture2D(u_state, v_uv + vec2(0.0, u_simTexel.y)).r;',
+    '  float fD = texture2D(u_state, v_uv - vec2(0.0, u_simTexel.y)).r;',
+    '',
+    '  // Gradient of frozen field (pseudo-normal direction)',
+    '  vec2 grad = vec2(fR - fL, fU - fD) * 0.5;',
+    '  float gradMag = length(grad);',
+    '',
+    '  // Edge detection: frozen pixel next to unfrozen',
+    '  float neighbors = fR + fL + fU + fD;',
+    '  float isFrost = step(0.5, frozen);',
+    '  float isEdge = isFrost * step(0.1, 4.0 - neighbors);',
+    '  // Sharper edge mask from gradient magnitude',
+    '  float edgeMask = smoothstep(0.05, 0.35, gradMag);',
+    '',
+    '  // Growth front: recently frozen pixels (low age)',
+    '  float growthFront = isFrost * (1.0 - smoothstep(0.0, 0.08, age));',
+    '',
+    '  // ---- LAYER 1: Warm amber underglow ----',
+    '  float warmDist = length(v_uv - vec2(0.5));',
+    '  float warmVig = 1.0 - smoothstep(0.0, 0.9, warmDist);',
+    '  vec3 warmBase = vec3(0.784, 0.584, 0.424);',
+    '  vec3 warmColor = mix(vec3(0.039, 0.035, 0.03), warmBase, warmVig * 0.55);',
+    '  // Subtle warm pulse like flickering light behind glass',
+    '  warmColor *= 1.0 + 0.04 * sin(u_time * 0.4 + warmDist * 3.5);',
+    '  // Dim warm glow behind frosted areas (light scatters through ice)',
+    '  warmColor *= mix(1.0, 0.25, isFrost * smoothstep(0.0, 0.3, age));',
+    '',
+    '  // ---- LAYER 2: Frost surface ----',
+    '  float crystalNoise = hash(floor(v_uv * u_resolution * 0.4)) * 0.12;',
+    '  vec3 frostWhite = vec3(0.878, 0.91, 0.957);',
+    '  vec3 iceBlue = vec3(0.69, 0.784, 0.878);',
+    '  // Vary frost color by age: younger = whiter, older = bluer',
+    '  float colorMix = smoothstep(0.0, 0.5, age) + crystalNoise;',
+    '  vec3 frostColor = mix(frostWhite, iceBlue, colorMix);',
+    '',
+    '  // Pseudo-normal from gradient for specular highlights',
+    '  vec3 normal = normalize(vec3(-grad * 5.0, 1.0));',
+    '  vec3 lightDir = normalize(vec3(0.3, 0.5, 1.0));',
+    '  float specular = pow(max(dot(normal, lightDir), 0.0), 24.0);',
+    '  frostColor += vec3(0.35, 0.38, 0.42) * specular * isFrost;',
+    '',
+    '  // Depth variation in thick frost',
+    '  frostColor *= 1.0 - 0.1 * smoothstep(0.3, 0.8, age);',
+    '',
+    '  // ---- LAYER 3: Prismatic edge highlights ----',
+    '  float spectralPhase = atan(grad.y, grad.x) / 6.2832 + 0.5;',
+    '  spectralPhase = fract(spectralPhase + u_time * 0.015);',
+    '  vec3 prismColor = spectral(spectralPhase);',
+    '',
+    '  // ---- LAYER 4: Growth front glow ----',
+    '  vec3 growthColor = vec3(0.816, 0.878, 1.0);',
+    '',
+    '  // ---- LAYER 5: Micro-sparkle at frost tips ----',
+    '  vec2 sparkleCell = floor(v_uv * u_resolution * 0.5);',
+    '  float sparkleHash = hash(sparkleCell + floor(u_time * 4.0));',
+    '  float sparkleMask = step(0.96, sparkleHash) * edgeMask * isFrost;',
+    '  float sparkleFlash = pow(sin(u_time * 10.0 + sparkleHash * 6.2832) * 0.5 + 0.5, 10.0);',
+    '  vec3 sparkleColor = vec3(1.0, 0.98, 0.95) * sparkleMask * sparkleFlash * 2.5;',
+    '',
+    '  // ---- COMPOSITING ----',
+    '  vec3 color = warmColor;',
+    '',
+    '  // Blend frost surface over warm background',
+    '  color = mix(color, frostColor, isFrost * 0.9);',
+    '',
+    '  // Prismatic edges (subtle, not garish)',
+    '  color += prismColor * edgeMask * isEdge * 0.35;',
+    '',
+    '  // Bright white edge fringe at frost boundaries',
+    '  float thinEdge = edgeMask * isEdge;',
+    '  color += vec3(0.45, 0.5, 0.55) * thinEdge * 0.5;',
+    '',
+    '  // Growth front glow (brighter at advancing tips)',
+    '  color += growthColor * growthFront * 0.6;',
+    '',
+    '  // Sparkle',
+    '  color += sparkleColor;',
+    '',
+    '  // Apply fade for transitions',
+    '  color *= u_fadeAlpha;',
+    '',
+    '  gl_FragColor = vec4(color, 1.0);',
+    '}'
+  ].join('\n');
+
+  // Create programs
+  var initProg = createProgram(vertSrc, initFragSrc);
+  var seedProg = createProgram(vertSrc, seedFragSrc);
+  var simProg = createProgram(vertSrc, simFragSrc);
+  var dispProg = createProgram(vertSrc, dispFragSrc);
+
+  if (!initProg || !seedProg || !simProg || !dispProg) return;
+
+  // Uniform/attribute locations
+  var initLocs = {
+    a_pos: gl.getAttribLocation(initProg, 'a_pos')
+  };
+
+  var seedLocs = {
+    a_pos: gl.getAttribLocation(seedProg, 'a_pos'),
+    u_state: gl.getUniformLocation(seedProg, 'u_state'),
+    u_seeds: [],
+    u_seedCount: gl.getUniformLocation(seedProg, 'u_seedCount'),
+    u_seedRadius: gl.getUniformLocation(seedProg, 'u_seedRadius')
+  };
+  for (var si = 0; si < 8; si++) {
+    seedLocs.u_seeds.push(gl.getUniformLocation(seedProg, 'u_seeds[' + si + ']'));
+  }
+
+  var simLocs = {
+    a_pos: gl.getAttribLocation(simProg, 'a_pos'),
+    u_state: gl.getUniformLocation(simProg, 'u_state'),
+    u_texel: gl.getUniformLocation(simProg, 'u_texel'),
+    u_time: gl.getUniformLocation(simProg, 'u_time'),
+    u_frame: gl.getUniformLocation(simProg, 'u_frame'),
+    u_growthRate: gl.getUniformLocation(simProg, 'u_growthRate'),
+    u_branchFactor: gl.getUniformLocation(simProg, 'u_branchFactor'),
+    u_seeds: [],
+    u_seedCount: gl.getUniformLocation(simProg, 'u_seedCount')
+  };
+  for (var sj = 0; sj < 8; sj++) {
+    simLocs.u_seeds.push(gl.getUniformLocation(simProg, 'u_seeds[' + sj + ']'));
+  }
+
+  var dispLocs = {
+    a_pos: gl.getAttribLocation(dispProg, 'a_pos'),
+    u_state: gl.getUniformLocation(dispProg, 'u_state'),
+    u_texel: gl.getUniformLocation(dispProg, 'u_texel'),
+    u_simTexel: gl.getUniformLocation(dispProg, 'u_simTexel'),
+    u_time: gl.getUniformLocation(dispProg, 'u_time'),
+    u_resolution: gl.getUniformLocation(dispProg, 'u_resolution'),
+    u_fadeAlpha: gl.getUniformLocation(dispProg, 'u_fadeAlpha')
+  };
+
+  // Framebuffer objects for ping-pong
+  var fboA = null, fboB = null;
+  var texA = null, texB = null;
+
+  function createFBO(w, h) {
+    var tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    // Nearest filtering is correct for cellular automata (no interpolation between cells)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+    if (useFloat) {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.FLOAT, null);
+    } else if (useHalfFloat) {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, halfFloatExt.HALF_FLOAT_OES, null);
+    } else {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    }
+
+    var fbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+
+    var status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+    if (status !== gl.FRAMEBUFFER_COMPLETE) {
+      // Fallback to UNSIGNED_BYTE
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    }
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return { fbo: fbo, tex: tex };
+  }
+
+  function drawQuad(prog, posLoc) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+    gl.enableVertexAttribArray(posLoc);
+    gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  }
+
+  // Current seeds stored for the sim shader crystal axis computation
+  var currentSeeds = [];
+
+  function initSimulation() {
+    gl.useProgram(initProg);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fboA.fbo);
+    gl.viewport(0, 0, simW, simH);
+    drawQuad(initProg, initLocs.a_pos);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fboB.fbo);
+    gl.viewport(0, 0, simW, simH);
+    drawQuad(initProg, initLocs.a_pos);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  }
+
+  function addSeeds(count) {
+    currentSeeds = [];
+    for (var i = 0; i < count; i++) {
+      currentSeeds.push([0.15 + Math.random() * 0.7, 0.15 + Math.random() * 0.7]);
+    }
+
+    gl.useProgram(seedProg);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fboB.fbo);
+    gl.viewport(0, 0, simW, simH);
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, texA);
+    gl.uniform1i(seedLocs.u_state, 0);
+    gl.uniform1i(seedLocs.u_seedCount, currentSeeds.length);
+    gl.uniform1f(seedLocs.u_seedRadius, 0.004 + Math.random() * 0.003);
+
+    for (var j = 0; j < 8; j++) {
+      if (j < currentSeeds.length) {
+        gl.uniform2f(seedLocs.u_seeds[j], currentSeeds[j][0], currentSeeds[j][1]);
+      } else {
+        gl.uniform2f(seedLocs.u_seeds[j], -10.0, -10.0);
+      }
+    }
+
+    drawQuad(seedProg, seedLocs.a_pos);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+    // Swap so seeded state is in A
+    var tmp = fboA; fboA = fboB; fboB = tmp;
+    texA = fboA.tex; texB = fboB.tex;
+  }
+
+  function resize() {
+    dispW = Math.floor(window.innerWidth * pixelScale);
+    dispH = Math.floor(window.innerHeight * pixelScale);
+    canvas.width = dispW;
+    canvas.height = dispH;
+
+    var newSimW = Math.max(64, Math.floor(dispW * SIM_SCALE));
+    var newSimH = Math.max(64, Math.floor(dispH * SIM_SCALE));
+
+    if (newSimW !== simW || newSimH !== simH) {
+      simW = newSimW;
+      simH = newSimH;
+
+      if (fboA) { gl.deleteFramebuffer(fboA.fbo); gl.deleteTexture(fboA.tex); }
+      if (fboB) { gl.deleteFramebuffer(fboB.fbo); gl.deleteTexture(fboB.tex); }
+
+      fboA = createFBO(simW, simH);
+      fboB = createFBO(simW, simH);
+      texA = fboA.tex;
+      texB = fboB.tex;
+
+      initSimulation();
+      addSeeds(3 + Math.floor(Math.random() * 3));
+      lastSeedTime = time;
+      frameCount = 0;
+    }
+  }
+
+  resize();
+  window.addEventListener('resize', resize);
+
+  var time = 0;
+  var frameCount = 0;
+  var lastSeedTime = 0;
+  var fadeAlpha = 1.0;
+  var fadeState = 'visible';
+  var fadeTimer = 0;
+  var CYCLE_DURATION = 18.0;
+  var FADE_DURATION = 1.5;
+  var running = true;
+  var lastFrame = performance.now();
+
+  // Visibility change pause
+  document.addEventListener('visibilitychange', function() {
+    if (document.hidden) {
+      running = false;
+    } else {
+      running = true;
+      lastFrame = performance.now();
+    }
+  });
+
+  function smoothstep(edge0, edge1, x) {
+    var t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
+    return t * t * (3 - 2 * t);
+  }
+
+  function frame(now) {
+    requestAnimationFrame(frame);
+    if (!running) return;
+
+    var dt = Math.min((now - lastFrame) / 1000, 0.05);
+    lastFrame = now;
+
+    if (prefersReduced) {
+      dt *= 0.3;
+    }
+
+    time += dt;
+    frameCount++;
+
+    // Handle fade cycle for reseeding
+    var timeSinceSeed = time - lastSeedTime;
+
+    if (fadeState === 'visible' && timeSinceSeed > CYCLE_DURATION) {
+      fadeState = 'fading_out';
+      fadeTimer = 0;
+    }
+
+    if (fadeState === 'fading_out') {
+      fadeTimer += dt;
+      fadeAlpha = 1.0 - smoothstep(0, FADE_DURATION, fadeTimer);
+      if (fadeTimer >= FADE_DURATION) {
+        fadeState = 'fading_in';
+        fadeTimer = 0;
+        initSimulation();
+        addSeeds(3 + Math.floor(Math.random() * 3));
+        lastSeedTime = time;
+        frameCount = 0;
+      }
+    }
+
+    if (fadeState === 'fading_in') {
+      fadeTimer += dt;
+      fadeAlpha = smoothstep(0, FADE_DURATION, fadeTimer);
+      if (fadeTimer >= FADE_DURATION) {
+        fadeAlpha = 1.0;
+        fadeState = 'visible';
+      }
+    }
+
+    // Simulation steps per frame (cellular automata is cheap)
+    var stepsBase = prefersReduced ? 5 : 20;
+    var steps = Math.max(1, Math.round(stepsBase * GROWTH_SPEED));
+
+    // Branching factor: higher = more branching (fewer neighbors needed)
+    // FROST_DENSITY inversely affects this: higher density = less branching = more fill
+    var branchFactor = 2.0 / FROST_DENSITY;
+
+    // Growth rate: base probability multiplier
+    var growthRate = 0.22 * FROST_DENSITY;
+
+    // Run simulation steps
+    gl.viewport(0, 0, simW, simH);
+
+    for (var i = 0; i < steps; i++) {
+      gl.useProgram(simProg);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fboB.fbo);
+
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, texA);
+      gl.uniform1i(simLocs.u_state, 0);
+      gl.uniform2f(simLocs.u_texel, 1.0 / simW, 1.0 / simH);
+      gl.uniform1f(simLocs.u_time, time);
+      gl.uniform1f(simLocs.u_frame, frameCount * steps + i);
+      gl.uniform1f(simLocs.u_growthRate, growthRate);
+      gl.uniform1f(simLocs.u_branchFactor, branchFactor);
+      gl.uniform1i(simLocs.u_seedCount, currentSeeds.length);
+
+      for (var sk = 0; sk < 8; sk++) {
+        if (sk < currentSeeds.length) {
+          gl.uniform2f(simLocs.u_seeds[sk], currentSeeds[sk][0], currentSeeds[sk][1]);
+        } else {
+          gl.uniform2f(simLocs.u_seeds[sk], -10.0, -10.0);
+        }
+      }
+
+      drawQuad(simProg, simLocs.a_pos);
+
+      // Ping-pong swap
+      var tmp = fboA; fboA = fboB; fboB = tmp;
+      texA = fboA.tex; texB = fboB.tex;
+    }
+
+    // Display pass
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, dispW, dispH);
+
+    gl.useProgram(dispProg);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, texA);
+    gl.uniform1i(dispLocs.u_state, 0);
+    gl.uniform2f(dispLocs.u_texel, 1.0 / dispW, 1.0 / dispH);
+    gl.uniform2f(dispLocs.u_simTexel, 1.0 / simW, 1.0 / simH);
+    gl.uniform1f(dispLocs.u_time, time);
+    gl.uniform2f(dispLocs.u_resolution, dispW, dispH);
+    gl.uniform1f(dispLocs.u_fadeAlpha, fadeAlpha);
+
+    drawQuad(dispProg, dispLocs.a_pos);
+  }
+
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
