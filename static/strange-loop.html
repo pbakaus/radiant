@@ -54,6 +54,7 @@ uniform float u_rotationSpeed;
 uniform float u_flowSpeed;
 uniform float u_tilt;
 uniform float u_zoom;
+uniform float u_shape;
 
 #define PI 3.14159265359
 #define TAU 6.28318530718
@@ -144,16 +145,19 @@ float segT(vec3 p, vec3 a, vec3 b) {
 }
 
 // ─────────────────────────────────────────────
-// Triangle geometry
+// Geometry constants
 // ─────────────────────────────────────────────
-const float TRI_SIDE = 3.2;
 const float BEAM_R = 0.26;
 const float Y_OFF = 0.4;
+const float SMIN_K = 0.08;
 
-const float TRI_H = 2.7712813; // TRI_SIDE * sqrt(3)/2
-const float HALF_SIDE = 1.6;
-const float V0_Z = 1.8475209;  // TRI_H * 2/3
-const float V12_Z = -0.9237604; // -TRI_H * 1/3
+// Triangle constants
+const float TRI_RADIUS = 2.0;
+// Rectangle constants
+const float RECT_W = 2.2;
+const float RECT_H = 1.5;
+// Hexagon constants
+const float HEX_RADIUS = 1.9;
 
 // ─────────────────────────────────────────────
 // Scene rotation
@@ -168,39 +172,132 @@ vec3 sceneRot(vec3 p, float time) {
 }
 
 // ─────────────────────────────────────────────
-// Penrose Triangle SDF
+// Impossible structure SDF with multiple shapes
 //
-// Three beam segments with Y-offsets that create
-// an impossible-looking structure. The beams slope
-// in Y from +offset to -offset, so at each corner
-// the arriving beam is at a different Y level than
-// the departing beam -- creating the paradox.
+// Each shape has N beams arranged in a polygon.
+// Each beam slopes from +Y_OFF at its start vertex
+// to -Y_OFF at its end vertex. At each corner the
+// arriving beam (at -Y_OFF) meets the departing beam
+// (at +Y_OFF), and smin smoothly connects them.
+// Following the loop: up,down,up,down... yet you
+// return to the start — the impossible paradox.
 // ─────────────────────────────────────────────
-vec2 penroseSDF(vec3 p) {
-  vec3 v0 = vec3(0.0, 0.0, V0_Z);
-  vec3 v1 = vec3(-HALF_SIDE, 0.0, V12_Z);
-  vec3 v2 = vec3(HALF_SIDE, 0.0, V12_Z);
 
+// Shape 0: Penrose Triangle (3 beams)
+vec2 triSDF(vec3 p) {
+  float r = TRI_RADIUS;
   vec3 yU = vec3(0.0, Y_OFF, 0.0);
   vec3 yD = vec3(0.0, -Y_OFF, 0.0);
 
-  // Three beams, each tilting in Y across the span
-  vec3 b0a = v0 + yU, b0b = v1 + yD;
-  vec3 b1a = v1 + yU, b1b = v2 + yD;
-  vec3 b2a = v2 + yU, b2b = v0 + yD;
+  // 3 vertices equally spaced, rotated so top vertex points up
+  float a0 = PI * 0.5;
+  float a1 = a0 + TAU / 3.0;
+  float a2 = a1 + TAU / 3.0;
+  vec3 v0 = vec3(cos(a0) * r, 0.0, sin(a0) * r);
+  vec3 v1 = vec3(cos(a1) * r, 0.0, sin(a1) * r);
+  vec3 v2 = vec3(cos(a2) * r, 0.0, sin(a2) * r);
 
-  float d0 = sdBoxBeam(p, b0a, b0b, BEAM_R, BEAM_R);
-  float d1 = sdBoxBeam(p, b1a, b1b, BEAM_R, BEAM_R);
-  float d2 = sdBoxBeam(p, b2a, b2b, BEAM_R, BEAM_R);
+  // Each beam: start at vertex + yU, end at next vertex + yD
+  float d0 = sdBoxBeam(p, v0 + yU, v1 + yD, BEAM_R, BEAM_R);
+  float d1 = sdBoxBeam(p, v1 + yU, v2 + yD, BEAM_R, BEAM_R);
+  float d2 = sdBoxBeam(p, v2 + yU, v0 + yD, BEAM_R, BEAM_R);
 
-  // Subtle fusion at joints (very small k for just a hint of meld)
-  float k = 0.03;
-  float dMin = smin(d0, smin(d1, d2, k), k);
+  // Smooth blend at corners
+  float dMin = smin(d0, smin(d1, d2, SMIN_K), SMIN_K);
+
+  // Track beam ID for coloring
   float id = 0.0;
   if (d1 < d0 && d1 < d2) id = 1.0;
   if (d2 < d0 && d2 < d1) id = 2.0;
 
   return vec2(dMin, id);
+}
+
+// Shape 1: Impossible Rectangle (4 beams)
+vec2 rectSDF(vec3 p) {
+  float w = RECT_W;
+  float h = RECT_H;
+  vec3 yU = vec3(0.0, Y_OFF, 0.0);
+  vec3 yD = vec3(0.0, -Y_OFF, 0.0);
+
+  // 4 vertices of rectangle
+  vec3 v0 = vec3(-w, 0.0,  h);
+  vec3 v1 = vec3( w, 0.0,  h);
+  vec3 v2 = vec3( w, 0.0, -h);
+  vec3 v3 = vec3(-w, 0.0, -h);
+
+  // Each beam slopes from +Y_OFF to -Y_OFF
+  float d0 = sdBoxBeam(p, v0 + yU, v1 + yD, BEAM_R, BEAM_R);
+  float d1 = sdBoxBeam(p, v1 + yU, v2 + yD, BEAM_R, BEAM_R);
+  float d2 = sdBoxBeam(p, v2 + yU, v3 + yD, BEAM_R, BEAM_R);
+  float d3 = sdBoxBeam(p, v3 + yU, v0 + yD, BEAM_R, BEAM_R);
+
+  // Smooth blend
+  float dMin = smin(smin(d0, d1, SMIN_K), smin(d2, d3, SMIN_K), SMIN_K);
+
+  // Track beam ID
+  float id = 0.0;
+  float best = d0;
+  if (d1 < best) { best = d1; id = 1.0; }
+  if (d2 < best) { best = d2; id = 2.0; }
+  if (d3 < best) { best = d3; id = 3.0; }
+
+  return vec2(dMin, id);
+}
+
+// Shape 2: Impossible Hexagon (6 beams)
+vec2 hexSDF(vec3 p) {
+  float r = HEX_RADIUS;
+  vec3 yU = vec3(0.0, Y_OFF, 0.0);
+  vec3 yD = vec3(0.0, -Y_OFF, 0.0);
+
+  // 6 vertices equally spaced, flat-top orientation
+  float a0 = 0.0;
+  float a1 = TAU / 6.0;
+  float a2 = 2.0 * TAU / 6.0;
+  float a3 = 3.0 * TAU / 6.0;
+  float a4 = 4.0 * TAU / 6.0;
+  float a5 = 5.0 * TAU / 6.0;
+
+  vec3 v0 = vec3(cos(a0) * r, 0.0, sin(a0) * r);
+  vec3 v1 = vec3(cos(a1) * r, 0.0, sin(a1) * r);
+  vec3 v2 = vec3(cos(a2) * r, 0.0, sin(a2) * r);
+  vec3 v3 = vec3(cos(a3) * r, 0.0, sin(a3) * r);
+  vec3 v4 = vec3(cos(a4) * r, 0.0, sin(a4) * r);
+  vec3 v5 = vec3(cos(a5) * r, 0.0, sin(a5) * r);
+
+  // 6 beams, each sloping from +Y_OFF to -Y_OFF
+  float d0 = sdBoxBeam(p, v0 + yU, v1 + yD, BEAM_R, BEAM_R);
+  float d1 = sdBoxBeam(p, v1 + yU, v2 + yD, BEAM_R, BEAM_R);
+  float d2 = sdBoxBeam(p, v2 + yU, v3 + yD, BEAM_R, BEAM_R);
+  float d3 = sdBoxBeam(p, v3 + yU, v4 + yD, BEAM_R, BEAM_R);
+  float d4 = sdBoxBeam(p, v4 + yU, v5 + yD, BEAM_R, BEAM_R);
+  float d5 = sdBoxBeam(p, v5 + yU, v0 + yD, BEAM_R, BEAM_R);
+
+  // Smooth blend all 6
+  float dMin = smin(smin(smin(d0, d1, SMIN_K), smin(d2, d3, SMIN_K), SMIN_K),
+                     smin(d4, d5, SMIN_K), SMIN_K);
+
+  // Track beam ID
+  float id = 0.0;
+  float best = d0;
+  if (d1 < best) { best = d1; id = 1.0; }
+  if (d2 < best) { best = d2; id = 2.0; }
+  if (d3 < best) { best = d3; id = 3.0; }
+  if (d4 < best) { best = d4; id = 4.0; }
+  if (d5 < best) { best = d5; id = 5.0; }
+
+  return vec2(dMin, id);
+}
+
+vec2 penroseSDF(vec3 p) {
+  if (u_shape < 0.5) {
+    return triSDF(p);
+  } else if (u_shape < 1.5) {
+    return rectSDF(p);
+  } else {
+    return hexSDF(p);
+  }
 }
 
 vec2 sceneSDF(vec3 p, float time) {
@@ -220,14 +317,20 @@ vec3 calcNormal(vec3 p, float time) {
 // ─────────────────────────────────────────────
 // Flow position along the 6-segment loop path
 // (fully unrolled for WebGL1 compatibility)
+// Uses the same triangle vertices as triSDF
 // ─────────────────────────────────────────────
 vec3 pathPos(float phase) {
-  vec3 v0 = vec3(0.0, 0.0, V0_Z);
-  vec3 v1 = vec3(-HALF_SIDE, 0.0, V12_Z);
-  vec3 v2 = vec3(HALF_SIDE, 0.0, V12_Z);
+  float r = TRI_RADIUS;
+  float a0 = PI * 0.5;
+  float a1 = a0 + TAU / 3.0;
+  float a2 = a1 + TAU / 3.0;
+  vec3 v0 = vec3(cos(a0) * r, 0.0, sin(a0) * r);
+  vec3 v1 = vec3(cos(a1) * r, 0.0, sin(a1) * r);
+  vec3 v2 = vec3(cos(a2) * r, 0.0, sin(a2) * r);
   vec3 yU = vec3(0.0, Y_OFF, 0.0);
   vec3 yD = vec3(0.0, -Y_OFF, 0.0);
 
+  // 6 waypoints: beam0 start, beam0 end, beam1 start, beam1 end, beam2 start, beam2 end
   vec3 p0 = v0 + yU;
   vec3 p1 = v1 + yD;
   vec3 p2 = v1 + yU;
@@ -500,11 +603,13 @@ void main() {
   var uFlowSpeed = gl.getUniformLocation(prog, 'u_flowSpeed');
   var uTilt = gl.getUniformLocation(prog, 'u_tilt');
   var uZoom = gl.getUniformLocation(prog, 'u_zoom');
+  var uShape = gl.getUniformLocation(prog, 'u_shape');
 
   var rotationSpeedVal = 0.3;
   var flowSpeedVal = 0.5;
   var tiltVal = 0.65;
   var zoomVal = 7.2;
+  var shapeVal = 0.0;
 
   var dpr = Math.min(window.devicePixelRatio || 1, 2) * pixelScale;
   var running = true;
@@ -528,6 +633,7 @@ void main() {
     gl.uniform1f(uFlowSpeed, flowSpeedVal);
     gl.uniform1f(uTilt, tiltVal);
     gl.uniform1f(uZoom, zoomVal);
+    gl.uniform1f(uShape, shapeVal);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     requestAnimationFrame(render);
   }
@@ -550,6 +656,7 @@ void main() {
         case 'FLOW_SPEED': flowSpeedVal = e.data.value; break;
         case 'TILT': tiltVal = e.data.value; break;
         case 'ZOOM': zoomVal = e.data.value; break;
+        case 'SHAPE': shapeVal = e.data.value; break;
       }
     }
   });
