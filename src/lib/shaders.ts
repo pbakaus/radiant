@@ -909,19 +909,6 @@ export const shaders: Shader[] = [
 		]
 	},
 	{
-		id: 'tectonic',
-		file: 'tectonic.html',
-		title: 'Tectonic',
-		desc: 'Shifting tectonic plates revealing glowing magma in the cracks between.',
-		inspiration: 'Viola Davis',
-		tags: ['fill', 'physics', 'geometric'],
-		technique: 'webgl',
-		params: [
-			{ name: 'DRIFT_SPEED', label: 'Drift Speed', min: 0.05, max: 1.0, step: 0.05, default: 0.3 },
-			{ name: 'MAGMA_HEAT', label: 'Magma Heat', min: 0.3, max: 2.0, step: 0.1, default: 1.0 }
-		]
-	},
-	{
 		id: 'thunder-sermon',
 		file: 'thunder-sermon.html',
 		title: 'Thunder Sermon',
