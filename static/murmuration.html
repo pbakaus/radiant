@@ -98,6 +98,45 @@
     glowCtx.fillRect(0, 0, glowSize * 2, glowSize * 2);
   }
 
+  // ── Mountain silhouettes ──
+  var mtCanvas = document.createElement('canvas');
+  var mtCtx = mtCanvas.getContext('2d');
+
+  function generateMountains() {
+    mtCanvas.width = W; mtCanvas.height = H;
+    mtCtx.clearRect(0, 0, W, H);
+
+    // 3 layers: far (lightest), mid, near (darkest)
+    var layers = [
+      { baseY: 0.72, amp: 0.08, freq: 0.003, octaves: 4, color: [175, 140, 108] },
+      { baseY: 0.78, amp: 0.07, freq: 0.005, octaves: 3, color: [145, 112, 82] },
+      { baseY: 0.85, amp: 0.05, freq: 0.008, octaves: 3, color: [115, 85, 60] }
+    ];
+
+    for (var l = 0; l < layers.length; l++) {
+      var ly = layers[l];
+      mtCtx.beginPath();
+      mtCtx.moveTo(0, H);
+      for (var x = 0; x <= W; x += 2) {
+        var nx = x * ly.freq;
+        var h = 0, amp = 1, freq = 1;
+        for (var o = 0; o < ly.octaves; o++) {
+          h += Math.sin(nx * freq + l * 50 + o * 13.7) * amp;
+          h += Math.cos(nx * freq * 0.7 + l * 30 + o * 7.3) * amp * 0.6;
+          freq *= 2.1;
+          amp *= 0.45;
+        }
+        h = h * ly.amp * H;
+        var y = ly.baseY * H + h;
+        mtCtx.lineTo(x, y);
+      }
+      mtCtx.lineTo(W, H);
+      mtCtx.closePath();
+      mtCtx.fillStyle = 'rgb(' + ly.color[0] + ',' + ly.color[1] + ',' + ly.color[2] + ')';
+      mtCtx.fill();
+    }
+  }
+
   // ── Value noise for wind field ──
   var noiseSeed = Math.random() * 65536;
   function hashN(x, y) {
@@ -148,6 +187,7 @@
     canvas.height = H * dpr;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     allocateGrid();
+    generateMountains();
   }
 
   function allocateGrid() {
@@ -409,6 +449,14 @@
     }
     ctx.fillRect(-1, -1, W + 2, H + 2);
 
+    // Mountain silhouettes — repaint at low alpha each frame to persist through trail fade
+    if (PALETTE > 0.5) {
+      ctx.save();
+      ctx.globalAlpha = 0.15;
+      ctx.drawImage(mtCanvas, 0, 0);
+      ctx.restore();
+    }
+
     // Grain texture — adds life to the twilight background
     if (PALETTE > 0.5 && frameCount % 3 === 0) {
       ctx.save();
@@ -511,13 +559,16 @@
       grd.addColorStop(0.4, '#c6a07a');
       grd.addColorStop(1, '#aa8764');
       ctx.fillStyle = grd;
+      ctx.fillRect(-1, -1, W + 2, H + 2);
+      // Draw mountains at full opacity on init
+      ctx.drawImage(mtCanvas, 0, 0);
     } else {
       var grd = ctx.createLinearGradient(0, 0, 0, H);
       grd.addColorStop(0, '#0a0a14');
       grd.addColorStop(1, '#0a0a0a');
       ctx.fillStyle = grd;
+      ctx.fillRect(-1, -1, W + 2, H + 2);
     }
-    ctx.fillRect(-1, -1, W + 2, H + 2);
   }
 
   // ── Main loop ──
