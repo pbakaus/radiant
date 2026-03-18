@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ink Calligraphy</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed; top: 20px; left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px; letter-spacing: 0.15em; text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5); z-index: 10; pointer-events: none; user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Ink Calligraphy</div>
+<canvas id="canvas"></canvas>
+<script>
+(function() {
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var urlParams = new URLSearchParams(window.location.search);
+  var pixelScale = parseFloat(urlParams.get('p')) || 1;
+
+  var STROKE_SPEED = 1.0;
+  var INK_DENSITY = 1.0;
+
+  var canvas = document.getElementById('canvas');
+  var ctx = canvas.getContext('2d');
+  var dpr = Math.min(window.devicePixelRatio || 1, 2) * pixelScale;
+
+  var inkCanvas = document.createElement('canvas');
+  var inkCtx = inkCanvas.getContext('2d');
+  var goldCanvas = document.createElement('canvas');
+  var goldCtx = goldCanvas.getContext('2d');
+  var paperCanvas = document.createElement('canvas');
+  var paperCtx = paperCanvas.getContext('2d');
+  var tmpCanvas = document.createElement('canvas');
+  var tmpCtx = tmpCanvas.getContext('2d');
+
+  var W, H, PW, PH;
+
+  // ── Simplex Noise ──
+  var SimplexNoise = (function() {
+    var F2 = 0.5 * (Math.sqrt(3) - 1), G2 = (3 - Math.sqrt(3)) / 6;
+    var grad3 = [[1,1,0],[-1,1,0],[1,-1,0],[-1,-1,0],[1,0,1],[-1,0,1],[1,0,-1],[-1,0,-1],[0,1,1],[0,-1,1],[0,1,-1],[0,-1,-1]];
+    function SN(seed) {
+      this.p = new Uint8Array(512); this.pm = new Uint8Array(512);
+      var p = new Uint8Array(256); seed = seed || 42;
+      for (var i = 0; i < 256; i++) p[i] = i;
+      for (var i = 255; i > 0; i--) { seed = (seed * 16807) % 2147483647; var j = seed % (i + 1); var t = p[i]; p[i] = p[j]; p[j] = t; }
+      for (var i = 0; i < 512; i++) { this.p[i] = p[i & 255]; this.pm[i] = this.p[i] % 12; }
+    }
+    SN.prototype.noise2D = function(x, y) {
+      var p = this.p, pm = this.pm;
+      var s = (x + y) * F2, i = Math.floor(x + s), j = Math.floor(y + s);
+      var t = (i + j) * G2, x0 = x - (i - t), y0 = y - (j - t);
+      var i1 = x0 > y0 ? 1 : 0, j1 = x0 > y0 ? 0 : 1;
+      var x1 = x0 - i1 + G2, y1 = y0 - j1 + G2, x2 = x0 - 1 + 2*G2, y2 = y0 - 1 + 2*G2;
+      var ii = i & 255, jj = j & 255, n0 = 0, n1 = 0, n2 = 0;
+      var t0 = 0.5 - x0*x0 - y0*y0;
+      if (t0 >= 0) { t0 *= t0; var g = pm[ii+p[jj]]; n0 = t0*t0*(grad3[g][0]*x0+grad3[g][1]*y0); }
+      var t1 = 0.5 - x1*x1 - y1*y1;
+      if (t1 >= 0) { t1 *= t1; var g = pm[ii+i1+p[jj+j1]]; n1 = t1*t1*(grad3[g][0]*x1+grad3[g][1]*y1); }
+      var t2 = 0.5 - x2*x2 - y2*y2;
+      if (t2 >= 0) { t2 *= t2; var g = pm[ii+1+p[jj+1]]; n2 = t2*t2*(grad3[g][0]*x2+grad3[g][1]*y2); }
+      return 70 * (n0 + n1 + n2);
+    };
+    return SN;
+  })();
+
+  var noise = new SimplexNoise(137);
+  var noise2 = new SimplexNoise(293);
+
+  // ── Paper texture ──
+  function generatePaper() {
+    paperCanvas.width = PW; paperCanvas.height = PH;
+    var imgData = paperCtx.createImageData(PW, PH);
+    var d = imgData.data;
+    for (var y = 0; y < PH; y++) {
+      for (var x = 0; x < PW; x++) {
+        var idx = (y * PW + x) * 4, bx = x / PW, by = y / PH;
+        var wc = noise.noise2D(bx * 3, by * 3) * 0.5 + 0.5;
+        var fb = noise.noise2D(x * 0.12, y * 0.12) * 0.4 + noise2.noise2D(x * 0.35, y * 0.06) * 0.35 + noise.noise2D(x * 0.06, y * 0.3) * 0.25;
+        var gr = (Math.random() - 0.5) * 6;
+        var r = 232 + wc * 8 - 4 + fb * 10 + gr;
+        var g = 224 + wc * 4 - 6 + fb * 9 + gr;
+        var b = 208 - wc * 4 + 2 + fb * 7 + gr;
+        var ag = noise2.noise2D(bx * 1.5 + 10, by * 1.5 + 10);
+        if (ag > 0.2) { var a = (ag - 0.2) * 5; r += a; g += a * 0.6; b -= a * 1.5; }
+        d[idx] = Math.max(0, Math.min(255, r | 0));
+        d[idx+1] = Math.max(0, Math.min(255, g | 0));
+        d[idx+2] = Math.max(0, Math.min(255, b | 0));
+        d[idx+3] = 255;
+      }
+    }
+    paperCtx.putImageData(imgData, 0, 0);
+  }
+
+  // ── Brush system ──
+  // All coordinates in PIXEL space (PW x PH) for direct drawing
+  var brushes = [];
+  var MAX_BRUSHES = 5;
+  var SPAWN_INTERVAL = 1.3;
+  var lastSpawnTime = -10;
+  var brushId = 0;
+
+  function spawnBrush(time) {
+    var x, y, angle;
+    var r = Math.random();
+
+    if (r < 0.5) {
+      // Start from inside canvas (random position)
+      x = PW * (0.1 + Math.random() * 0.8);
+      y = PH * (0.1 + Math.random() * 0.8);
+      angle = Math.random() * Math.PI * 2;
+    } else {
+      // Start from edge, inset slightly
+      var edge = Math.random();
+      var inset = PW * 0.05;
+      if (edge < 0.25) { x = inset; y = Math.random() * PH; }
+      else if (edge < 0.5) { x = PW - inset; y = Math.random() * PH; }
+      else if (edge < 0.75) { x = Math.random() * PW; y = inset; }
+      else { x = Math.random() * PW; y = PH - inset; }
+      // Aim toward center-ish
+      var cx = PW * (0.3 + Math.random() * 0.4);
+      var cy = PH * (0.3 + Math.random() * 0.4);
+      angle = Math.atan2(cy - y, cx - x) + (Math.random() - 0.5) * 0.6;
+    }
+
+    var id = brushId++;
+    // Variety: 40% hairline, 40% medium, 20% bold
+    var strokeType = Math.random();
+    var maxW, lifespan, targetDist, curveAmt;
+    if (strokeType < 0.4) {
+      // Hairline — thin, fast, long
+      maxW = 3 + Math.random() * 8;
+      lifespan = 2.5 + Math.random() * 3.0;
+      targetDist = PW * (0.4 + Math.random() * 0.3);
+      curveAmt = (Math.random() - 0.5) * 0.005;
+    } else if (strokeType < 0.8) {
+      // Medium — balanced
+      maxW = 10 + Math.random() * 20;
+      lifespan = 3.0 + Math.random() * 3.5;
+      targetDist = PW * (0.3 + Math.random() * 0.25);
+      curveAmt = (Math.random() - 0.5) * 0.008;
+    } else {
+      // Bold — wider, slower, shorter
+      maxW = 22 + Math.random() * 25;
+      lifespan = 2.0 + Math.random() * 2.5;
+      targetDist = PW * (0.15 + Math.random() * 0.2);
+      curveAmt = (Math.random() - 0.5) * 0.012;
+    }
+    var pixPerFrame = targetDist / (lifespan * 60);
+
+    brushes.push({
+      id: id, x: x, y: y, px: x, py: y, p2x: x, p2y: y,
+      angle: angle,
+      speed: pixPerFrame,
+      maxW: maxW,
+      w: 1, // always start as hairline
+      noff: Math.random() * 1000,
+      birth: time, life: lifespan,
+      phase: 'active',
+      opacity: 0.7 + Math.random() * 0.15,
+      curve: curveAmt,
+      trail: [],
+      pFreq: 0.3 + Math.random() * 1.0,
+      pPhase: Math.random() * Math.PI * 2
+    });
+  }
+
+  function updateBrushes(time, dt) {
+    var fps60dt = dt * 60; // normalize to 60fps
+
+    for (var i = brushes.length - 1; i >= 0; i--) {
+      var b = brushes[i];
+      var age = time - b.birth;
+
+      if (age > b.life + 5) { brushes.splice(i, 1); continue; }
+      if (age > b.life && b.phase === 'active') b.phase = 'done';
+      if (b.phase === 'done') continue;
+
+      var t = age / b.life; // 0..1 normalized life
+
+      // Steering
+      var n1 = noise.noise2D(b.x * 0.0003 + b.noff, b.y * 0.0003 + time * 0.06);
+      var n2 = noise2.noise2D(b.x * 0.0007 + b.noff + 50, b.y * 0.0007 + time * 0.04);
+      b.angle += (n1 * 0.015 + n2 * 0.01 + b.curve) * fps60dt * STROKE_SPEED;
+
+      // Speed envelope: very quick start, gentle end
+      var sEnv = t < 0.03 ? t / 0.03 : (t > 0.9 ? (1 - t) / 0.1 : 1.0);
+      var sNoise = noise.noise2D(time * 0.3 + b.noff, b.id * 5) * 0.3 + 0.85;
+      var spd = b.speed * sEnv * sNoise * fps60dt * STROKE_SPEED;
+
+      b.p2x = b.px; b.p2y = b.py;
+      b.px = b.x; b.py = b.y;
+      b.x += Math.cos(b.angle) * spd;
+      b.y += Math.sin(b.angle) * spd;
+
+      // Width: calligraphic thin-thick-thin with speed coupling
+      var wEnv;
+      if (t < 0.15) wEnv = t / 0.15; // gradual entry
+      else if (t > 0.7) wEnv = (1 - t) / 0.3; // long graceful exit
+      else wEnv = 1.0;
+      wEnv = Math.pow(wEnv, 0.5); // ease for organic feel
+      // Speed-width coupling: faster movement = thinner (like real brush)
+      var speedFactor = 1.0 - Math.min(spd / (b.speed * 1.5 * 60), 0.6);
+      var wave = Math.sin(age * b.pFreq * Math.PI * 2 + b.pPhase) * 0.2 + 0.8;
+      var targetW = b.maxW * wEnv * wave * speedFactor;
+      b.w += (targetW - b.w) * 0.15; // slower tracking = smoother transitions
+
+      if (b.w < 0.5) continue;
+
+      // Ink color — warm-black, no blue cast when fading
+      var shift = noise.noise2D(b.x * 0.002, b.y * 0.002) * 0.08;
+      var rI = 18 + shift * 12 | 0;
+      var gI = 14 + shift * 10 | 0;
+      var bI = 12 + shift * 8 | 0;
+
+      var alpha = b.opacity * INK_DENSITY * (t < 0.02 ? t / 0.02 : (t > 0.94 ? (1 - t) / 0.06 : 1));
+      alpha = Math.min(alpha, 0.92);
+
+      // Draw
+      inkCtx.save();
+      inkCtx.lineCap = 'round';
+      inkCtx.lineJoin = 'round';
+
+      inkCtx.lineWidth = b.w;
+      inkCtx.strokeStyle = 'rgba(' + rI + ',' + gI + ',' + bI + ',' + alpha + ')';
+      inkCtx.beginPath();
+      inkCtx.moveTo(b.p2x, b.p2y);
+      inkCtx.quadraticCurveTo(b.px, b.py, b.x, b.y);
+      inkCtx.stroke();
+
+      // Bleed halo — subtle, only on thicker strokes
+      if (b.w > 8) {
+        inkCtx.lineWidth = b.w * 1.5;
+        inkCtx.strokeStyle = 'rgba(' + rI + ',' + gI + ',' + bI + ',' + (alpha * 0.04) + ')';
+        inkCtx.beginPath();
+        inkCtx.moveTo(b.p2x, b.p2y);
+        inkCtx.quadraticCurveTo(b.px, b.py, b.x, b.y);
+        inkCtx.stroke();
+      }
+
+      inkCtx.restore();
+
+      b.trail.push({ x: b.x, y: b.y, w: b.w, t: time, a: alpha });
+      if (b.trail.length > 400) b.trail.shift();
+    }
+  }
+
+  // ── Ink wash ──
+  function drawInkWash(time) {
+    var wa = 0.0004 * INK_DENSITY;
+    for (var i = 0; i < 3; i++) {
+      var cx = PW * 0.5 + Math.sin(time * 0.05 + i * 2.1) * PW * 0.3;
+      var cy = PH * 0.5 + Math.cos(time * 0.035 + i * 1.7) * PH * 0.3;
+      var r = Math.min(PW, PH) * (0.2 + 0.1 * Math.sin(time * 0.02 + i));
+      var grad = inkCtx.createRadialGradient(cx, cy, 0, cx, cy, r);
+      grad.addColorStop(0, 'rgba(160,155,170,' + wa + ')');
+      grad.addColorStop(0.6, 'rgba(175,170,180,' + (wa * 0.3) + ')');
+      grad.addColorStop(1, 'rgba(175,170,180,0)');
+      inkCtx.fillStyle = grad;
+      inkCtx.fillRect(0, 0, PW, PH);
+    }
+  }
+
+  // ── Gold leaf ──
+  function drawGold(time) {
+    goldCtx.clearRect(0, 0, PW, PH);
+
+    for (var i = 0; i < brushes.length; i++) {
+      var b = brushes[i];
+      if (b.trail.length < 3) continue;
+
+      for (var j = 0; j < b.trail.length; j++) {
+        var pt = b.trail[j];
+        var pa = time - pt.t;
+        var gl = Math.max(0, pa - 0.15);
+        if (gl > 12) continue;
+
+        var ap = 1 - Math.exp(-gl * 2.5);
+        var fd = gl > 3 ? Math.exp(-(gl - 3) * 0.25) : 1;
+        var ga = ap * fd;
+        if (ga < 0.02) continue;
+
+        var thr = noise.noise2D(j * 0.08 + b.id * 4.3, time * 0.15 + b.id);
+        if (thr < -0.1) continue;
+
+        var ea = noise.noise2D(pt.x * 0.003 + j * 0.05, pt.y * 0.003) * Math.PI * 2;
+        var ed = pt.w * (0.35 + 0.3 * noise2.noise2D(j * 0.15, time * 0.3));
+
+        for (var s = -1; s <= 1; s += 2) {
+          var gx = pt.x + Math.cos(ea) * ed * s;
+          var gy = pt.y + Math.sin(ea) * ed * s;
+
+          var sh = Math.sin(gx * 0.008 + gy * 0.006 + time * 2.8 + j * 0.06 + s * 1.5) * 0.5 + 0.5;
+          sh = sh * sh * sh;
+
+          var sz = 1.5 + sh * 3.5;
+          var rG = 200 + sh * 55 | 0;
+          var gG = 149 + sh * 65 | 0;
+          var bG = 108 + sh * 22 | 0;
+          var fA = ga * (0.25 + sh * 0.7) * Math.min(pt.a * 1.3, 1);
+          if (fA < 0.02) continue;
+
+          goldCtx.fillStyle = 'rgba(' + rG + ',' + gG + ',' + bG + ',' + fA + ')';
+          goldCtx.beginPath();
+          goldCtx.arc(gx, gy, sz, 0, Math.PI * 2);
+          goldCtx.fill();
+
+          if (sh > 0.5) {
+            var ha = (sh - 0.5) * 2 * fA;
+            goldCtx.fillStyle = 'rgba(255,240,180,' + Math.min(ha, 0.85) + ')';
+            goldCtx.beginPath();
+            goldCtx.arc(gx, gy, sz * 0.4, 0, Math.PI * 2);
+            goldCtx.fill();
+            if (sh > 0.7) {
+              goldCtx.fillStyle = 'rgba(255,220,140,' + Math.min((sh - 0.7) * 1.5 * fA, 0.3) + ')';
+              goldCtx.beginPath();
+              goldCtx.arc(gx, gy, sz * 2, 0, Math.PI * 2);
+              goldCtx.fill();
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // ── Diffusion ──
+  var diffA = 0;
+  function diffuse(dt) {
+    diffA += dt;
+    if (diffA < 0.07) return;
+    diffA = 0;
+    tmpCtx.clearRect(0, 0, PW, PH);
+    tmpCtx.drawImage(inkCanvas, 0, 0);
+    inkCtx.save();
+    inkCtx.globalAlpha = 0.006 * INK_DENSITY;
+    var off = dpr;
+    inkCtx.drawImage(tmpCanvas, -off, 0);
+    inkCtx.drawImage(tmpCanvas, off, 0);
+    inkCtx.drawImage(tmpCanvas, 0, -off);
+    inkCtx.drawImage(tmpCanvas, 0, off);
+    inkCtx.restore();
+  }
+
+  // ── Fade — continuous per-frame fade so old strokes dissolve ──
+  var fadeA = 0;
+  function fade(dt) {
+    fadeA += dt;
+    if (fadeA < 0.1) return; // fade ~10 times per second
+    fadeA = 0;
+    inkCtx.save();
+    inkCtx.globalCompositeOperation = 'destination-out';
+    inkCtx.fillStyle = 'rgba(0,0,0,0.018)';
+    inkCtx.fillRect(0, 0, PW, PH);
+    inkCtx.restore();
+  }
+
+  // ── Resize ──
+  function resize() {
+    W = window.innerWidth; H = window.innerHeight;
+    PW = Math.round(W * dpr); PH = Math.round(H * dpr);
+    canvas.width = PW; canvas.height = PH;
+    canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+    inkCanvas.width = PW; inkCanvas.height = PH;
+    goldCanvas.width = PW; goldCanvas.height = PH;
+    tmpCanvas.width = PW; tmpCanvas.height = PH;
+    generatePaper();
+    brushes = []; lastSpawnTime = -10;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // ── Render ──
+  var running = true, lastTime = 0, simTime = 0, firstFrame = true;
+
+  function render(now) {
+    if (!running) { requestAnimationFrame(render); return; }
+    var ns = now * 0.001;
+    var dt = lastTime === 0 ? 0.016 : Math.min(ns - lastTime, 0.05);
+    lastTime = ns;
+    simTime += dt;
+    var time = simTime;
+
+    if (firstFrame) {
+      firstFrame = false;
+      for (var i = 0; i < 3; i++) spawnBrush(time + i * 0.02);
+      lastSpawnTime = time;
+    }
+
+    if (prefersReduced) {
+      ctx.drawImage(paperCanvas, 0, 0);
+      requestAnimationFrame(render); return;
+    }
+
+    var act = 0;
+    for (var i = 0; i < brushes.length; i++) if (brushes[i].phase === 'active') act++;
+    if (act < MAX_BRUSHES && time - lastSpawnTime > SPAWN_INTERVAL / STROKE_SPEED) {
+      spawnBrush(time);
+      lastSpawnTime = time;
+    }
+
+    updateBrushes(time, dt);
+    diffuse(dt);
+    fade(dt);
+    drawInkWash(time);
+    drawGold(time);
+
+    // ── Composite ──
+    ctx.clearRect(0, 0, PW, PH);
+
+    // Paper base
+    ctx.drawImage(paperCanvas, 0, 0);
+
+    // Ink layer: source-over for clear dark ink on paper
+    ctx.drawImage(inkCanvas, 0, 0);
+
+    // Gold leaf on top with additive blend
+    ctx.save();
+    ctx.globalCompositeOperation = 'screen';
+    ctx.drawImage(goldCanvas, 0, 0);
+    ctx.restore();
+
+    // Vignette
+    var vr = Math.max(PW, PH) * 0.7;
+    var vg = ctx.createRadialGradient(PW/2, PH/2, vr * 0.35, PW/2, PH/2, vr);
+    vg.addColorStop(0, 'rgba(0,0,0,0)');
+    vg.addColorStop(1, 'rgba(0,0,0,0.12)');
+    ctx.fillStyle = vg;
+    ctx.fillRect(0, 0, PW, PH);
+
+    requestAnimationFrame(render);
+  }
+  requestAnimationFrame(render);
+
+  document.addEventListener('visibilitychange', function() {
+    if (document.hidden) running = false;
+    else { running = true; lastTime = 0; }
+  });
+
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'param') {
+      if (e.data.name === 'STROKE_SPEED') STROKE_SPEED = e.data.value;
+      if (e.data.name === 'INK_DENSITY') INK_DENSITY = e.data.value;
+    }
+  });
+})();
+</script>
+</body>
+</html>
