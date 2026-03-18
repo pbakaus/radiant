@@ -424,16 +424,16 @@ void main() {
     float far = didHit ? totalDist + 0.8 : min(totalDist + 5.0, 12.0);
     if (far > near) {
       float flowAccum = 0.0;
-      float stepSz = (far - near) / 16.0;
-      for (int i = 0; i < 16; i++) {
+      float stepSz = (far - near) / 20.0;
+      for (int i = 0; i < 20; i++) {
         float sd = near + (float(i) + 0.5) * stepSz;
         vec3 sp = sRot * (ro + rd * sd);
         float fg = flowGlow(sp, t);
-        flowAccum += fg * stepSz * 0.10;
+        flowAccum += fg * stepSz * 0.14;
       }
       vec3 flowCol = vec3(0.90, 0.58, 0.32);
-      col += flowCol * flowAccum * 1.5;
-      col += vec3(1.0, 0.85, 0.65) * flowAccum * flowAccum * 4.0;
+      col += flowCol * flowAccum * 2.0;
+      col += vec3(1.0, 0.85, 0.65) * flowAccum * flowAccum * 5.0;
     }
   }
 
