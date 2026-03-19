@@ -2,15 +2,7 @@
 	import { getShaderNumber, type Shader } from '$lib/shaders';
 	import { getPaletteForInspiration, hexToRgb } from '$lib/inspiration-palettes';
 	import { colorSchemes, type ColorScheme } from '$lib/color-schemes';
-	import {
-		fetchShaderHtml,
-		requestPreload,
-		preloadDone,
-		cancelPreload,
-		requestLive,
-		releaseLive
-	} from '$lib/shader-budget.svelte';
-	import { onMount } from 'svelte';
+	import { fetchShaderHtml } from '$lib/shader-budget.svelte';
 
 	let { shader, scheme }: { shader: Shader; scheme: ColorScheme } = $props();
 
@@ -24,26 +16,23 @@
 	const spritePosY = $derived(schemeIndex * 20);
 
 	// ── Card state ───────────────────────────────────────────────────
-	let visible = $state(false);
 	let hovered = $state(false);
 	let srcdoc = $state<string | null>(null);
-	let loadIframe = $state(false); // preload slot granted, create iframe
+	let loadIframe = $state(false);
 	let iframeEl = $state<HTMLIFrameElement | null>(null);
-	let warm = $state(false); // shader compiled + paused
-	let promoted = $state(false); // auto-promoted to live by budget
+	let warm = $state(false); // shader compiled + ready
 	let fpsInjected = false;
 
-	// Show the iframe when live (promoted or hovered-while-warm)
-	const showIframe = $derived(warm && (promoted || hovered));
+	// Show the iframe when hovered and warm
+	const showIframe = $derived(warm && hovered);
 
-	// ── Visibility tracking ──────────────────────────────────────────
+	// ── Pre-fetch HTML when visible (cheap, no iframes) ─────────────
 	function observe(node: HTMLElement) {
 		const obs = new IntersectionObserver(
 			([e]) => {
-				const wasVisible = visible;
-				visible = e.isIntersecting;
-				if (visible && !wasVisible) onEnterViewport();
-				else if (!visible && wasVisible) onExitViewport();
+				if (e.isIntersecting && !srcdoc) {
+					fetchShaderHtml(shader.file, shader.id).then((html) => { srcdoc = html; });
+				}
 			},
 			{ rootMargin: '200px' }
 		);
@@ -51,45 +40,12 @@
 		return { destroy() { obs.disconnect(); } };
 	}
 
-	async function onEnterViewport() {
-		// Phase 1: fetch + patch HTML (parallel, cheap)
-		if (!srcdoc) {
-			srcdoc = await fetchShaderHtml(shader.file, shader.id);
-			if (!visible) return; // scrolled away during fetch
-		}
-		// Phase 2: request preload slot (serialized, one at a time)
-		requestPreload(shader.id, () => {
-			loadIframe = true;
-		});
-	}
-
-	function onExitViewport() {
-		cancelPreload(shader.id);
-		releaseLive(shader.id);
-		loadIframe = false;
-		warm = false;
-		promoted = false;
-		iframeEl = null;
-		fpsInjected = false;
-		// Keep srcdoc cached so re-entering is faster
-	}
-
 	// ── Iframe lifecycle ─────────────────────────────────────────────
 	function onIframeLoad(el: HTMLIFrameElement) {
 		iframeEl = el;
-		// Let the shader compile and render a few frames, then pause
-		setTimeout(() => {
-			if (!visible || !iframeEl) return;
-			pauseShader();
-			warm = true;
-			preloadDone(shader.id);
-			// Request live promotion from the budget
-			requestLive(
-				shader.id,
-				() => { promoted = true; resumeShader(); },
-				() => { promoted = false; pauseShader(); }
-			);
-		}, 200);
+		// Shader is ready — if still hovered, keep it running; otherwise pause
+		warm = true;
+		if (!hovered) pauseShader();
 	}
 
 	function injectFpsCounter() {
@@ -120,30 +76,26 @@
 	}
 
 	// ── Hover ────────────────────────────────────────────────────────
-	function onMouseEnter() {
+	async function onMouseEnter() {
 		hovered = true;
 		if (warm) {
 			resumeShader();
-		} else if (visible && srcdoc) {
-			// Not warm yet — jump the preload queue
-			requestPreload(shader.id, () => { loadIframe = true; }, true);
+		} else if (!loadIframe) {
+			// Fetch HTML on first hover, then create iframe
+			if (!srcdoc) {
+				srcdoc = await fetchShaderHtml(shader.file, shader.id);
+				if (!hovered) return; // left before fetch completed
+			}
+			loadIframe = true;
 		}
 	}
 
 	function onMouseLeave() {
 		hovered = false;
-		if (warm && !promoted) {
+		if (warm) {
 			pauseShader();
 		}
 	}
-
-	// ── Cleanup ──────────────────────────────────────────────────────
-	onMount(() => {
-		return () => {
-			cancelPreload(shader.id);
-			releaseLive(shader.id);
-		};
-	});
 </script>
 
 <a
@@ -163,12 +115,10 @@
 			style:background-position="0 {spritePosY}%"
 		></div>
 
-		<!-- Hover hint: visible on non-promoted cards, fades when iframe shows -->
-		{#if !promoted}
-			<div class="hover-hint" class:hide={hovered}>
-				<span>Hover to preview</span>
-			</div>
-		{/if}
+		<!-- Hover hint: fades when iframe shows -->
+		<div class="hover-hint" class:hide={hovered}>
+			<span>Hover to preview</span>
+		</div>
 
 		<!-- Iframe: created once HTML is fetched + preload slot granted -->
 		{#if loadIframe && srcdoc}
