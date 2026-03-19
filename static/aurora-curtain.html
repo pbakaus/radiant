@@ -52,6 +52,7 @@
     'uniform float u_waveSpeed;',
     'uniform float u_lineCount;',
     'uniform vec2 u_mouse;',
+    'uniform float u_dragAngle;',
     '',
     '// ── Hash for noise ──',
     'float hash(vec2 p) {',
@@ -72,6 +73,8 @@
     '',
     '#define S smoothstep',
     '',
+    'mat2 rot2(float a) { float c=cos(a),s=sin(a); return mat2(c,-s,s,c); }',
+    '',
     '// ── Single vertical curtain line ──',
     'vec3 curtainLine(vec2 uv, float speed, float freq, vec3 c, float t) {',
     '  // Sine displacement on x based on y position (vertical flow)',
@@ -85,6 +88,7 @@
     '',
     'void main() {',
     '  vec2 uv = (gl_FragCoord.xy - 0.5 * u_res.xy) / u_res.y;',
+    '  uv = rot2(u_dragAngle) * uv;',
     '  // Mouse: X controls wave speed, Y controls amplitude',
     '  float mouseAmp = 1.0;',
     '  float mouseFreq = 1.0;',
@@ -164,8 +168,11 @@
   var uWaveSpeed = gl.getUniformLocation(prog, 'u_waveSpeed');
   var uLineCount = gl.getUniformLocation(prog, 'u_lineCount');
   var uMouse = gl.getUniformLocation(prog, 'u_mouse');
+  var uDragAngle = gl.getUniformLocation(prog, 'u_dragAngle');
 
   var mouseXVal = -1.0, mouseYVal = -1.0;
+  var dragAngle = 0;
+  var mouseDown = false, lastMX = 0;
   var waveSpeedVal = 1.0;
   var lineCountVal = 6.0;
 
@@ -192,6 +199,7 @@
     gl.uniform1f(uWaveSpeed, waveSpeedVal);
     gl.uniform1f(uLineCount, lineCountVal);
     gl.uniform2f(uMouse, mouseXVal, mouseYVal);
+    gl.uniform1f(uDragAngle, dragAngle);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     requestAnimationFrame(render);
   }
@@ -204,16 +212,21 @@
 
   requestAnimationFrame(render);
 
+  // Move: controls wave shape. Drag: rotates the curtain.
+  canvas.addEventListener('mousedown', function(e) { mouseDown = true; lastMX = e.clientX; });
   canvas.addEventListener('mousemove', function(e) {
     mouseXVal = e.clientX * dpr;
     mouseYVal = (canvas.clientHeight - e.clientY) * dpr;
+    if (mouseDown) { dragAngle += (e.clientX - lastMX) * 0.004; lastMX = e.clientX; }
   });
+  canvas.addEventListener('mouseup', function() { mouseDown = false; });
   canvas.addEventListener('mouseleave', function() {
-    mouseXVal = -1.0; mouseYVal = -1.0;
+    mouseXVal = -1.0; mouseYVal = -1.0; mouseDown = false;
   });
   canvas.addEventListener('touchstart', function(e) {
-    e.preventDefault();
+    e.preventDefault(); mouseDown = true;
     var touch = e.touches[0];
+    lastMX = touch.clientX;
     mouseXVal = touch.clientX * dpr;
     mouseYVal = (canvas.clientHeight - touch.clientY) * dpr;
   }, {passive: false});
@@ -222,7 +235,9 @@
     var touch = e.touches[0];
     mouseXVal = touch.clientX * dpr;
     mouseYVal = (canvas.clientHeight - touch.clientY) * dpr;
+    if (mouseDown) { dragAngle += (touch.clientX - lastMX) * 0.004; lastMX = touch.clientX; }
   }, {passive: false});
+  canvas.addEventListener('touchend', function() { mouseDown = false; });
   canvas.addEventListener('touchend', function() {
     mouseXVal = -1.0; mouseYVal = -1.0;
   });
