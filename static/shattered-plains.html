@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Shattered Plains</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Shattered Plains</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// Erosion Channels — Dendritic channel networks
+// carving through warm terrain
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var gl = canvas.getContext('webgl', { alpha: false, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  // Enable screen-space derivatives for cheap normals
+  var extDeriv = gl.getExtension('OES_standard_derivatives');
+
+  var vertSrc = 'attribute vec2 a_pos; void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }';
+
+  var fragSrc = [
+    extDeriv ? '#extension GL_OES_standard_derivatives : enable' : '',
+    'precision highp float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform float u_channelSpeed;',
+    'uniform float u_channelDepth;',
+    'uniform float u_grain;',
+    'uniform vec2 u_mouse;',
+    '',
+    '#define PI 3.14159265359',
+    '',
+    '// ── Hash functions ──',
+    'vec2 hash2(vec2 p) {',
+    '  p = vec2(dot(p, vec2(127.1, 311.7)),',
+    '           dot(p, vec2(269.5, 183.3)));',
+    '  return -1.0 + 2.0 * fract(sin(p) * 43758.5453123);',
+    '}',
+    '',
+    'float hash(vec2 p) {',
+    '  vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));',
+    '  p3 += dot(p3, p3.yzx + 33.33);',
+    '  return fract((p3.x + p3.y) * p3.z);',
+    '}',
+    '',
+    '// ── Gradient noise ──',
+    'float gnoise(vec2 p) {',
+    '  vec2 i = floor(p);',
+    '  vec2 f = fract(p);',
+    '  vec2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);',
+    '  return mix(mix(dot(hash2(i), f),',
+    '                 dot(hash2(i + vec2(1.0, 0.0)), f - vec2(1.0, 0.0)), u.x),',
+    '             mix(dot(hash2(i + vec2(0.0, 1.0)), f - vec2(0.0, 1.0)),',
+    '                 dot(hash2(i + vec2(1.0, 1.0)), f - vec2(1.0, 1.0)), u.x), u.y);',
+    '}',
+    '',
+    '// ── Value noise ──',
+    'float vnoise(vec2 p) {',
+    '  vec2 i = floor(p);',
+    '  vec2 f = fract(p);',
+    '  f = f * f * (3.0 - 2.0 * f);',
+    '  return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),',
+    '             mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);',
+    '}',
+    '',
+    '// ── Terrain FBM (3 octaves — was 5) ──',
+    'float terrainFBM(vec2 p) {',
+    '  float v = 0.0, amp = 0.5;',
+    '  mat2 rot = mat2(0.8, 0.6, -0.6, 0.8);',
+    '  for (int i = 0; i < 3; i++) {',
+    '    v += amp * vnoise(p);',
+    '    amp *= 0.5;',
+    '    p = rot * p * 2.0;',
+    '  }',
+    '  return v;',
+    '}',
+    '',
+    '// ── Channel layer: U-shaped valleys ──',
+    'float channelLayer(vec2 p, float width, float steepness) {',
+    '  float n = gnoise(p);',
+    '  float r = smoothstep(0.0, width, abs(n));',
+    '  r = pow(r, steepness);',
+    '  return r;',
+    '}',
+    '',
+    '// ── Full channel system ──',
+    '// Single shared warp, fewer layers',
+    'float channelSystem(vec2 p, float t) {',
+    '  // Single domain warp shared by all layers',
+    '  vec2 wp = p + vec2(',
+    '    gnoise(p * 0.7 + vec2(1.7, 9.2) + t * 0.015),',
+    '    gnoise(p * 0.7 + vec2(8.3, 2.8) + t * 0.012)',
+    '  ) * 0.9;',
+    '  // Second warp pass',
+    '  wp = wp + vec2(',
+    '    gnoise(wp * 0.7 + vec2(5.1, 3.4) + t * 0.01),',
+    '    gnoise(wp * 0.7 + vec2(2.9, 7.6) + t * 0.008)',
+    '  ) * 0.45;',
+    '',
+    '  // Main rivers: wide, deep',
+    '  float main1 = channelLayer(wp * 0.4, 0.16, 0.7);',
+    '  float main2 = channelLayer(wp * 0.32 + vec2(50.0, 30.0), 0.14, 0.65);',
+    '  float mainRivers = min(main1, main2);',
+    '',
+    '  // Tributaries: reuse same warp',
+    '  float trib1 = channelLayer(wp * 0.7 + vec2(10.0, 20.0), 0.11, 0.8);',
+    '  float trib2 = channelLayer(wp * 0.85 + vec2(25.0, 45.0), 0.09, 0.9);',
+    '  float tributaries = min(trib1, trib2);',
+    '',
+    '  // Fine rills: single layer',
+    '  float rill = channelLayer(wp * 1.5 + vec2(30.0, 40.0), 0.07, 1.0);',
+    '',
+    '  // Combine',
+    '  float combined = min(mainRivers, tributaries * 1.5 + 0.08);',
+    '  combined = min(combined, rill * 2.5 + 0.18);',
+    '',
+    '  float depth = (1.0 - smoothstep(0.0, 0.25, combined)) * 0.85;',
+    '  return depth;',
+    '}',
+    '',
+    'void main() {',
+    '  vec2 p = (gl_FragCoord.xy - u_res * 0.5) / min(u_res.x, u_res.y);',
+    '  float t = u_time * u_channelSpeed;',
+    '  vec2 sp = p * 3.5;',
+    '',
+    '  // ── Compute height ──',
+    '  float terrain = terrainFBM(sp * 0.5 + vec2(100.0, 200.0));',
+    '  float channels = channelSystem(sp, t);',
+    '  float carve = channels * u_channelDepth * 0.45;',
+    '  float h = terrain - carve;',
+    '',
+    // Use dFdx/dFdy for normals (1 sample instead of 5)
+    extDeriv ? [
+    '  // ── Normals via screen-space derivatives (fast) ──',
+    '  vec3 normal = normalize(vec3(-dFdx(h), -dFdy(h), 2.0 / min(u_res.x, u_res.y) * 4.0));',
+    ].join('\n') : [
+    '  // ── Fallback: flat normal ──',
+    '  vec3 normal = vec3(0.0, 0.0, 1.0);',
+    ].join('\n'),
+    '',
+    '  // ── Light direction — cursor overrides sun when active ──',
+    '  float sunAng = t * 0.12 + PI * 0.25;',
+    '  float sunElev = 0.4 + 0.2 * sin(t * 0.07);',
+    '  vec3 autoLight = normalize(vec3(cos(sunAng), sin(sunAng), sin(sunElev) + 0.3));',
+    '  // When mouse active, light comes from cursor position',
+    '  vec3 mouseLight = normalize(vec3((u_mouse - 0.5) * 1.6, 0.45));',
+    '  float mouseActive = step(0.0, u_mouse.x);',
+    '  vec3 lightDir = mix(autoLight, mouseLight, mouseActive);',
+    '',
+    '  float diff = max(dot(normal, lightDir), 0.0);',
+    '  float ambient = 0.22;',
+    '  float lighting = ambient + diff * 0.78;',
+    '  lighting *= mix(0.55, 1.0, smoothstep(0.0, 0.2, diff));',
+    '',
+    '  // Specular — reduced shininess',
+    '  vec3 halfV = normalize(lightDir + vec3(0.0, 0.0, 1.0));',
+    '  float spec = pow(max(dot(normal, halfV), 0.0), 20.0);',
+    '',
+    '  // ── Color palette ──',
+    '  vec3 surfaceHigh  = vec3(0.863, 0.686, 0.431);',
+    '  vec3 surfaceMid   = vec3(0.706, 0.510, 0.275);',
+    '  vec3 shallowChan  = vec3(0.549, 0.353, 0.176);',
+    '  vec3 deepChan     = vec3(0.314, 0.196, 0.098);',
+    '  vec3 waterHint    = vec3(0.235, 0.216, 0.196);',
+    '  vec3 hotHighlight = vec3(0.961, 0.843, 0.647);',
+    '',
+    '  // ── Terrain surface color ──',
+    '  vec3 terrainCol = mix(surfaceMid, surfaceHigh, smoothstep(0.35, 0.65, terrain));',
+    '  terrainCol += (vnoise(sp * 8.0) - 0.5) * 0.04;',
+    '',
+    '  // ── Channel depth coloring ──',
+    '  float dn = clamp(carve / 0.45, 0.0, 1.0);',
+    '',
+    '  float strata1 = sin(dn * 18.0 + terrain * 4.0) * 0.5 + 0.5;',
+    '  float strata2 = sin(dn * 35.0 + terrain * 6.0) * 0.5 + 0.5;',
+    '  float strata = mix(strata1, strata2, 0.3);',
+    '  strata = smoothstep(0.3, 0.7, strata);',
+    '',
+    '  vec3 chanCol = terrainCol;',
+    '  chanCol = mix(chanCol, surfaceMid * 0.88, smoothstep(0.0, 0.12, dn));',
+    '  vec3 shallowBand = mix(shallowChan, surfaceMid * 0.75, strata * 0.5);',
+    '  chanCol = mix(chanCol, shallowBand, smoothstep(0.08, 0.3, dn));',
+    '  vec3 midBand = mix(shallowChan * 0.85, deepChan * 1.2, strata);',
+    '  chanCol = mix(chanCol, midBand, smoothstep(0.25, 0.55, dn));',
+    '  chanCol = mix(chanCol, deepChan * 1.1, smoothstep(0.5, 0.8, dn));',
+    '',
+    '  // ── Water flow hints ──',
+    '  float waterMask = smoothstep(0.75, 0.95, dn);',
+    '  vec3 waterCol = waterHint;',
+    '  float waterSpec = pow(max(dot(normal, halfV), 0.0), 50.0);',
+    '  waterCol += vec3(0.04, 0.06, 0.12) * waterSpec * 3.0;',
+    '  waterCol += vec3(0.015, 0.025, 0.05) * (0.5 + 0.5 * sin(t * 0.25));',
+    '  chanCol = mix(chanCol, waterCol, waterMask);',
+    '',
+    '  vec3 col = mix(terrainCol, chanCol, smoothstep(0.0, 0.08, dn));',
+    '  col *= lighting;',
+    '',
+    '  // ── Highlights — reduced intensity ──',
+    '  float edgeLight = smoothstep(0.55, 0.95, diff) * max(0.0, 1.0 - dn * 1.5);',
+    '  col += hotHighlight * spec * 0.15 * max(0.0, 1.0 - dn * 1.2);',
+    '  col += hotHighlight * edgeLight * 0.04;',
+    '',
+    '  // ── Grain / sandstone texture (configurable) ──',
+    '  float grainAmt = u_grain;',
+    '  // Fine sand grain — pixel-scale hash for crisp individual grains',
+    '  float g1 = hash(gl_FragCoord.xy * 1.0 + fract(u_time * 0.7) * 100.0);',
+    '  float g2 = hash(gl_FragCoord.xy * 0.5 + 73.1);',
+    '  col += (g1 - 0.5) * 0.03 * grainAmt;',
+    '  col += (g2 - 0.5) * 0.02 * grainAmt;',
+    '  // Medium sand texture — high-freq noise at pixel scale',
+    '  float sandTex = vnoise(gl_FragCoord.xy * 0.4);',
+    '  col += (sandTex - 0.5) * 0.04 * grainAmt * max(0.0, 1.0 - dn * 1.5);',
+    '  // Subtle directional streaks in channel walls',
+    '  float streak = vnoise(vec2(gl_FragCoord.x * 0.15, gl_FragCoord.y * 0.6) + 50.0);',
+    '  col += (streak - 0.5) * 0.025 * grainAmt * smoothstep(0.0, 0.3, dn);',
+    '',
+    '  // Vignette',
+    '  float vig = 1.0 - smoothstep(0.65, 1.4, length(p * vec2(1.1, 1.0)));',
+    '  col *= mix(0.65, 1.0, vig);',
+    '',
+    '  col = clamp(col, 0.0, 1.0);',
+    '  gl_FragColor = vec4(col, 1.0);',
+    '}'
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error('Shader compile error:', gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error('Program link error:', gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uChannelSpeed = gl.getUniformLocation(prog, 'u_channelSpeed');
+  var uChannelDepth = gl.getUniformLocation(prog, 'u_channelDepth');
+  var uGrain = gl.getUniformLocation(prog, 'u_grain');
+  var uMouse = gl.getUniformLocation(prog, 'u_mouse');
+
+  var channelSpeedVal = 0.5;
+  var channelDepthVal = 1.0;
+  var grainVal = 1.0;
+  var mouseX = -1.0, mouseY = -1.0;
+  var smoothMX = -1.0, smoothMY = -1.0;
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+  var needsResize = true;
+
+  function resize() {
+    needsResize = false;
+    var w = Math.round(canvas.clientWidth * dpr);
+    var h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+      gl.uniform2f(uRes, canvas.width, canvas.height);
+    }
+  }
+
+  var paused = false;
+
+  function render(now) {
+    if (!paused) {
+      if (needsResize) resize();
+      gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+      gl.uniform1f(uChannelSpeed, channelSpeedVal);
+      gl.uniform1f(uChannelDepth, channelDepthVal);
+      gl.uniform1f(uGrain, grainVal);
+      // Smooth mouse interpolation
+      if (mouseX >= 0.0) {
+        smoothMX += (mouseX - smoothMX) * 0.08;
+        smoothMY += (mouseY - smoothMY) * 0.08;
+      } else {
+        smoothMX = -1.0; smoothMY = -1.0;
+      }
+      gl.uniform2f(uMouse, smoothMX, smoothMY);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    }
+    requestAnimationFrame(render);
+  }
+
+  window.addEventListener('resize', function () {
+    needsResize = true;
+  });
+
+  resize();
+
+  requestAnimationFrame(render);
+
+  document.addEventListener('visibilitychange', function () {
+    paused = document.hidden;
+  });
+
+  canvas.addEventListener('mousemove', function (e) {
+    mouseX = e.clientX / canvas.clientWidth;
+    mouseY = 1.0 - e.clientY / canvas.clientHeight;
+  });
+  canvas.addEventListener('mouseleave', function () {
+    mouseX = -1.0; mouseY = -1.0;
+  });
+  canvas.addEventListener('touchstart', function (e) {
+    e.preventDefault();
+    var touch = e.touches[0];
+    mouseX = touch.clientX / canvas.clientWidth;
+    mouseY = 1.0 - touch.clientY / canvas.clientHeight;
+  }, { passive: false });
+  canvas.addEventListener('touchmove', function (e) {
+    e.preventDefault();
+    var touch = e.touches[0];
+    mouseX = touch.clientX / canvas.clientWidth;
+    mouseY = 1.0 - touch.clientY / canvas.clientHeight;
+  }, { passive: false });
+  canvas.addEventListener('touchend', function () {
+    mouseX = -1.0; mouseY = -1.0;
+  });
+
+  window.addEventListener('message', function (e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'CHANNEL_SPEED': channelSpeedVal = e.data.value; break;
+        case 'CHANNEL_DEPTH': channelDepthVal = e.data.value; break;
+        case 'GRAIN': grainVal = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

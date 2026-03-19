@@ -1205,50 +1205,25 @@ export const shaders: Shader[] = [
 		]
 	},
 	{
-		id: 'wind-carved',
-		file: 'wind-carved.html',
-		title: 'Wind Carved',
-		desc: 'Anisotropic wind erosion ridges with dramatic shifting directional light and drifting sand wisps.',
-		inspiration: 'Sand',
-		tags: ['fill', 'noise'],
-		technique: 'webgl',
-		params: [
-			{ name: 'WIND_SPEED', label: 'Wind Speed', min: 0.1, max: 2.0, step: 0.05, default: 0.5 },
-			{ name: 'EROSION_DEPTH', label: 'Erosion Depth', min: 0.3, max: 2.0, step: 0.1, default: 1.0 }
-		]
-	},
-	{
-		id: 'erosion-channels',
-		file: 'erosion-channels.html',
-		title: 'Erosion Channels',
-		desc: 'Fractal dendritic channel networks carving through warm sandstone terrain with depth-revealed strata.',
-		inspiration: 'Sand',
+		id: 'shattered-plains',
+		file: 'shattered-plains.html',
+		title: 'Shattered Plains',
+		desc: 'Storm-carved chasms branching through ancient sandstone plateaus with depth-revealed strata.',
+		inspiration: 'Brandon Sanderson',
 		tags: ['fill', 'noise', 'organic'],
 		technique: 'webgl',
 		params: [
 			{ name: 'CHANNEL_SPEED', label: 'Channel Speed', min: 0.1, max: 2.0, step: 0.05, default: 0.5 },
-			{ name: 'CHANNEL_DEPTH', label: 'Channel Depth', min: 0.3, max: 2.0, step: 0.1, default: 1.0 }
+			{ name: 'CHANNEL_DEPTH', label: 'Channel Depth', min: 0.3, max: 2.0, step: 0.1, default: 1.0 },
+			{ name: 'GRAIN', label: 'Grain Texture', min: 0.0, max: 2.0, step: 0.1, default: 1.0 }
 		]
 	},
 	{
-		id: 'sand-prism',
-		file: 'sand-prism.html',
-		title: 'Sand Prism',
-		desc: 'Spectral caustic light refracting through crystalline quartz grains with chromatic dispersion.',
-		inspiration: 'Sand',
-		tags: ['fill', 'noise', 'geometric'],
-		technique: 'webgl',
-		params: [
-			{ name: 'REFRACTION', label: 'Refraction', min: 0.3, max: 3.0, step: 0.1, default: 1.0 },
-			{ name: 'CRYSTAL_SCALE', label: 'Crystal Scale', min: 0.3, max: 2.0, step: 0.1, default: 1.0 }
-		]
-	},
-	{
-		id: 'golden-sediment',
-		file: 'golden-sediment.html',
-		title: 'Golden Sediment',
-		desc: 'Layered sedimentary strata with tectonic folding, crystalline sparkles, and cross-cutting fault lines.',
-		inspiration: 'Sand',
+		id: 'painted-strata',
+		file: 'painted-strata.html',
+		title: 'Painted Strata',
+		desc: 'Flowing layered bands with washi paper textures, slow tectonic folding, and fibrous grain — like a handcrafted landscape scroll.',
+		inspiration: 'Laufey',
 		tags: ['fill', 'noise', 'organic'],
 		technique: 'webgl',
 		params: [
@@ -1256,19 +1231,6 @@ export const shaders: Shader[] = [
 			{ name: 'LAYER_COUNT', label: 'Layer Count', min: 8, max: 24, step: 1, default: 16 }
 		]
 	},
-	{
-		id: 'barchan-dance',
-		file: 'barchan-dance.html',
-		title: 'Barchan Dance',
-		desc: 'Migrating crescent-shaped dunes with shadow casting, merging physics, and trailing sand plumes.',
-		inspiration: 'Sand',
-		tags: ['fill', 'particles', 'physics'],
-		technique: 'canvas-2d',
-		params: [
-			{ name: 'WIND_SPEED', label: 'Wind Speed', min: 0.1, max: 2.0, step: 0.05, default: 0.5 },
-			{ name: 'DUNE_COUNT', label: 'Dune Density', min: 0.3, max: 2.0, step: 0.1, default: 1.0 }
-		]
-	}
 ];
 
 export function getShaderById(id: string): Shader | undefined {

@@ -138,6 +138,10 @@ export const inspirationPalettes: Record<string, InspirationPalette> = {
 	'daft-punk': {
 		primary: '#50C8D0',
 		colors: ['#50C8D0', '#C0C0D0', '#D4A040']
+	},
+	'brandon-sanderson': {
+		primary: '#B08040',
+		colors: ['#B08040', '#6A4828', '#D4A868']
 	}
 };
 
