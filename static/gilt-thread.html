@@ -90,6 +90,10 @@
     };
   }
 
+  // Mouse warp: smoothly shift frequency ratio to morph the pattern
+  var mouseWarp = 0;
+  var smoothWarp = 0;
+
   // Evaluate position on thread curve at parameter t
   function pos(th, t) {
     var s = t * th.speed;
@@ -123,10 +127,10 @@
         y: Math.cos(bt) * expTerm * ay * 0.28
       };
     }
-    // Default: shape 1 — Lissajous (original)
+    // Default: shape 1 — Lissajous (mouse warps frequency ratio)
     return {
-      x: Math.sin(s * th.fx + th.px) * ax,
-      y: Math.sin(s * th.fy + th.py) * ay
+      x: Math.sin(s * (th.fx + smoothWarp * 0.5) + th.px) * ax,
+      y: Math.sin(s * (th.fy - smoothWarp * 0.3) + th.py) * ay
     };
   }
 
@@ -196,13 +200,10 @@
 
   // ── Update trail: push current position, cap at TRAIL_MAX ──
   function updateTrail(th, tNow) {
-    // Blend center gently toward mouse when active — subtle parallax, not full follow
-    var centerX = W * 0.5;
-    var centerY = H * 0.5;
-    var targetCX = mouseActive ? centerX + (mouseX - centerX) * 0.15 : centerX;
-    var targetCY = mouseActive ? centerY + (mouseY - centerY) * 0.15 : centerY;
-    smoothCX += (targetCX - smoothCX) * 0.02;
-    smoothCY += (targetCY - smoothCY) * 0.02;
+    // Smooth the mouse warp toward target
+    smoothWarp += (mouseWarp - smoothWarp) * 0.03;
+    smoothCX = W * 0.5;
+    smoothCY = H * 0.5;
 
     var scale = Math.min(W, H) * 0.55;
     var p = pos(th, tNow);
@@ -330,9 +331,11 @@
     mouseX = e.clientX * dpr;
     mouseY = e.clientY * dpr;
     mouseActive = true;
+    mouseWarp = (e.clientX / canvas.clientWidth - 0.5) * 4;
   }
   function onMouseLeave() {
     mouseActive = false;
+    mouseWarp = 0;
   }
   function onTouchMove(e) {
     e.preventDefault();
@@ -340,15 +343,18 @@
     mouseX = t.clientX * dpr;
     mouseY = t.clientY * dpr;
     mouseActive = true;
+    mouseWarp = (t.clientX / canvas.clientWidth - 0.5) * 4;
   }
   function onTouchStart(e) {
     var t = e.touches[0];
     mouseX = t.clientX * dpr;
     mouseY = t.clientY * dpr;
     mouseActive = true;
+    mouseWarp = (t.clientX / canvas.clientWidth - 0.5) * 4;
   }
   function onTouchEnd() {
     mouseActive = false;
+    mouseWarp = 0;
   }
 
   canvas.addEventListener('mousemove', onMouseMove);
