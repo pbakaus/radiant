@@ -1,6 +1,23 @@
 <script lang="ts">
 	import Nav from '$lib/components/Nav.svelte';
+	import { beforeNavigate, afterNavigate } from '$app/navigation';
 	let { children } = $props();
+
+	// Disable smooth scroll during back/forward navigation so
+	// the browser's scroll restoration works instantly.
+	beforeNavigate(({ type }) => {
+		if (type === 'popstate') {
+			document.documentElement.classList.add('restoring-scroll');
+		}
+	});
+	afterNavigate(({ type }) => {
+		if (type === 'popstate') {
+			// Remove after a tick so the restored position sticks
+			requestAnimationFrame(() => {
+				document.documentElement.classList.remove('restoring-scroll');
+			});
+		}
+	});
 </script>
 
 <svelte:head>
@@ -50,7 +67,7 @@
 		--nav-height: 56px;
 	}
 	@media (prefers-reduced-motion: no-preference) {
-		:global(html) {
+		:global(html:not(.restoring-scroll)) {
 			scroll-behavior: smooth;
 		}
 	}
