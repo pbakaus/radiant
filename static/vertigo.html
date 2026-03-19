@@ -76,11 +76,7 @@
     '  float aspect = u_res.x / u_res.y;',
     '',
     '  // Center UV, correct aspect',
-    '  vec2 center = vec2(0.5);',
-    '  if (u_mouse.x > 0.0) {',
-    '    center = u_mouse / u_res;',
-    '  }',
-    '  vec2 p = (uv - center) * vec2(aspect, 1.0);',
+    '  vec2 p = (uv - 0.5) * vec2(aspect, 1.0);',
     '',
     '  float t = u_time;',
     '  float scrollSpeed = u_tunnelSpeed;',
@@ -92,9 +88,8 @@
     '  // ── Steady tunnel depth — NO dolly-zoom, fixed FOV ──',
     '  float depth = 1.0 / (r + 0.04);',
     '',
-    '  // ── Very slow, barely perceptible rotation ──',
-    '  // Gentle drift: ~0.02 rad/sec, with a slow sinusoidal wobble',
-    '  float rotAngle = t * 0.02 + sin(t * 0.07) * 0.15;',
+    '  // ── Rotation: auto drift + mouse drag offset ──',
+    '  float rotAngle = t * 0.02 + sin(t * 0.07) * 0.15 + u_mouse.x;',
     '  float thetaRot = theta + rotAngle;',
     '',
     '  // ── Tunnel texture coordinates ──',
@@ -264,32 +259,23 @@
   var uTunnelSpeed = gl.getUniformLocation(prog, 'u_tunnelSpeed');
   var uSpiralIntensity = gl.getUniformLocation(prog, 'u_spiralIntensity');
   var uMouse = gl.getUniformLocation(prog, 'u_mouse');
-  var mouseXVal = -1, mouseYVal = -1;
+  // Drag to rotate the tunnel
+  var mouseRotOffset = 0;
+  var mouseDown = false, lastMX = 0;
 
   var dpr = Math.min(window.devicePixelRatio || 1, 2);
 
+  canvas.addEventListener('mousedown', function(e) { mouseDown = true; lastMX = e.clientX; });
   canvas.addEventListener('mousemove', function(e) {
-    mouseXVal = e.clientX * dpr;
-    mouseYVal = (canvas.clientHeight - e.clientY) * dpr;
+    if (mouseDown) { mouseRotOffset += (e.clientX - lastMX) * 0.005; lastMX = e.clientX; }
   });
-  canvas.addEventListener('mouseleave', function() {
-    mouseXVal = -1; mouseYVal = -1;
-  });
-  canvas.addEventListener('touchstart', function(e) {
-    e.preventDefault();
-    var t = e.touches[0];
-    mouseXVal = t.clientX * dpr;
-    mouseYVal = (canvas.clientHeight - t.clientY) * dpr;
-  }, { passive: false });
+  canvas.addEventListener('mouseup', function() { mouseDown = false; });
+  canvas.addEventListener('touchstart', function(e) { e.preventDefault(); mouseDown = true; lastMX = e.touches[0].clientX; }, { passive: false });
   canvas.addEventListener('touchmove', function(e) {
     e.preventDefault();
-    var t = e.touches[0];
-    mouseXVal = t.clientX * dpr;
-    mouseYVal = (canvas.clientHeight - t.clientY) * dpr;
+    if (mouseDown) { mouseRotOffset += (e.touches[0].clientX - lastMX) * 0.005; lastMX = e.touches[0].clientX; }
   }, { passive: false });
-  canvas.addEventListener('touchend', function() {
-    mouseXVal = -1; mouseYVal = -1;
-  });
+  canvas.addEventListener('touchend', function() { mouseDown = false; });
   var needsResize = true;
   var running = true;
 
@@ -312,7 +298,7 @@
     gl.uniform1f(uTime, t);
     gl.uniform1f(uTunnelSpeed, TUNNEL_SPEED);
     gl.uniform1f(uSpiralIntensity, SPIRAL_INTENSITY);
-    gl.uniform2f(uMouse, mouseXVal, mouseYVal);
+    gl.uniform2f(uMouse, mouseRotOffset, 0.0);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     requestAnimationFrame(render);
   }
