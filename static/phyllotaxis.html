@@ -166,8 +166,8 @@
         const a2 = p2.baseAngle + rotation;
 
         const fx1 = Math.cos(a1) * r1, fy1 = Math.sin(a1) * r1;
-        const cXt = Math.cos(tiltY), cYt = Math.cos(tiltX);
-        const sYt = Math.sin(tiltY), sXt = Math.sin(-tiltX);
+        const cXt = Math.cos(tiltX), cYt = Math.cos(tiltY);
+        const sYt = Math.sin(tiltX), sXt = Math.sin(-tiltY);
         const z1 = fx1 * sYt + fy1 * sXt;
         const p1p = 1 + z1 * 0.0008;
         const x1 = cx + fx1 * cXt * p1p;
@@ -256,10 +256,10 @@
       const flatX = Math.cos(angle) * r;
       const flatY = Math.sin(angle) * r;
       // Apply pseudo-3D tilt: compress axes based on tilt angle
-      const cosX = Math.cos(tiltY);
-      const cosY = Math.cos(tiltX);
+      const cosX = Math.cos(tiltX);
+      const cosY = Math.cos(tiltY);
       // Perspective foreshortening
-      const z = flatX * Math.sin(tiltY) + flatY * Math.sin(-tiltX);
+      const z = flatX * Math.sin(tiltX) + flatY * Math.sin(-tiltY);
       const perspective = 1 + z * 0.0008;
       const x = cx + flatX * cosX * perspective;
       const y = cy + flatY * cosY * perspective;
