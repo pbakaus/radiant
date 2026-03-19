@@ -11,6 +11,9 @@
 			<ul>
 				<li>Mouse & touch interactivity for all 82 shaders — move, click, or drag to interact</li>
 				<li>Auto-detected interaction hints on detail pages</li>
+				<li>Moonlit Ripple shader rewritten — 3D perspective camera, physically-based waves with Fresnel reflection, adjustable wave intensity (calm lake to stormy ocean), and textured moon</li>
+				<li>Gallery live mode toggle — opt-in to preview all visible shaders at once</li>
+				<li>Per-shader default color schemes</li>
 			</ul>
 		</div>
 		<div class="entry">
