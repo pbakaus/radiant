@@ -622,9 +622,6 @@
     mouseWavePos = e.clientX / width;
   });
   canvas.addEventListener('mouseleave', function() { mouseActive = false; });
-  canvas.addEventListener('click', function() {
-    wavePhase = 1 - wavePhase;
-  });
   canvas.addEventListener('touchstart', function(e) {
     e.preventDefault();
     mouseActive = true;
