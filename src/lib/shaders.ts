@@ -853,7 +853,6 @@ export const shaders: Shader[] = [
 		inspiration: 'Zendaya',
 		tags: ['fill', 'organic', 'particles'],
 		technique: 'webgl',
-		defaultScheme: 'blue',
 		params: [
 			{ name: 'GLOW_INTENSITY', label: 'Glow Intensity', min: 0.3, max: 2.0, step: 0.1, default: 1.0 },
 			{ name: 'WAVE_SPEED', label: 'Wave Speed', min: 0.2, max: 2.0, step: 0.1, default: 1.0 }
@@ -1187,6 +1186,66 @@ export const shaders: Shader[] = [
 		params: [
 			{ name: 'DRIFT_SPEED', label: 'Drift Speed', min: 0.1, max: 2.0, step: 0.05, default: 0.6 },
 			{ name: 'DENSITY', label: 'Density', min: 0.3, max: 2.0, step: 0.05, default: 1.0 }
+		]
+	},
+	{
+		id: 'chrome-cascade',
+		file: 'chrome-cascade.html',
+		title: 'Chrome Cascade',
+		desc: 'Liquid chrome surface with iridescent 80s reflections — hot pink, cyan, and purple shimmer across flowing metal.',
+		tags: ['fill', 'noise'],
+		technique: 'webgl',
+		params: [
+			{ name: 'FLOW_SPEED', label: 'Flow Speed', min: 0.1, max: 2.0, step: 0.05, default: 1.0 },
+			{ name: 'CHROME_INTENSITY', label: 'Chrome Intensity', min: 0.3, max: 2.0, step: 0.1, default: 1.0 }
+		]
+	},
+	{
+		id: 'disco-prism',
+		file: 'disco-prism.html',
+		title: 'Disco Prism',
+		desc: 'Sweeping prismatic light beams with spectral color separation — the experience of light itself.',
+		tags: ['fill', 'geometric'],
+		technique: 'webgl',
+		params: [
+			{ name: 'BEAM_COUNT', label: 'Beam Count', min: 0.3, max: 2.0, step: 0.1, default: 1.0 },
+			{ name: 'ROTATION_SPEED', label: 'Rotation Speed', min: 0.1, max: 2.0, step: 0.05, default: 1.0 }
+		]
+	},
+	{
+		id: 'synth-ribbon',
+		file: 'synth-ribbon.html',
+		title: 'Synth Ribbon',
+		desc: 'Flowing metallic ribbons twisting through 3D space with chrome reflections in hot pink and cyan.',
+		tags: ['fill', 'geometric'],
+		technique: 'canvas-2d',
+		params: [
+			{ name: 'RIBBON_COUNT', label: 'Ribbon Count', min: 0.5, max: 2.0, step: 0.1, default: 1.0 },
+			{ name: 'TWIST_SPEED', label: 'Twist Speed', min: 0.1, max: 2.0, step: 0.05, default: 1.0 }
+		]
+	},
+	{
+		id: 'hologram-glitch',
+		file: 'hologram-glitch.html',
+		title: 'Hologram Glitch',
+		desc: 'Abstract holographic texture with chromatic aberration, scanlines, and controlled glitch bursts.',
+		tags: ['fill', 'noise'],
+		technique: 'webgl',
+		params: [
+			{ name: 'GLITCH_INTENSITY', label: 'Glitch Intensity', min: 0.0, max: 2.0, step: 0.1, default: 1.0 },
+			{ name: 'SCAN_SPEED', label: 'Scan Speed', min: 0.1, max: 2.0, step: 0.05, default: 1.0 }
+		]
+	},
+	{
+		id: 'retro-futura',
+		file: 'retro-futura.html',
+		title: 'Retro Futura',
+		desc: 'Art deco meets neon — bold symmetrical geometric patterns with chrome gradients and neon edge glow.',
+		tags: ['fill', 'geometric'],
+		technique: 'webgl',
+		params: [
+			{ name: 'PATTERN_COMPLEXITY', label: 'Pattern Complexity', min: 0.3, max: 2.0, step: 0.1, default: 1.0 },
+			{ name: 'GLOW_INTENSITY', label: 'Glow Intensity', min: 0.3, max: 2.0, step: 0.1, default: 1.0 }
 		]
 	}
 ];
