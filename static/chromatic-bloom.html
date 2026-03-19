@@ -248,7 +248,7 @@
     '    col += vec3(0.8, 0.6, 0.9) * attract * 0.08;',
     '  }',
     '  // ── Film grain (applied in display space, after tone mapping) ──',
-    '  float grain = filmGrain(gl_FragCoord.xy, u_time * 17.3);',
+    '  float grain = fract(sin(dot(gl_FragCoord.xy + fract(u_time) * 100.0, vec2(12.9898, 78.233))) * 43758.5453) - 0.5;',
     '  col += grain * 0.3 * u_grain;',
     '  gl_FragColor = vec4(col, 1.0);',
     '}'
