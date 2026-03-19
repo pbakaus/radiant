@@ -2,7 +2,13 @@
  * Shader HTML utilities.
  *
  * Fetches shader HTML, injects pause/resume hooks, and caches results.
+ * Exposes a shared `liveMode` toggle for gallery pages.
  */
+
+// ── Live mode (opt-in: render all visible shaders) ───────────────────
+let _liveMode = $state(false);
+export function getLiveMode() { return _liveMode; }
+export function setLiveMode(v: boolean) { _liveMode = v; }
 
 // ── Pause / resume script injected into shader HTML ──────────────────
 const PAUSE_SCRIPT = `<script>(function(){

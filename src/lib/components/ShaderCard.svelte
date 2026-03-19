@@ -2,7 +2,7 @@
 	import { getShaderNumber, type Shader } from '$lib/shaders';
 	import { getPaletteForInspiration, hexToRgb } from '$lib/inspiration-palettes';
 	import { colorSchemes, type ColorScheme } from '$lib/color-schemes';
-	import { fetchShaderHtml } from '$lib/shader-budget.svelte';
+	import { fetchShaderHtml, getLiveMode } from '$lib/shader-budget.svelte';
 
 	let { shader, scheme }: { shader: Shader; scheme: ColorScheme } = $props();
 
@@ -16,6 +16,7 @@
 	const spritePosY = $derived(schemeIndex * 20);
 
 	// ── Card state ───────────────────────────────────────────────────
+	let visible = $state(false);
 	let hovered = $state(false);
 	let srcdoc = $state<string | null>(null);
 	let loadIframe = $state(false);
@@ -23,14 +24,18 @@
 	let warm = $state(false); // shader compiled + ready
 	let fpsInjected = false;
 
-	// Show the iframe when hovered and warm
-	const showIframe = $derived(warm && hovered);
+	// Active when hovered, or when live mode is on and visible
+	const active = $derived(hovered || (getLiveMode() && visible));
 
-	// ── Pre-fetch HTML when visible (cheap, no iframes) ─────────────
+	// Show the iframe when active and warm
+	const showIframe = $derived(warm && active);
+
+	// ── Visibility tracking ──────────────────────────────────────────
 	function observe(node: HTMLElement) {
 		const obs = new IntersectionObserver(
 			([e]) => {
-				if (e.isIntersecting && !srcdoc) {
+				visible = e.isIntersecting;
+				if (visible && !srcdoc) {
 					fetchShaderHtml(shader.file, shader.id).then((html) => { srcdoc = html; });
 				}
 			},
@@ -40,12 +45,24 @@
 		return { destroy() { obs.disconnect(); } };
 	}
 
+	// ── React to live mode / visibility changes ─────────────────────
+	$effect(() => {
+		if (active && srcdoc && !loadIframe) {
+			loadIframe = true;
+		}
+		if (active && warm) {
+			resumeShader();
+		} else if (!active && warm) {
+			pauseShader();
+		}
+	});
+
 	// ── Iframe lifecycle ─────────────────────────────────────────────
 	function onIframeLoad(el: HTMLIFrameElement) {
 		iframeEl = el;
-		// Shader is ready — if still hovered, keep it running; otherwise pause
+		// Shader is ready — if active, keep it running; otherwise pause
 		warm = true;
-		if (!hovered) pauseShader();
+		if (!active) pauseShader();
 	}
 
 	function injectFpsCounter() {
@@ -78,23 +95,13 @@
 	// ── Hover ────────────────────────────────────────────────────────
 	async function onMouseEnter() {
 		hovered = true;
-		if (warm) {
-			resumeShader();
-		} else if (!loadIframe) {
-			// Fetch HTML on first hover, then create iframe
-			if (!srcdoc) {
-				srcdoc = await fetchShaderHtml(shader.file, shader.id);
-				if (!hovered) return; // left before fetch completed
-			}
-			loadIframe = true;
+		if (!srcdoc) {
+			srcdoc = await fetchShaderHtml(shader.file, shader.id);
 		}
 	}
 
 	function onMouseLeave() {
 		hovered = false;
-		if (warm) {
-			pauseShader();
-		}
 	}
 </script>
 
@@ -115,10 +122,12 @@
 			style:background-position="0 {spritePosY}%"
 		></div>
 
-		<!-- Hover hint: fades when iframe shows -->
-		<div class="hover-hint" class:hide={hovered}>
-			<span>Hover to preview</span>
-		</div>
+		<!-- Hover hint: fades when active -->
+		{#if !getLiveMode()}
+			<div class="hover-hint" class:hide={hovered}>
+				<span>Hover to preview</span>
+			</div>
+		{/if}
 
 		<!-- Iframe: created once HTML is fetched + preload slot granted -->
 		{#if loadIframe && srcdoc}
