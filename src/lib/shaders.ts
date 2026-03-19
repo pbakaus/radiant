@@ -1179,30 +1179,6 @@ export const shaders: Shader[] = [
 		]
 	},
 	{
-		id: 'chrome-cascade',
-		file: 'chrome-cascade.html',
-		title: 'Chrome Cascade',
-		desc: 'Liquid chrome surface with iridescent 80s reflections — hot pink, cyan, and purple shimmer across flowing metal.',
-		tags: ['fill', 'noise'],
-		technique: 'webgl',
-		params: [
-			{ name: 'FLOW_SPEED', label: 'Flow Speed', min: 0.1, max: 2.0, step: 0.05, default: 1.0 },
-			{ name: 'CHROME_INTENSITY', label: 'Chrome Intensity', min: 0.3, max: 2.0, step: 0.1, default: 1.0 }
-		]
-	},
-	{
-		id: 'disco-prism',
-		file: 'disco-prism.html',
-		title: 'Disco Prism',
-		desc: 'Sweeping prismatic light beams with spectral color separation — the experience of light itself.',
-		tags: ['fill', 'geometric'],
-		technique: 'webgl',
-		params: [
-			{ name: 'BEAM_COUNT', label: 'Beam Count', min: 0.3, max: 2.0, step: 0.1, default: 1.0 },
-			{ name: 'ROTATION_SPEED', label: 'Rotation Speed', min: 0.1, max: 2.0, step: 0.05, default: 1.0 }
-		]
-	},
-	{
 		id: 'synth-ribbon',
 		file: 'synth-ribbon.html',
 		title: 'Synth Ribbon',
@@ -1224,18 +1200,6 @@ export const shaders: Shader[] = [
 		params: [
 			{ name: 'GLITCH_INTENSITY', label: 'Glitch Intensity', min: 0.0, max: 2.0, step: 0.1, default: 1.0 },
 			{ name: 'SCAN_SPEED', label: 'Scan Speed', min: 0.1, max: 2.0, step: 0.05, default: 1.0 }
-		]
-	},
-	{
-		id: 'retro-futura',
-		file: 'retro-futura.html',
-		title: 'Retro Futura',
-		desc: 'Art deco meets neon — bold symmetrical geometric patterns with chrome gradients and neon edge glow.',
-		tags: ['fill', 'geometric'],
-		technique: 'webgl',
-		params: [
-			{ name: 'PATTERN_COMPLEXITY', label: 'Pattern Complexity', min: 0.3, max: 2.0, step: 0.1, default: 1.0 },
-			{ name: 'GLOW_INTENSITY', label: 'Glow Intensity', min: 0.3, max: 2.0, step: 0.1, default: 1.0 }
 		]
 	}
 ];

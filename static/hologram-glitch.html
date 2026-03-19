@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hologram Glitch</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Hologram Glitch</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// Hologram Glitch — Abstract holographic projection with scan lines,
+// color separation, and controlled glitch artifacts
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var urlParams = new URLSearchParams(window.location.search);
+  var pixelScale = parseFloat(urlParams.get('p')) || 1;
+
+  var gl = canvas.getContext('webgl', { alpha: false, antialias: false, preserveDrawingBuffer: false });
+  if (!gl) return;
+
+  // Tunable parameters
+  var GLITCH_INTENSITY = 1.0;
+  var SCAN_SPEED = 1.0;
+
+  var vertSrc = [
+    'attribute vec2 a_pos;',
+    'void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }'
+  ].join('\n');
+
+  var fragSrc = [
+    'precision highp float;',
+    'uniform float u_time;',
+    'uniform vec2 u_res;',
+    'uniform float u_glitchIntensity;',
+    'uniform float u_scanSpeed;',
+    'uniform vec2 u_mouse;',
+    '',
+    '#define PI 3.14159265359',
+    '',
+    '// ── Hash helpers ──',
+    'float hash(float n) {',
+    '  return fract(sin(n) * 43758.5453123);',
+    '}',
+    '',
+    'float hash2(vec2 p) {',
+    '  vec3 p3 = fract(vec3(p.xyx) * 0.1031);',
+    '  p3 += dot(p3, p3.yzx + 33.33);',
+    '  return fract((p3.x + p3.y) * p3.z);',
+    '}',
+    '',
+    '// ── Value noise ──',
+    'float vnoise(vec2 p) {',
+    '  vec2 i = floor(p);',
+    '  vec2 f = fract(p);',
+    '  f = f * f * (3.0 - 2.0 * f);',
+    '  return mix(',
+    '    mix(hash2(i), hash2(i + vec2(1.0, 0.0)), f.x),',
+    '    mix(hash2(i + vec2(0.0, 1.0)), hash2(i + vec2(1.0, 1.0)), f.x),',
+    '    f.y',
+    '  );',
+    '}',
+    '',
+    '// ── FBM noise (6 octaves for more detail) ──',
+    'float fbm(vec2 p) {',
+    '  float v = 0.0;',
+    '  float a = 0.5;',
+    '  vec2 shift = vec2(100.0);',
+    '  mat2 rot = mat2(cos(0.5), sin(0.5), -sin(0.5), cos(0.5));',
+    '  for (int i = 0; i < 6; i++) {',
+    '    v += a * vnoise(p);',
+    '    p = rot * p * 2.0 + shift;',
+    '    a *= 0.5;',
+    '  }',
+    '  return v;',
+    '}',
+    '',
+    '// ── Glitch timing — rhythmic bursts ──',
+    '// Returns a glitch envelope that pulses in controlled bursts',
+    'float glitchEnvelope(float t) {',
+    '  // Slow rhythm: bursts every ~3-4 seconds',
+    '  float slow = sin(t * 0.7) * sin(t * 1.1);',
+    '  // Medium rhythm: sub-pulses within bursts',
+    '  float med = sin(t * 3.3) * 0.5 + 0.5;',
+    '  // Fast crackle during bursts',
+    '  float fast = step(0.88, hash(floor(t * 12.0)));',
+    '  // Combine: active with frequent bursts',
+    '  float envelope = smoothstep(0.15, 0.5, slow) * (0.5 + 0.5 * med);',
+    '  // Add sharp spikes',
+    '  envelope += fast * 0.7;',
+    '  return clamp(envelope, 0.0, 1.0);',
+    '}',
+    '',
+    '// ── Horizontal glitch band offset ──',
+    'float glitchBand(float y, float t, float intensity) {',
+    '  float env = glitchEnvelope(t);',
+    '  if (env < 0.1) return 0.0;',
+    '',
+    '  // Multiple glitch band layers at different scales',
+    '  float band1 = step(0.8, vnoise(vec2(y * 15.0, floor(t * 8.0)))) * 0.14;',
+    '  float band2 = step(0.85, vnoise(vec2(y * 40.0, floor(t * 15.0)))) * 0.07;',
+    '  float band3 = step(0.82, vnoise(vec2(y * 5.0, floor(t * 4.0)))) * 0.25;',
+    '',
+    '  // Direction: some bands go left, some right',
+    '  float dir = sign(vnoise(vec2(y * 20.0, floor(t * 6.0))) - 0.5);',
+    '',
+    '  return (band1 + band2 + band3) * dir * env * intensity;',
+    '}',
+    '',
+    '// ── Noise burst rectangles ──',
+    'float noiseBurst(vec2 uv, float t) {',
+    '  float env = glitchEnvelope(t + 1.5);',
+    '  if (env < 0.3) return 0.0;',
+    '',
+    '  // Random rectangular region',
+    '  float blockT = floor(t * 6.0);',
+    '  float bx = hash(blockT * 7.3) * 0.8 - 0.4;',
+    '  float by = hash(blockT * 11.7) * 0.8 - 0.4;',
+    '  float bw = hash(blockT * 3.1) * 0.3 + 0.05;',
+    '  float bh = hash(blockT * 5.9) * 0.1 + 0.02;',
+    '',
+    '  float inBlock = step(bx, uv.x) * step(uv.x, bx + bw) *',
+    '                  step(by, uv.y) * step(uv.y, by + bh);',
+    '',
+    '  // High-frequency noise inside the block',
+    '  float n = hash2(floor(uv * 300.0) + blockT * 100.0);',
+    '  return inBlock * n * env * 1.0;',
+    '}',
+    '',
+    'void main() {',
+    '  vec2 uv = gl_FragCoord.xy / u_res;',
+    '  vec2 centeredUV = (gl_FragCoord.xy - u_res * 0.5) / u_res.y;',
+    '  float t = u_time;',
+    '  float glitchI = u_glitchIntensity;',
+    '  float scanS = u_scanSpeed;',
+    '',
+    '  // ── Mouse influence: glitch epicenter ──',
+    '  vec2 mouseNorm = vec2(0.5, 0.5);',
+    '  float mouseInfluence = 0.0;',
+    '  if (u_mouse.x >= 0.0) {',
+    '    mouseNorm = u_mouse / u_res;',
+    '    mouseNorm.y = 1.0 - mouseNorm.y;', // flip Y for screen coords
+    '    float mouseDist = length(uv - mouseNorm);',
+    '    mouseInfluence = exp(-mouseDist * 3.0);',
+    '  }',
+    '',
+    '  // ── Layer 4: Horizontal glitch band displacement ──',
+    '  float bandOffset = glitchBand(uv.y, t, glitchI);',
+    '  // Mouse proximity amplifies glitch bands',
+    '  bandOffset *= (1.0 + mouseInfluence * 2.0);',
+    '',
+    '  // Apply band displacement to UV',
+    '  vec2 glitchedUV = uv;',
+    '  glitchedUV.x += bandOffset;',
+    '',
+    '  // ── Layer 3: Chromatic aberration ──',
+    '  // Base offset pulses and occasionally jumps',
+    '  float chromBase = 0.008 + 0.006 * sin(t * 1.2);',
+    '  // Glitch spikes in chromatic aberration',
+    '  float chromSpike = glitchEnvelope(t) * 0.035 * glitchI;',
+    '  // Sharp jumps',
+    '  float chromJump = step(0.92, hash(floor(t * 5.0))) * 0.05 * glitchI;',
+    '  float chromAmount = chromBase + chromSpike + chromJump;',
+    '  // Mouse increases chromatic aberration near cursor',
+    '  chromAmount *= (1.0 + mouseInfluence * 1.5);',
+    '',
+    '  // R shifts left, B shifts right',
+    '  vec2 uvR = glitchedUV + vec2(-chromAmount, 0.0);',
+    '  vec2 uvG = glitchedUV;',
+    '  vec2 uvB = glitchedUV + vec2(chromAmount, 0.0);',
+    '',
+    '  // Also add slight vertical separation',
+    '  uvR.y += chromAmount * 0.5;',
+    '  uvB.y -= chromAmount * 0.5;',
+    '',
+    '  // ── Layer 1: Base flowing abstract shapes ──',
+    '  // Organic holographic blobs using layered FBM noise',
+    '  float slowT = t * 0.15;',
+    '',
+    '  // Sample base pattern at each channel offset',
+    '  // Pattern: morphing organic blobs',
+    '  float patR = fbm(uvR * 3.0 + vec2(slowT, slowT * 0.7));',
+    '  patR += fbm(uvR * 5.0 - vec2(slowT * 0.5, slowT * 1.2)) * 0.5;',
+    '  patR += fbm(uvR * 1.5 + vec2(slowT * 0.3, -slowT * 0.4)) * 0.7;',
+    '  patR += fbm(uvR * 10.0 + vec2(slowT * 1.5, -slowT * 0.8)) * 0.25;',
+    '',
+    '  float patG = fbm(uvG * 3.0 + vec2(slowT, slowT * 0.7));',
+    '  patG += fbm(uvG * 5.0 - vec2(slowT * 0.5, slowT * 1.2)) * 0.5;',
+    '  patG += fbm(uvG * 1.5 + vec2(slowT * 0.3, -slowT * 0.4)) * 0.7;',
+    '  patG += fbm(uvG * 10.0 + vec2(slowT * 1.5, -slowT * 0.8)) * 0.25;',
+    '',
+    '  float patB = fbm(uvB * 3.0 + vec2(slowT, slowT * 0.7));',
+    '  patB += fbm(uvB * 5.0 - vec2(slowT * 0.5, slowT * 1.2)) * 0.5;',
+    '  patB += fbm(uvB * 1.5 + vec2(slowT * 0.3, -slowT * 0.4)) * 0.7;',
+    '  patB += fbm(uvB * 10.0 + vec2(slowT * 1.5, -slowT * 0.8)) * 0.25;',
+    '',
+    '  // Normalize patterns',
+    '  patR = patR / 2.45;',
+    '  patG = patG / 2.45;',
+    '  patB = patB / 2.45;',
+    '',
+    '  // Shape the patterns into sharply defined blobs',
+    '  patR = smoothstep(0.35, 0.55, patR);',
+    '  patG = smoothstep(0.35, 0.55, patG);',
+    '  patB = smoothstep(0.35, 0.55, patB);',
+    '',
+    '  // Push contrast further — darks darker, brights brighter',
+    '  patR = patR * patR * (3.0 - 2.0 * patR);',
+    '  patG = patG * patG * (3.0 - 2.0 * patG);',
+    '  patB = patB * patB * (3.0 - 2.0 * patB);',
+    '',
+    '  // ── Layer 6: Holographic color shift ──',
+    '  // Cycle through cyan -> magenta -> yellow like a holographic sticker',
+    '  float hueShift = t * 0.2;',
+    '  float hue1 = sin(hueShift) * 0.5 + 0.5;',
+    '  float hue2 = sin(hueShift + 2.094) * 0.5 + 0.5;',
+    '  float hue3 = sin(hueShift + 4.189) * 0.5 + 0.5;',
+    '',
+    '  // Spatial variation in hue (like light catching at different angles)',
+    '  float spatialHue = sin(centeredUV.x * 4.0 + centeredUV.y * 3.0 + t * 0.3) * 0.5 + 0.5;',
+    '',
+    '  // Base holographic palette: vivid cyan/magenta/white',
+    '  vec3 col1 = vec3(0.0, 1.0, 1.2);  // electric cyan (HDR push)',
+    '  vec3 col2 = vec3(1.2, 0.1, 0.9);  // hot magenta (HDR push)',
+    '  vec3 col3 = vec3(1.2, 1.25, 1.3); // bright white (HDR push)',
+    '  vec3 col4 = vec3(1.0, 0.95, 0.2); // yellow',
+    '',
+    '  // Mix palette based on time and position',
+    '  vec3 palette = mix(col1, col2, hue1 * spatialHue);',
+    '  palette = mix(palette, col3, hue2 * 0.3);',
+    '  palette = mix(palette, col4, hue3 * spatialHue * 0.4);',
+    '',
+    '  // Apply palette with per-channel separation',
+    '  vec3 baseColor;',
+    '  baseColor.r = patR * palette.r;',
+    '  baseColor.g = patG * palette.g;',
+    '  baseColor.b = patB * palette.b;',
+    '',
+    '  // Add bright spots where all channels align — near white highlights',
+    '  float alignment = patR * patG * patB;',
+    '  baseColor += vec3(0.9, 0.95, 1.0) * pow(alignment, 1.5) * 1.2;',
+    '',
+    '  // ── Layer 2: Scanline overlay ──',
+    '  // Multiple scanline layers at different densities and speeds',
+    '  float scanY = gl_FragCoord.y;',
+    '',
+    '  // Fine scanlines — every 2-3 pixels, sharp',
+    '  float fineScan = sin(scanY * PI * 0.8) * 0.5 + 0.5;',
+    '  fineScan = pow(fineScan, 1.5); // sharpen',
+    '',
+    '  // Medium scanlines — scrolling upward, per-channel at different speeds',
+    '  float medScanR = sin((scanY + t * 60.0 * scanS) * 0.15) * 0.5 + 0.5;',
+    '  float medScanG = sin((scanY + t * 75.0 * scanS) * 0.15) * 0.5 + 0.5;',
+    '  float medScanB = sin((scanY + t * 55.0 * scanS) * 0.15) * 0.5 + 0.5;',
+    '',
+    '  // Broad scan bands — slow sweep',
+    '  float broadScan = sin((scanY + t * 30.0 * scanS) * 0.03) * 0.5 + 0.5;',
+    '  broadScan = smoothstep(0.3, 0.7, broadScan);',
+    '',
+    '  // Combine scanlines — deeper cuts for visible lines',
+    '  float scanR = mix(0.45, 1.0, fineScan) * mix(0.7, 1.0, medScanR) * mix(0.6, 1.0, broadScan);',
+    '  float scanG = mix(0.45, 1.0, fineScan) * mix(0.7, 1.0, medScanG) * mix(0.6, 1.0, broadScan);',
+    '  float scanB = mix(0.45, 1.0, fineScan) * mix(0.7, 1.0, medScanB) * mix(0.6, 1.0, broadScan);',
+    '',
+    '  // Bright scan line — a single bright line that sweeps up periodically',
+    '  float brightScanPos = mod(t * 40.0 * scanS, u_res.y);',
+    '  float brightScan = exp(-abs(scanY - brightScanPos) * 0.12) * 0.7;',
+    '',
+    '  baseColor.r *= scanR;',
+    '  baseColor.g *= scanG;',
+    '  baseColor.b *= scanB;',
+    '  baseColor += vec3(0.3, 0.8, 1.0) * brightScan;',
+    '',
+    '  // ── Layer 5: Interlace flicker ──',
+    '  float interlace = mod(scanY + floor(t * 30.0), 2.0);',
+    '  float interlaceFlicker = mix(0.78, 1.0, interlace);',
+    '  // Occasional full-line flicker',
+    '  float lineFlicker = 1.0 - step(0.95, hash(floor(scanY * 0.5) + floor(t * 20.0) * 100.0)) * 0.5;',
+    '  baseColor *= interlaceFlicker * lineFlicker;',
+    '',
+    '  // ── Layer 7: Noise burst artifacts ──',
+    '  float burst = noiseBurst(centeredUV, t);',
+    '  vec3 burstColor = vec3(0.5, 0.9, 1.0) * burst;',
+    '  baseColor += burstColor * glitchI;',
+    '',
+    '  // ── Layer 8: Edge glow ──',
+    '  // Where holographic "volume" meets dark background',
+    '  // Use the gradient of the base pattern as edge detection',
+    '  float patCenter = fbm(glitchedUV * 3.0 + vec2(slowT, slowT * 0.7));',
+    '  float patDx = fbm((glitchedUV + vec2(0.005, 0.0)) * 3.0 + vec2(slowT, slowT * 0.7));',
+    '  float patDy = fbm((glitchedUV + vec2(0.0, 0.005)) * 3.0 + vec2(slowT, slowT * 0.7));',
+    '  float edgeStrength = length(vec2(patDx - patCenter, patDy - patCenter)) * 20.0;',
+    '  edgeStrength = smoothstep(0.2, 0.8, edgeStrength);',
+    '  vec3 edgeColor = mix(vec3(0.2, 0.9, 1.2), vec3(1.2, 0.3, 1.0), spatialHue) * edgeStrength * 0.6;',
+    '  baseColor += edgeColor;',
+    '',
+    '  // ── Holographic shimmer — position-dependent brightness ──',
+    '  float shimmer = sin(centeredUV.x * 20.0 + centeredUV.y * 15.0 + t * 2.0) * 0.15 + 0.85;',
+    '  shimmer *= sin(centeredUV.x * 8.0 - centeredUV.y * 12.0 + t * 1.3) * 0.1 + 0.9;',
+    '  baseColor *= shimmer;',
+    '',
+    '  // ── Overall intensity modulation — moments of clarity ──',
+    '  float clarity = sin(t * 0.4) * 0.15 + 0.85;',
+    '  baseColor *= clarity;',
+    '',
+    '  // ── Layer 9: Vignette — pull corners to deep blue-black ──',
+    '  float vDist = length(centeredUV * vec2(1.0, 0.85));',
+    '  float vignette = 1.0 - smoothstep(0.3, 0.85, vDist);',
+    '  vec3 vignetteColor = vec3(0.01, 0.01, 0.04); // near black with blue tint',
+    '  baseColor = mix(vignetteColor, baseColor, vignette);',
+    '',
+    '  // ── Film grain for texture ──',
+    '  float grain = (hash2(gl_FragCoord.xy + fract(t * 43.0) * 1000.0) - 0.5) * 0.06;',
+    '  baseColor += grain;',
+    '',
+    '  // ── Tone mapping — S-curve with strong contrast ──',
+    '  baseColor = baseColor / (baseColor + vec3(0.8));',
+    '  baseColor = pow(baseColor, vec3(1.1));',
+    '',
+    '  baseColor = max(baseColor, vec3(0.0));',
+    '',
+    '  gl_FragColor = vec4(baseColor, 1.0);',
+    '}'
+  ].join('\n');
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error('Shader compile error:', gl.getShaderInfoLog(s));
+    }
+    return s;
+  }
+
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error('Program link error:', gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var uTime = gl.getUniformLocation(prog, 'u_time');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uGlitchIntensity = gl.getUniformLocation(prog, 'u_glitchIntensity');
+  var uScanSpeed = gl.getUniformLocation(prog, 'u_scanSpeed');
+  var uMouse = gl.getUniformLocation(prog, 'u_mouse');
+
+  // ── Mouse tracking ──
+  var mouseX = -1, mouseY = -1;
+  var smoothMouseX = -1, smoothMouseY = -1;
+  var mouseActive = false;
+
+  function cssToGL(clientX, clientY) {
+    var scale = Math.min(window.devicePixelRatio || 1, 2) / pixelScale;
+    return {
+      x: clientX * scale,
+      y: (canvas.clientHeight - clientY) * scale
+    };
+  }
+  canvas.addEventListener('mousemove', function (e) {
+    var p = cssToGL(e.clientX, e.clientY);
+    mouseX = p.x; mouseY = p.y;
+    mouseActive = true;
+  });
+  canvas.addEventListener('mouseleave', function () {
+    mouseActive = false;
+  });
+  canvas.addEventListener('touchstart', function (e) {
+    var t = e.touches[0];
+    var p = cssToGL(t.clientX, t.clientY);
+    mouseX = p.x; mouseY = p.y;
+    mouseActive = true;
+  }, { passive: true });
+  canvas.addEventListener('touchmove', function (e) {
+    e.preventDefault();
+    var t = e.touches[0];
+    var p = cssToGL(t.clientX, t.clientY);
+    mouseX = p.x; mouseY = p.y;
+    mouseActive = true;
+  }, { passive: false });
+  canvas.addEventListener('touchend', function () {
+    mouseActive = false;
+  });
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+  var needsResize = true;
+
+  function resize() {
+    needsResize = false;
+    var scale = 1.0 / pixelScale;
+    var w = Math.round(canvas.clientWidth * dpr * scale);
+    var h = Math.round(canvas.clientHeight * dpr * scale);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+      gl.uniform2f(uRes, canvas.width, canvas.height);
+    }
+  }
+
+  var running = true;
+
+  function render(now) {
+    if (!running) { requestAnimationFrame(render); return; }
+    if (needsResize) resize();
+
+    // Smooth mouse toward target or back to inactive
+    if (mouseActive) {
+      if (smoothMouseX < 0) { smoothMouseX = mouseX; smoothMouseY = mouseY; }
+      smoothMouseX += (mouseX - smoothMouseX) * 0.08;
+      smoothMouseY += (mouseY - smoothMouseY) * 0.08;
+    } else {
+      smoothMouseX = -1;
+      smoothMouseY = -1;
+    }
+
+    gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
+    gl.uniform1f(uGlitchIntensity, GLITCH_INTENSITY);
+    gl.uniform1f(uScanSpeed, SCAN_SPEED);
+    gl.uniform2f(uMouse, smoothMouseX, smoothMouseY);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+
+  window.addEventListener('resize', function () {
+    needsResize = true;
+  });
+
+  resize();
+
+  requestAnimationFrame(render);
+
+  // ── Pause when offscreen ──
+  document.addEventListener('visibilitychange', function () {
+    running = !document.hidden;
+  });
+
+  // ── PostMessage API for parameter control ──
+  window.addEventListener('message', function (e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'GLITCH_INTENSITY': GLITCH_INTENSITY = e.data.value; break;
+        case 'SCAN_SPEED': SCAN_SPEED = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

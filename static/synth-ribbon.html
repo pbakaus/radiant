@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Synth Ribbon</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 20px;
+    left: 24px;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">Synth Ribbon</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// Synth Ribbon — Flowing metallic ribbons twisting
+// in 3D space with chrome reflections, 80s aesthetic
+// ─────────────────────────────────────────────
+(function() {
+  var canvas = document.getElementById('canvas');
+  var ctx = canvas.getContext('2d');
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  var W, H;
+
+  function resize() {
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = W * dpr;
+    canvas.height = H * dpr;
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
+  window.addEventListener('resize', resize);
+  resize();
+
+  // ── Parameters ──
+  var RIBBON_COUNT = 1.0;
+  var TWIST_SPEED = 1.0;
+
+  // ── Mouse tracking ──
+  var mouse = { x: W * 0.5, y: H * 0.5, active: false, targetX: W * 0.5, targetY: H * 0.5 };
+
+  function onMouseMove(x, y) {
+    mouse.targetX = x;
+    mouse.targetY = y;
+    mouse.active = true;
+  }
+
+  canvas.addEventListener('mousemove', function(e) {
+    onMouseMove(e.clientX, e.clientY);
+  });
+  canvas.addEventListener('mouseleave', function() {
+    mouse.active = false;
+  });
+  canvas.addEventListener('touchstart', function(e) {
+    e.preventDefault();
+    var t = e.touches[0];
+    onMouseMove(t.clientX, t.clientY);
+  }, { passive: false });
+  canvas.addEventListener('touchmove', function(e) {
+    e.preventDefault();
+    var t = e.touches[0];
+    onMouseMove(t.clientX, t.clientY);
+  }, { passive: false });
+  canvas.addEventListener('touchend', function() {
+    mouse.active = false;
+  });
+
+  // ── 3D projection helpers ──
+  var focalLength = 600;
+  var cameraZ = -400;
+
+  function project(x, y, z) {
+    var dz = z - cameraZ;
+    if (dz < 1) dz = 1;
+    var scale = focalLength / dz;
+    return {
+      sx: W * 0.5 + x * scale,
+      sy: H * 0.5 + y * scale,
+      scale: scale,
+      depth: dz
+    };
+  }
+
+  // ── Chrome gradient palette (80s aesthetic) ──
+  // Maps a normal angle (0-1) to chrome colors
+  function chromeColor(normalAngle, ribbonHue, depth) {
+    // normalAngle: 0 = edge-on (dark), 0.5 = flat facing camera, 1 = other edge
+    var t = normalAngle;
+
+    // Chrome reflection bands
+    var r, g, b;
+
+    // Base chrome: dark at edges, bright specular band in the middle
+    var specular = Math.pow(Math.sin(t * Math.PI), 2.5);
+
+    // Hue shifts with ribbon identity and normal angle for chrome color banding
+    var hueShift = ribbonHue + t * 2.0;
+
+    // Multi-band chrome reflection with 80s palette
+    // Band 1: Dark reflection (edge-on)
+    // Band 2: Hot pink
+    // Band 3: White/silver specular peak
+    // Band 4: Cyan
+    // Band 5: Deep purple (other edge)
+    var band = t * 5.0 + hueShift * 0.3;
+    var pink = Math.max(0, Math.sin(band * 0.8) * 0.5 + 0.5);
+    var cyan = Math.max(0, Math.sin(band * 0.8 + 2.5) * 0.5 + 0.5);
+    var purple = Math.max(0, Math.sin(band * 0.8 + 4.5) * 0.5 + 0.5);
+
+    // Hot pink channel
+    r = 0.08 + specular * (0.5 * pink + 0.3 * purple + 0.2);
+    // Cyan/green channel
+    g = 0.03 + specular * (0.6 * cyan + 0.1 * pink);
+    // Blue/purple channel
+    b = 0.1 + specular * (0.5 * cyan + 0.4 * purple + 0.15);
+
+    // Bright white-pink highlight at specular peak
+    var highlight = Math.pow(specular, 3.0);
+    r += highlight * 1.0;
+    g += highlight * 0.4;
+    b += highlight * 0.7;
+
+    // Cyan rim glow at the edges
+    var rim = Math.pow(1.0 - specular, 2.5) * 0.4;
+    r += rim * 0.1;
+    g += rim * 0.8;
+    b += rim * 1.0;
+
+    // Depth fog — further = darker, bluer
+    var fogAmount = Math.max(0, Math.min(1, (depth - 200) / 800));
+    r = r * (1 - fogAmount * 0.7) + 0.02 * fogAmount;
+    g = g * (1 - fogAmount * 0.6) + 0.03 * fogAmount;
+    b = b * (1 - fogAmount * 0.4) + 0.08 * fogAmount;
+
+    // Clamp
+    r = Math.max(0, Math.min(1, r));
+    g = Math.max(0, Math.min(1, g));
+    b = Math.max(0, Math.min(1, b));
+
+    return { r: r * 255, g: g * 255, b: b * 255 };
+  }
+
+  // ── Ribbon definition ──
+  var ribbonDefs = [];
+  var BASE_RIBBON_COUNT = 5;
+
+  function initRibbons() {
+    ribbonDefs = [];
+    var count = Math.max(2, Math.round(BASE_RIBBON_COUNT * RIBBON_COUNT));
+    for (var i = 0; i < count; i++) {
+      ribbonDefs.push({
+        phaseX: Math.random() * Math.PI * 2,
+        phaseY: Math.random() * Math.PI * 2,
+        phaseZ: Math.random() * Math.PI * 2,
+        freqX: 0.25 + Math.random() * 0.5,
+        freqY: 0.2 + Math.random() * 0.35,
+        freqZ: 0.15 + Math.random() * 0.3,
+        ampX: 250 + Math.random() * 300,
+        ampY: 120 + Math.random() * 200,
+        ampZ: 100 + Math.random() * 200,
+        twistFreq: 1.2 + Math.random() * 2.5,
+        twistPhase: Math.random() * Math.PI * 2,
+        hue: (i / count) * Math.PI * 2 + Math.random() * 0.5,
+        baseWidth: 35 + Math.random() * 50,
+        segments: 90,
+        speed: 0.25 + Math.random() * 0.35,
+        zOffset: (i - count * 0.5) * 100
+      });
+    }
+  }
+
+  initRibbons();
+
+  // ── Lens flare ──
+  function drawLensFlare(cx, cy, brightness, col) {
+    if (brightness < 0.25) return;
+    var flareAlpha = (brightness - 0.25) * 0.8;
+    var flareSize = 60 + brightness * 40;
+
+    // Soft glow halo
+    var grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, flareSize);
+    grad.addColorStop(0, 'rgba(' + Math.round(Math.min(255, col.r * 1.2)) + ',' + Math.round(Math.min(255, col.g * 1.2)) + ',' + Math.round(Math.min(255, col.b * 1.2)) + ',' + (flareAlpha * 0.7) + ')');
+    grad.addColorStop(0.2, 'rgba(255, 255, 255,' + (flareAlpha * 0.4) + ')');
+    grad.addColorStop(0.5, 'rgba(' + Math.round(col.r * 0.5) + ',' + Math.round(col.g * 0.5) + ',' + Math.round(col.b * 0.5) + ',' + (flareAlpha * 0.15) + ')');
+    grad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(cx - flareSize, cy - flareSize, flareSize * 2, flareSize * 2);
+
+    // Horizontal anamorphic streak
+    var streakLen = 180 * brightness;
+    ctx.globalAlpha = flareAlpha * 0.2;
+    var streakGrad = ctx.createLinearGradient(cx - streakLen, cy, cx + streakLen, cy);
+    streakGrad.addColorStop(0, 'rgba(255,255,255,0)');
+    streakGrad.addColorStop(0.35, 'rgba(' + Math.round(col.r * 0.7 + 70) + ',' + Math.round(col.g * 0.7 + 70) + ',' + Math.round(col.b * 0.7 + 70) + ',0.5)');
+    streakGrad.addColorStop(0.5, 'rgba(255,255,255,0.9)');
+    streakGrad.addColorStop(0.65, 'rgba(' + Math.round(col.r * 0.7 + 70) + ',' + Math.round(col.g * 0.7 + 70) + ',' + Math.round(col.b * 0.7 + 70) + ',0.5)');
+    streakGrad.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = streakGrad;
+    ctx.fillRect(cx - streakLen, cy - 3, streakLen * 2, 6);
+    ctx.globalAlpha = 1;
+  }
+
+  // ── Background grid pattern ──
+  function drawBackground() {
+    // Radial gradient background
+    var grad = ctx.createRadialGradient(W * 0.5, H * 0.5, 0, W * 0.5, H * 0.5, Math.max(W, H) * 0.7);
+    grad.addColorStop(0, '#14101a');
+    grad.addColorStop(0.5, '#0d0a12');
+    grad.addColorStop(1, '#0a0a0a');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
+
+    // Subtle grid pattern
+    ctx.strokeStyle = 'rgba(60, 30, 80, 0.04)';
+    ctx.lineWidth = 0.5;
+    var gridSize = 50;
+    ctx.beginPath();
+    for (var x = 0; x < W; x += gridSize) {
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, H);
+    }
+    for (var y = 0; y < H; y += gridSize) {
+      ctx.moveTo(0, y);
+      ctx.lineTo(W, y);
+    }
+    ctx.stroke();
+  }
+
+  // ── Animation state ──
+  var time = 0;
+  var running = true;
+  var prevRibbonCount = RIBBON_COUNT;
+
+  // ── Main draw loop ──
+  function draw() {
+    if (!running) {
+      requestAnimationFrame(draw);
+      return;
+    }
+
+    // Rebuild ribbons if count param changed
+    if (RIBBON_COUNT !== prevRibbonCount) {
+      prevRibbonCount = RIBBON_COUNT;
+      initRibbons();
+    }
+
+    time += 0.012;
+
+    // Smooth mouse interpolation
+    mouse.x += (mouse.targetX - mouse.x) * 0.08;
+    mouse.y += (mouse.targetY - mouse.y) * 0.08;
+
+    // Mouse influence on camera/projection
+    var mouseInfluenceX = mouse.active ? (mouse.x - W * 0.5) * 0.05 : 0;
+    var mouseInfluenceY = mouse.active ? (mouse.y - H * 0.5) * 0.03 : 0;
+
+    // Motion trail: draw semi-transparent dark overlay instead of clearing
+    ctx.fillStyle = 'rgba(10, 10, 10, 0.15)';
+    ctx.fillRect(0, 0, W, H);
+
+    // Every ~2 seconds, redraw the full background to prevent ghosting buildup
+    if (Math.floor(time * 0.5) % 30 === 0 && Math.abs(time * 0.5 - Math.floor(time * 0.5)) < 0.015) {
+      drawBackground();
+    }
+
+    // Track brightest highlight for lens flare
+    var maxBrightness = 0;
+    var maxBrightnessX = 0;
+    var maxBrightnessY = 0;
+    var maxBrightnessCol = { r: 255, g: 255, b: 255 };
+
+    // ── Collect and depth-sort ribbon segments ──
+    // We'll gather all ribbon segments, sort by depth, then draw
+    var allSegments = [];
+
+    for (var ri = 0; ri < ribbonDefs.length; ri++) {
+      var rb = ribbonDefs[ri];
+      var segCount = rb.segments;
+      var tSpeed = time * rb.speed * TWIST_SPEED;
+
+      // Mouse attractor in 3D space
+      var attractX = mouse.active ? (mouse.x - W * 0.5) * 0.5 : 0;
+      var attractY = mouse.active ? (mouse.y - H * 0.5) * 0.5 : 0;
+
+      // Generate 3D spine points for this ribbon
+      var spinePoints = [];
+      for (var s = 0; s <= segCount; s++) {
+        var t0 = s / segCount;
+        // Parameter along the ribbon (-1 to 1)
+        var param = (t0 - 0.5) * 2.0;
+
+        // 3D position from sinusoidal paths
+        var px = Math.sin(param * 3.0 * rb.freqX + rb.phaseX + tSpeed * 0.7) * rb.ampX;
+        var py = Math.sin(param * 2.5 * rb.freqY + rb.phaseY + tSpeed * 0.5) * rb.ampY;
+        var pz = param * 500 + rb.zOffset + Math.sin(param * 2.0 * rb.freqZ + rb.phaseZ + tSpeed * 0.3) * rb.ampZ + 500;
+
+        // Mouse attraction — gently pull ribbons toward mouse position in 3D
+        if (mouse.active) {
+          var mouseDistFactor = 1.0 / (1.0 + Math.abs(pz - 300) * 0.003);
+          px += attractX * mouseDistFactor * 0.3;
+          py += attractY * mouseDistFactor * 0.3;
+        }
+
+        // Camera offset from mouse
+        px -= mouseInfluenceX;
+        py -= mouseInfluenceY;
+
+        // Twist angle at this point along the ribbon
+        var twist = param * rb.twistFreq * 3.0 + tSpeed * 2.0 + rb.twistPhase;
+        twist += Math.sin(param * 5.0 + tSpeed) * 0.5; // extra wobble
+
+        // Width varies along ribbon: wider in middle, smoothly tapered at ends
+        var absParam = Math.abs(param);
+        var widthFactor = Math.cos(absParam * Math.PI * 0.5);
+        widthFactor = widthFactor * widthFactor; // squaring for smoother taper
+        widthFactor = Math.max(0.02, widthFactor);
+        var ribbonWidth = rb.baseWidth * widthFactor;
+
+        // Two edge points of the ribbon (perpendicular to view in local frame)
+        // The twist rotates the ribbon's cross-section
+        var edgeOffsetX = Math.cos(twist) * ribbonWidth;
+        var edgeOffsetY = Math.sin(twist) * ribbonWidth;
+
+        spinePoints.push({
+          x: px,
+          y: py,
+          z: pz,
+          edgeX: edgeOffsetX,
+          edgeY: edgeOffsetY,
+          twist: twist,
+          param: param,
+          widthFactor: widthFactor
+        });
+      }
+
+      // Generate quad segments between consecutive spine points
+      for (var s = 0; s < segCount; s++) {
+        var p0 = spinePoints[s];
+        var p1 = spinePoints[s + 1];
+
+        // Project all 4 corners of this quad
+        var a = project(p0.x - p0.edgeX, p0.y - p0.edgeY, p0.z);
+        var b = project(p0.x + p0.edgeX, p0.y + p0.edgeY, p0.z);
+        var c = project(p1.x + p1.edgeX, p1.y + p1.edgeY, p1.z);
+        var d = project(p1.x - p1.edgeX, p1.y - p1.edgeY, p1.z);
+
+        // Average depth for sorting
+        var avgDepth = (a.depth + b.depth + c.depth + d.depth) * 0.25;
+
+        // Skip if behind camera or too far
+        if (avgDepth < 10 || avgDepth > 1200) continue;
+
+        // Surface normal angle (simplified): use twist to determine
+        // how much the surface faces the camera
+        var twistMid = (p0.twist + p1.twist) * 0.5;
+        var normalAngle = (Math.sin(twistMid) * 0.5 + 0.5); // 0-1
+
+        // Chrome color based on normal angle
+        var col = chromeColor(normalAngle, rb.hue + time * 0.3, avgDepth);
+
+        // Brightness for lens flare tracking
+        var brightness = (col.r + col.g + col.b) / (255 * 3);
+        var midSx = (a.sx + b.sx + c.sx + d.sx) * 0.25;
+        var midSy = (a.sy + b.sy + c.sy + d.sy) * 0.25;
+
+        // Track brightest point
+        if (brightness > maxBrightness && midSx > 0 && midSx < W && midSy > 0 && midSy < H) {
+          maxBrightness = brightness;
+          maxBrightnessX = midSx;
+          maxBrightnessY = midSy;
+          maxBrightnessCol = col;
+        }
+
+        allSegments.push({
+          ax: a.sx, ay: a.sy,
+          bx: b.sx, by: b.sy,
+          cx: c.sx, cy: c.sy,
+          dx: d.sx, dy: d.sy,
+          col: col,
+          depth: avgDepth,
+          normalAngle: normalAngle,
+          widthFactor: (p0.widthFactor + p1.widthFactor) * 0.5
+        });
+      }
+    }
+
+    // Sort by depth (far to near)
+    allSegments.sort(function(a, b) { return b.depth - a.depth; });
+
+    // ── Draw all segments ──
+    for (var i = 0; i < allSegments.length; i++) {
+      var seg = allSegments[i];
+
+      // Alpha based on depth and width
+      var depthAlpha = Math.max(0.2, 1.0 - (seg.depth - 100) / 1000);
+      var alpha = depthAlpha * (0.6 + seg.widthFactor * 0.4);
+
+      ctx.globalAlpha = Math.max(0.05, Math.min(1, alpha));
+      ctx.fillStyle = 'rgb(' + Math.round(seg.col.r) + ',' + Math.round(seg.col.g) + ',' + Math.round(seg.col.b) + ')';
+
+      ctx.beginPath();
+      ctx.moveTo(seg.ax, seg.ay);
+      ctx.lineTo(seg.bx, seg.by);
+      ctx.lineTo(seg.cx, seg.cy);
+      ctx.lineTo(seg.dx, seg.dy);
+      ctx.closePath();
+      ctx.fill();
+
+      // Specular highlight stroke on bright segments
+      if (seg.normalAngle > 0.3 && seg.normalAngle < 0.7) {
+        var specIntensity = 1.0 - Math.abs(seg.normalAngle - 0.5) * 3.0;
+        specIntensity = Math.pow(Math.max(0, specIntensity), 1.5);
+        if (specIntensity > 0.05) {
+          ctx.globalAlpha = specIntensity * alpha * 0.5;
+          ctx.strokeStyle = 'rgba(255, 230, 255, 0.7)';
+          ctx.lineWidth = 2.0 * (1.0 - seg.depth / 1200);
+          ctx.beginPath();
+          // Draw a highlight line along the center of the quad
+          ctx.moveTo((seg.ax + seg.bx) * 0.5, (seg.ay + seg.by) * 0.5);
+          ctx.lineTo((seg.cx + seg.dx) * 0.5, (seg.cy + seg.dy) * 0.5);
+          ctx.stroke();
+        }
+      }
+    }
+
+    ctx.globalAlpha = 1;
+
+    // ── Lens flare at brightest point ──
+    drawLensFlare(maxBrightnessX, maxBrightnessY, maxBrightness, maxBrightnessCol);
+
+    requestAnimationFrame(draw);
+  }
+
+  // ── Initial draw ──
+  drawBackground();
+  requestAnimationFrame(draw);
+
+  // ── Visibility pause ──
+  document.addEventListener('visibilitychange', function() {
+    running = !document.hidden;
+  });
+
+  // ── PostMessage API ──
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'RIBBON_COUNT': RIBBON_COUNT = e.data.value; break;
+        case 'TWIST_SPEED': TWIST_SPEED = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>
