@@ -98,11 +98,15 @@ async function loadShaderList() {
 		// Check technique
 		const techMatch = text.match(/technique:\s*'([^']+)'/);
 
+		// Check defaultScheme
+		const schemeMatch = text.match(/defaultScheme:\s*'([^']+)'/);
+
 		entries.push({
 			id,
 			file: fileMatch[1],
 			title: titleMatch ? titleMatch[1] : id,
 			technique: techMatch ? techMatch[1] : 'canvas-2d',
+			defaultScheme: schemeMatch ? schemeMatch[1] : 'amber',
 			params
 		});
 	}
@@ -564,6 +568,15 @@ async function recordShader(page, baseUrl, shader, options) {
 		if (label) label.style.display = 'none';
 	});
 
+	// Apply default color scheme
+	const defaultScheme = COLOR_SCHEMES.find(s => s.id === shader.defaultScheme) || COLOR_SCHEMES[0];
+	if (defaultScheme.filter !== 'none') {
+		await page.evaluate((f) => {
+			const c = document.getElementById('canvas');
+			if (c) c.style.filter = f;
+		}, defaultScheme.filter);
+	}
+
 	// Warmup: advance frames without recording
 	process.stdout.write(`  Warming up (${WARMUP_FRAMES} frames)...`);
 	for (let i = 0; i < WARMUP_FRAMES; i++) {
@@ -584,7 +597,7 @@ async function recordShader(page, baseUrl, shader, options) {
 		'-i', 'pipe:0',
 		'-c:v', 'libx264',
 		'-preset', 'slow',
-		'-crf', '23',
+		'-crf', '20',
 		'-pix_fmt', 'yuv420p',
 		'-movflags', '+faststart',
 		outputPath
@@ -610,6 +623,7 @@ async function recordShader(page, baseUrl, shader, options) {
 	// Record frames
 	const startTime = Date.now();
 	let lastPercent = -1;
+	let outroLoaded = false;
 
 	for (let frame = 0; frame < totalFrames; frame++) {
 		const scene = getScene(scenes, frame);
@@ -617,44 +631,50 @@ async function recordShader(page, baseUrl, shader, options) {
 
 		// --- Apply scene-specific actions ---
 
-		// Mouse movement
-		let mousePos;
-		switch (scene.name) {
-			case 'opening':
-				mousePos = gentleDrift(progress);
-				break;
-			case 'interaction':
-				mousePos = figure8(progress);
-				break;
-			case 'parameters':
-				mousePos = spiralInward(progress);
-				break;
-			case 'colors':
-				mousePos = cornerSweep(progress);
-				break;
-			case 'outro':
-				mousePos = gentleDrift(progress);
-				break;
-			default:
-				mousePos = gentleDrift(progress);
+		// ── Outro: navigate to dedicated outro page ──
+		if (scene.name === 'outro' && !outroLoaded) {
+			outroLoaded = true;
+			const outroUrl = `${baseUrl}/video-outro.html?name=${encodeURIComponent(shader.title)}&url=${encodeURIComponent('radiant-shaders.com/shader/' + shader.id)}`;
+			await page.goto(outroUrl, { waitUntil: 'domcontentloaded' });
+			await new Promise(r => setTimeout(r, 300));
 		}
 
-		// Move mouse (convert normalized to viewport pixels)
-		const mx = mousePos.x * viewportWidth;
-		const my = mousePos.y * viewportHeight;
-		// Use CDP mouse move (most reliable) + synthetic event on canvas as fallback
-		await page.mouse.move(mx, my);
-		await page.evaluate(({ x, y }) => {
-			const c = document.getElementById('canvas');
-			if (c) {
-				const r = c.getBoundingClientRect();
-				c.dispatchEvent(new MouseEvent('mousemove', {
-					clientX: x, clientY: y,
-					offsetX: x - r.left, offsetY: y - r.top,
-					bubbles: true, cancelable: true, view: window
-				}));
+		// Mouse movement (skip for outro — it has its own animation)
+		if (scene.name !== 'outro') {
+			let mousePos;
+			switch (scene.name) {
+				case 'opening':
+					mousePos = gentleDrift(progress);
+					break;
+				case 'interaction':
+					mousePos = figure8(progress);
+					break;
+				case 'parameters':
+					mousePos = spiralInward(progress);
+					break;
+				case 'colors':
+					mousePos = cornerSweep(progress);
+					break;
+				default:
+					mousePos = gentleDrift(progress);
 			}
-		}, { x: mx, y: my });
+
+			// Move mouse (convert normalized to viewport pixels)
+			const mx = mousePos.x * viewportWidth;
+			const my = mousePos.y * viewportHeight;
+			await page.mouse.move(mx, my);
+			await page.evaluate(({ x, y }) => {
+				const c = document.getElementById('canvas');
+				if (c) {
+					const r = c.getBoundingClientRect();
+					c.dispatchEvent(new MouseEvent('mousemove', {
+						clientX: x, clientY: y,
+						offsetX: x - r.left, offsetY: y - r.top,
+						bubbles: true, cancelable: true, view: window
+					}));
+				}
+			}, { x: mx, y: my });
+		}
 
 		// Parameter changes (scene: parameters)
 		if (scene.name === 'parameters' && shader.params && shader.params.length > 0) {
@@ -683,12 +703,12 @@ async function recordShader(page, baseUrl, shader, options) {
 				if (c) c.style.filter = f;
 			}, filter);
 		} else if (scene.name !== 'colors') {
-			// Ensure filter is cleared outside colors scene
+			// Reset to default scheme outside colors scene
 			if (frame === scene.startFrame) {
-				await page.evaluate(() => {
+				await page.evaluate((f) => {
 					const c = document.getElementById('canvas');
-					if (c) c.style.filter = 'none';
-				});
+					if (c) c.style.filter = f;
+				}, defaultScheme.filter);
 			}
 		}
 
@@ -719,7 +739,7 @@ async function recordShader(page, baseUrl, shader, options) {
 					break;
 				}
 				case 'outro':
-					captionText = `radiant-shaders.com/shader/${shader.id}`;
+					// Outro has its own branded page — no caption needed
 					break;
 			}
 
