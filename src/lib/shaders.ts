@@ -69,6 +69,18 @@ export const shaders: Shader[] = [
 		]
 	},
 	{
+		id: 'generative-tree',
+		file: 'generative-tree.html',
+		title: 'Generative Branching Tree',
+		desc: 'L-system inspired tree with continuous growth and regrowth cycles.',
+		tags: ['object', 'organic'],
+		technique: 'canvas-2d',
+		params: [
+			{ name: 'GROWTH_SPEED_BASE', label: 'Growth Speed', min: 0.003, max: 0.025, step: 0.001, default: 0.008 },
+			{ name: 'MAX_DEPTH', label: 'Branch Depth', min: 4, max: 14, step: 1, default: 9 }
+		]
+	},
+	{
 		id: 'strange-attractor',
 		file: 'strange-attractor.html',
 		title: 'Strange Attractor (Lorenz)',
