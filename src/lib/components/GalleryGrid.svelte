@@ -1,21 +1,19 @@
 <script lang="ts">
 	import ShaderCard from '$lib/components/ShaderCard.svelte';
 	import type { Shader } from '$lib/shaders';
+	import type { ColorScheme } from '$lib/color-schemes';
+	import { prioritizeIds } from '$lib/shader-budget.svelte';
 	import { onMount } from 'svelte';
 
-	let { shaders, filter = 'none' }: { shaders: Shader[]; filter?: string } = $props();
+	let { shaders, scheme }: { shaders: Shader[]; scheme: ColorScheme } = $props();
 
-	let activeRow = $state(0);
-	let numColumns = $state(3);
 	let gridEl: HTMLElement | undefined = $state(undefined);
 
-	function updateActiveRow() {
+	function updatePriority() {
 		if (!gridEl) return;
 
 		var style = getComputedStyle(gridEl);
 		var cols = style.gridTemplateColumns.split(' ').length;
-		numColumns = cols;
-
 		var viewportCenter = window.innerHeight / 2;
 		var cards = gridEl.children;
 		var bestRow = 0;
@@ -32,16 +30,24 @@
 			}
 		}
 
-		activeRow = bestRow;
+		// Collect shader IDs in the center row (± 1 row)
+		var ids = new Set<string>();
+		for (var r = bestRow - 1; r <= bestRow + 1; r++) {
+			for (var c = 0; c < cols; c++) {
+				var idx = r * cols + c;
+				if (idx >= 0 && idx < shaders.length) {
+					ids.add(shaders[idx].id);
+				}
+			}
+		}
+		prioritizeIds(ids);
 	}
 
 	onMount(() => {
-		updateActiveRow();
-
-		var onScroll = () => requestAnimationFrame(updateActiveRow);
+		updatePriority();
+		var onScroll = () => requestAnimationFrame(updatePriority);
 		window.addEventListener('scroll', onScroll, { passive: true });
-
-		var ro = new ResizeObserver(updateActiveRow);
+		var ro = new ResizeObserver(updatePriority);
 		if (gridEl) ro.observe(gridEl);
 
 		return () => {
@@ -52,9 +58,8 @@
 </script>
 
 <div class="grid" bind:this={gridEl}>
-	{#each shaders as shader, i (shader.id)}
-		{@const row = Math.floor(i / numColumns)}
-		<ShaderCard {shader} active={row === activeRow} preload={row === activeRow - 1 || row === activeRow + 1} {filter} />
+	{#each shaders as shader (shader.id)}
+		<ShaderCard {shader} {scheme} />
 	{/each}
 </div>
 

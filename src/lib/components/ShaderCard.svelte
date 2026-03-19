@@ -1,108 +1,182 @@
 <script lang="ts">
 	import { getShaderNumber, type Shader } from '$lib/shaders';
 	import { getPaletteForInspiration, hexToRgb } from '$lib/inspiration-palettes';
+	import { colorSchemes, type ColorScheme } from '$lib/color-schemes';
+	import {
+		fetchShaderHtml,
+		requestPreload,
+		preloadDone,
+		cancelPreload,
+		requestLive,
+		releaseLive
+	} from '$lib/shader-budget.svelte';
 	import { onMount } from 'svelte';
 
-	let { shader, active = false, preload = false, filter = 'none' }: { shader: Shader; active?: boolean; preload?: boolean; filter?: string } = $props();
+	let { shader, scheme }: { shader: Shader; scheme: ColorScheme } = $props();
 
 	const number = $derived(getShaderNumber(shader));
 	const cardAccent = $derived(
 		shader.inspiration ? hexToRgb(getPaletteForInspiration(shader.inspiration)?.primary ?? '#c8956c') : '200, 149, 108'
 	);
 
-	let inViewport = $state(false);
-	let posterUrl: string | null = $state(null);
+	// Sprite background-position: 6 frames stacked vertically
+	const schemeIndex = $derived(colorSchemes.findIndex((s) => s.id === scheme.id));
+	const spritePosY = $derived(schemeIndex * 20);
 
-	// Load iframe when in viewport AND (active row OR preloading adjacent row for poster capture)
-	const shouldLoad = $derived(inViewport && (active || preload));
+	// ── Card state ───────────────────────────────────────────────────
+	let visible = $state(false);
+	let hovered = $state(false);
+	let srcdoc = $state<string | null>(null);
+	let loadIframe = $state(false); // preload slot granted, create iframe
+	let iframeEl = $state<HTMLIFrameElement | null>(null);
+	let warm = $state(false); // shader compiled + paused
+	let promoted = $state(false); // auto-promoted to live by budget
+	let fpsInjected = false;
 
+	// Show the iframe when live (promoted or hovered-while-warm)
+	const showIframe = $derived(warm && (promoted || hovered));
+
+	// ── Visibility tracking ──────────────────────────────────────────
 	function observe(node: HTMLElement) {
-		const observer = new IntersectionObserver(
-			([entry]) => {
-				inViewport = entry.isIntersecting;
+		const obs = new IntersectionObserver(
+			([e]) => {
+				const wasVisible = visible;
+				visible = e.isIntersecting;
+				if (visible && !wasVisible) onEnterViewport();
+				else if (!visible && wasVisible) onExitViewport();
 			},
 			{ rootMargin: '200px' }
 		);
-		observer.observe(node);
-		return {
-			destroy() {
-				observer.disconnect();
-			}
-		};
+		obs.observe(node);
+		return { destroy() { obs.disconnect(); } };
 	}
 
-	function onIframeLoad(el: HTMLIFrameElement) {
-		try {
-			var doc = el.contentDocument;
-			if (!doc) return;
+	async function onEnterViewport() {
+		// Phase 1: fetch + patch HTML (parallel, cheap)
+		if (!srcdoc) {
+			srcdoc = await fetchShaderHtml(shader.file, shader.id);
+			if (!visible) return; // scrolled away during fetch
+		}
+		// Phase 2: request preload slot (serialized, one at a time)
+		requestPreload(shader.id, () => {
+			loadIframe = true;
+		});
+	}
 
-			// Inject FPS counter
-			var fpsScript = doc.createElement('script');
-			fpsScript.textContent = `(function(){
+	function onExitViewport() {
+		cancelPreload(shader.id);
+		releaseLive(shader.id);
+		loadIframe = false;
+		warm = false;
+		promoted = false;
+		iframeEl = null;
+		fpsInjected = false;
+		// Keep srcdoc cached so re-entering is faster
+	}
+
+	// ── Iframe lifecycle ─────────────────────────────────────────────
+	function onIframeLoad(el: HTMLIFrameElement) {
+		iframeEl = el;
+		// Let the shader compile and render a few frames, then pause
+		setTimeout(() => {
+			if (!visible || !iframeEl) return;
+			pauseShader();
+			warm = true;
+			preloadDone(shader.id);
+			// Request live promotion from the budget
+			requestLive(
+				shader.id,
+				() => { promoted = true; resumeShader(); },
+				() => { promoted = false; pauseShader(); }
+			);
+		}, 200);
+	}
+
+	function injectFpsCounter() {
+		if (fpsInjected || !iframeEl) return;
+		fpsInjected = true;
+		try {
+			var doc = iframeEl.contentDocument;
+			if (!doc) return;
+			var s = doc.createElement('script');
+			s.textContent = `(function(){
 				var f=0,lt=performance.now(),el=document.createElement("div");
 				el.style.cssText="position:fixed;bottom:4px;right:6px;font:9px/1 monospace;color:rgba(255,255,255,0.35);z-index:999;pointer-events:none;text-shadow:0 1px 2px rgba(0,0,0,0.8)";
 				document.body.appendChild(el);
 				function t(){f++;var n=performance.now();if(n-lt>=1000){el.textContent=f+" fps";f=0;lt=n;}requestAnimationFrame(t);}
 				requestAnimationFrame(t);
 			})();`;
-			doc.body.appendChild(fpsScript);
+			doc.body.appendChild(s);
+		} catch (_) {}
+	}
 
-			// Inject poster capture script — captures after ~30 frames for a warmed-up look
-			// Captures synchronously right after drawArrays so the buffer is still valid
-			// even with preserveDrawingBuffer: false
-			var sid = shader.id.replace(/[^a-z0-9_-]/gi, '');
-			var captureScript = doc.createElement('script');
-			captureScript.textContent = `(function(){
-				var captured=false;
-				function send(c){
-					if(captured)return; captured=true;
-					try{
-						var url=c.toDataURL("image/jpeg",0.65);
-						parent.postMessage({type:"shaderFrame",id:"${sid}",dataUrl:url},"*");
-					}catch(e){}
-				}
-				var c=document.getElementById("canvas");
-				if(!c)return;
-				var gl=null;
-				try{gl=c.getContext("webgl")||c.getContext("webgl2");}catch(e){}
-				if(gl){
-					var fc=0,orig=WebGLRenderingContext.prototype.drawArrays;
-					gl.drawArrays=function(){
-						orig.apply(this,arguments);
-						fc++;
-						if(fc>=30&&!captured){gl.drawArrays=orig;send(c);}
-					};
-				}
-				setTimeout(function(){send(c);},600);
-			})();`;
-			doc.body.appendChild(captureScript);
-		} catch (e) {
-			// cross-origin or blocked — silently ignore
+	function resumeShader() {
+		try { (iframeEl?.contentWindow as any)?.__shaderResume?.(); } catch (_) {}
+		injectFpsCounter();
+	}
+
+	function pauseShader() {
+		try { (iframeEl?.contentWindow as any)?.__shaderPause?.(); } catch (_) {}
+	}
+
+	// ── Hover ────────────────────────────────────────────────────────
+	function onMouseEnter() {
+		hovered = true;
+		if (warm) {
+			resumeShader();
+		} else if (visible && srcdoc) {
+			// Not warm yet — jump the preload queue
+			requestPreload(shader.id, () => { loadIframe = true; }, true);
 		}
 	}
 
-	// Listen for poster capture messages from this card's iframe
-	onMount(() => {
-		function handler(e: MessageEvent) {
-			if (e.data && e.data.type === 'shaderFrame' && e.data.id === shader.id && !posterUrl) {
-				posterUrl = e.data.dataUrl;
-			}
+	function onMouseLeave() {
+		hovered = false;
+		if (warm && !promoted) {
+			pauseShader();
 		}
-		window.addEventListener('message', handler);
-		return () => window.removeEventListener('message', handler);
+	}
+
+	// ── Cleanup ──────────────────────────────────────────────────────
+	onMount(() => {
+		return () => {
+			cancelPreload(shader.id);
+			releaseLive(shader.id);
+		};
 	});
 </script>
 
-<a class="card" href="/shader/{shader.id}" use:observe style:--card-accent={cardAccent}>
-	<div class="card-preview" class:inactive={!active} style:filter={active ? filter : undefined}>
-		{#if posterUrl}
-			<img src={posterUrl} alt={shader.title} class="poster" />
+<a
+	class="card"
+	href="/shader/{shader.id}"
+	style:--card-accent={cardAccent}
+	onmouseenter={onMouseEnter}
+	onmouseleave={onMouseLeave}
+	use:observe
+>
+	<div class="card-preview">
+		<!-- Static sprite preview -->
+		<div
+			class="preview-sprite"
+			class:hidden={showIframe}
+			style:background-image="url(/previews/{shader.id}.webp)"
+			style:background-position="0 {spritePosY}%"
+		></div>
+
+		<!-- Hover hint: visible on non-promoted cards, fades when iframe shows -->
+		{#if !promoted}
+			<div class="hover-hint" class:hide={hovered}>
+				<span>Hover to preview</span>
+			</div>
 		{/if}
-		{#if shouldLoad}
+
+		<!-- Iframe: created once HTML is fetched + preload slot granted -->
+		{#if loadIframe && srcdoc}
 			<iframe
-				class:capturing={!active}
-				src="/{shader.file}"
+				class:show={showIframe}
+				{srcdoc}
 				title={shader.title}
+				style:filter={scheme.filter}
 				onload={(e) => onIframeLoad(e.currentTarget as HTMLIFrameElement)}
 			></iframe>
 		{/if}
@@ -139,10 +213,44 @@
 		border-bottom: 1px solid rgba(var(--card-accent, 200, 149, 108), 0.15);
 		position: relative;
 		overflow: hidden;
-		transition: filter 0.5s ease;
 	}
-	.card-preview.inactive {
-		filter: grayscale(1) brightness(0.4);
+	.preview-sprite {
+		position: absolute;
+		inset: 0;
+		background-size: 100% 600%;
+		background-repeat: no-repeat;
+		z-index: 2;
+		transition: opacity 0.4s ease;
+	}
+	.preview-sprite.hidden {
+		opacity: 0;
+	}
+	.hover-hint {
+		position: absolute;
+		bottom: 0.6rem;
+		left: 50%;
+		transform: translateX(-50%);
+		z-index: 3;
+		opacity: 1;
+		transition: opacity 0.3s ease;
+		pointer-events: none;
+	}
+	.hover-hint.hide {
+		opacity: 0;
+	}
+	.hover-hint span {
+		font-size: 0.6rem;
+		font-family: inherit;
+		text-transform: uppercase;
+		letter-spacing: 0.12em;
+		color: rgba(232, 224, 216, 0.5);
+		background: rgba(10, 10, 10, 0.6);
+		backdrop-filter: blur(4px);
+		-webkit-backdrop-filter: blur(4px);
+		padding: 0.3rem 0.65rem;
+		border-radius: 3px;
+		border: 1px solid rgba(200, 149, 108, 0.12);
+		white-space: nowrap;
 	}
 	.card-preview iframe {
 		width: 100%;
@@ -153,17 +261,11 @@
 		top: 0;
 		left: 0;
 		z-index: 1;
+		opacity: 0;
+		transition: opacity 0.4s ease;
 	}
-	.card-preview iframe.capturing {
-		visibility: hidden;
-	}
-	.card-preview .poster {
-		width: 100%;
-		height: 100%;
-		object-fit: cover;
-		position: absolute;
-		top: 0;
-		left: 0;
+	.card-preview iframe.show {
+		opacity: 1;
 	}
 	.card-info {
 		padding: 1.2rem 1.5rem;

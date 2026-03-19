@@ -2,9 +2,10 @@
 	import GalleryGrid from '$lib/components/GalleryGrid.svelte';
 	import GalleryHeader from '$lib/components/GalleryHeader.svelte';
 	import { getContext } from 'svelte';
+	import type { ColorScheme } from '$lib/color-schemes';
 
 	let { data } = $props();
-	const getScheme = getContext<() => { filter: string }>('colorScheme');
+	const getScheme = getContext<() => ColorScheme>('colorScheme');
 </script>
 
 <svelte:head>
@@ -12,4 +13,4 @@
 </svelte:head>
 
 <GalleryHeader title={data.title} description={data.description} count={data.shaders.length} />
-<GalleryGrid shaders={data.shaders} filter={getScheme().filter} />
+<GalleryGrid shaders={data.shaders} scheme={getScheme()} />

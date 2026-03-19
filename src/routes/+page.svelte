@@ -12,8 +12,6 @@
 	let activeScheme: ColorScheme = $state(colorSchemes[0]);
 	let heroVisible = $state(true);
 	let heroEl: HTMLElement | undefined = $state(undefined);
-	let featuredEl: HTMLElement | undefined = $state(undefined);
-	let featuredInView = $state(false);
 
 	const featuredIds = ['event-horizon', 'gilded-fracture', 'kinetic-grid', 'flow-field', 'torn-paper', 'silk-cascade'];
 	const featuredShaders = $derived(
@@ -22,19 +20,12 @@
 			.filter((s): s is NonNullable<typeof s> => s != null)
 	);
 
-	// Featured cards only render when hero is off-screen
-	const featuredActive = $derived(featuredInView && !heroVisible);
-
 	onMount(() => {
 		var heroObs = new IntersectionObserver(([e]) => { heroVisible = e.isIntersecting; }, { threshold: 0.05 });
 		if (heroEl) heroObs.observe(heroEl);
 
-		var featObs = new IntersectionObserver(([e]) => { featuredInView = e.isIntersecting; }, { threshold: 0.01 });
-		if (featuredEl) featObs.observe(featuredEl);
-
 		return () => {
 			heroObs.disconnect();
-			featObs.disconnect();
 		};
 	});
 </script>
@@ -56,14 +47,14 @@
 	<Hero scheme={activeScheme} visible={heroVisible} onschemechange={(s) => activeScheme = s} />
 </div>
 
-<section class="featured" id="gallery" bind:this={featuredEl}>
+<section class="featured" id="gallery">
 	<header>
 		<h2>Featured</h2>
 		<p>A curated selection from the collection.</p>
 	</header>
 	<div class="featured-grid">
 		{#each featuredShaders as shader (shader.id)}
-			<ShaderCard {shader} active={featuredActive} filter={activeScheme.filter} />
+			<ShaderCard {shader} scheme={activeScheme} />
 		{/each}
 	</div>
 	<div class="browse-cta">
