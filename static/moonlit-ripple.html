@@ -50,6 +50,7 @@
     'uniform float u_moonGlow;',
     'uniform vec2 u_mouse;',
     'uniform float u_tilt;',
+    'uniform float u_waves;',
     '',
     '#define PI 3.14159265359',
     '#define WAVE_LAYERS 7',
@@ -59,7 +60,7 @@
     '  float h = 0.0;',
     '  vec2 dh = vec2(0.0);',
     '  float freq = 1.0;',
-    '  float amp = 0.2;',
+    '  float amp = 0.2 * u_waves;',
     '  float angle = 0.0;',
     '  for (int i = 0; i < WAVE_LAYERS; i++) {',
     '    float c = cos(angle);',
@@ -89,7 +90,7 @@
     '  return normalize(vec3(0.15, 0.35, 1.0));',
     '}',
     '',
-    '// ── Night sky color ──',
+    '// ── Night sky color with moon disc ──',
     'vec3 skyColor(vec3 rd) {',
     '  vec3 md = moonDir();',
     '  vec3 skyDark = vec3(0.02, 0.03, 0.08);',
@@ -97,8 +98,14 @@
     '  vec3 sky = mix(skyHoriz, skyDark, max(rd.y, 0.0));',
     '  vec3 moonCol = vec3(0.95, 0.90, 0.75);',
     '  float moonDot = max(dot(rd, md), 0.0);',
-    '  sky += moonCol * 0.4 * pow(moonDot, 60.0) * u_moonGlow;',
-    '  sky += moonCol * 3.0 * pow(moonDot, 800.0) * u_moonGlow;',
+    '  // Moon disc (sharp circle)',
+    '  float moonAngle = acos(moonDot);',
+    '  float moonRadius = 0.04;',
+    '  float disc = smoothstep(moonRadius, moonRadius * 0.7, moonAngle);',
+    '  sky += moonCol * disc * 0.9 * u_moonGlow;',
+    '  // Bloom around moon',
+    '  sky += moonCol * 0.3 * pow(moonDot, 40.0) * u_moonGlow;',
+    '  sky += moonCol * 1.5 * pow(moonDot, 400.0) * u_moonGlow;',
     '  return sky;',
     '}',
     '',
@@ -207,9 +214,11 @@
   var uMoonGlow = gl.getUniformLocation(prog, 'u_moonGlow');
   var uMouse = gl.getUniformLocation(prog, 'u_mouse');
   var uTilt = gl.getUniformLocation(prog, 'u_tilt');
+  var uWaves = gl.getUniformLocation(prog, 'u_waves');
   var rippleSpeedVal = 0.5;
   var moonGlowVal = 1.0;
   var tiltVal = 0.08;
+  var wavesVal = 1.0;
   var mouseX = -1.0, mouseY = -1.0;
 
   var dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -235,6 +244,7 @@
     gl.uniform1f(uRippleSpeed, rippleSpeedVal);
     gl.uniform1f(uMoonGlow, moonGlowVal);
     gl.uniform1f(uTilt, tiltVal);
+    gl.uniform1f(uWaves, wavesVal);
     gl.uniform2f(uMouse, mouseX, mouseY);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     requestAnimationFrame(render);
@@ -279,6 +289,7 @@
         case 'RIPPLE_SPEED': rippleSpeedVal = e.data.value; break;
         case 'MOON_GLOW': moonGlowVal = e.data.value; break;
         case 'CAMERA_TILT': tiltVal = e.data.value; break;
+        case 'WAVE_INTENSITY': wavesVal = e.data.value; break;
       }
     }
   });

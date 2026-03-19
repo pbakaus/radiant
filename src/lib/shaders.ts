@@ -381,7 +381,8 @@ export const shaders: Shader[] = [
 		params: [
 			{ name: 'RIPPLE_SPEED', label: 'Ripple Speed', min: 0.1, max: 1.5, step: 0.05, default: 0.5 },
 			{ name: 'MOON_GLOW', label: 'Moon Glow', min: 0.3, max: 2.0, step: 0.1, default: 1.0 },
-			{ name: 'CAMERA_TILT', label: 'Camera Tilt', min: 0.0, max: 1.0, step: 0.01, default: 0.08 }
+			{ name: 'CAMERA_TILT', label: 'Camera Tilt', min: 0.0, max: 1.0, step: 0.01, default: 0.08 },
+			{ name: 'WAVE_INTENSITY', label: 'Wave Intensity', min: 0.0, max: 1.5, step: 0.01, default: 1.0 }
 		]
 	},
 	{
