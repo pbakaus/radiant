@@ -43,6 +43,7 @@
     'uniform float u_filmThickness;',
     'uniform float u_flowSpeed;',
     'uniform vec2 u_center;',
+    'uniform vec2 u_mouse;',
     'uniform float u_scale;',
     '',
     '#define PI 3.141592653589793',
@@ -138,6 +139,11 @@
     '  vec2 origin = u_scale > 0.0 ? u_center : vec2(0.5);',
     '  float sc = u_scale > 0.0 ? u_scale : 1.0;',
     '  vec2 p = (uv - origin) * vec2(aspect, 1.0) / sc;',
+    '  // Mouse tilts viewing angle — shifts interference colors',
+    '  if (u_mouse.x >= 0.0) {',
+    '    vec2 tilt = (u_mouse - 0.5) * 0.4;',
+    '    p += tilt;',
+    '  }',
     '  float t = u_time * u_flowSpeed;',
     '',
     '  // ---- Multiple overlapping bubble film surfaces ----',
@@ -305,6 +311,7 @@
   var uFlowSpeed = gl.getUniformLocation(prog, 'u_flowSpeed');
   var uCenter = gl.getUniformLocation(prog, 'u_center');
   var uScale = gl.getUniformLocation(prog, 'u_scale');
+  var uMouse = gl.getUniformLocation(prog, 'u_mouse');
   var filmThicknessVal = 1.0;
   var flowSpeedVal = 0.5;
   var centerX = 0.0;
@@ -360,15 +367,10 @@
     gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
     gl.uniform1f(uFilmThickness, filmThicknessVal);
     gl.uniform1f(uFlowSpeed, flowSpeedVal);
-    // Mouse shifts the iridescence center
-    var cx = centerX, cy = centerY, sc = scaleVal;
-    if (mouseXVal >= 0) {
-      cx = mouseXVal;
-      cy = mouseYVal;
-      sc = 1.0;
-    }
-    gl.uniform2f(uCenter, cx, cy);
-    gl.uniform1f(uScale, sc);
+    // Mouse tilts the view angle (changes iridescence colors) — don't shift center
+    gl.uniform2f(uCenter, centerX, centerY);
+    gl.uniform1f(uScale, scaleVal);
+    gl.uniform2f(uMouse, mouseXVal, mouseYVal);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     requestAnimationFrame(render);
   }

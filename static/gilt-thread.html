@@ -196,11 +196,13 @@
 
   // ── Update trail: push current position, cap at TRAIL_MAX ──
   function updateTrail(th, tNow) {
-    // Blend center toward mouse when active, else return to canvas center
-    var targetCX = mouseActive ? mouseX : W * 0.5;
-    var targetCY = mouseActive ? mouseY : H * 0.5;
-    smoothCX += (targetCX - smoothCX) * 0.04;
-    smoothCY += (targetCY - smoothCY) * 0.04;
+    // Blend center gently toward mouse when active — subtle parallax, not full follow
+    var centerX = W * 0.5;
+    var centerY = H * 0.5;
+    var targetCX = mouseActive ? centerX + (mouseX - centerX) * 0.15 : centerX;
+    var targetCY = mouseActive ? centerY + (mouseY - centerY) * 0.15 : centerY;
+    smoothCX += (targetCX - smoothCX) * 0.02;
+    smoothCY += (targetCY - smoothCY) * 0.02;
 
     var scale = Math.min(W, H) * 0.55;
     var p = pos(th, tNow);
