@@ -44,10 +44,10 @@
 				const hasTouch = /addEventListener\s*\(\s*['"]touch(start|move)['"]/.test(src);
 
 				let hint = '';
-				if (hasMouseDown && hasMouseMove) {
-					hint = 'Drag to interact';
-				} else if (hasClick && hasMouseMove) {
+				if (hasClick && hasMouseMove) {
 					hint = 'Move & click to interact';
+				} else if (hasMouseDown && hasMouseMove) {
+					hint = 'Drag to interact';
 				} else if (hasClick) {
 					hint = 'Click to interact';
 				} else if (hasMouseMove) {

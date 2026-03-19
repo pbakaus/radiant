@@ -85,9 +85,12 @@
     '',
     'void main() {',
     '  vec2 uv = (gl_FragCoord.xy - 0.5 * u_res.xy) / u_res.y;',
+    '  // Mouse: X shifts curtain, Y controls intensity',
+    '  float mouseIntensity = 1.0;',
     '  if (u_mouse.x > 0.0) {',
     '    vec2 mNorm = (u_mouse - 0.5 * u_res) / u_res.y;',
-    '    uv.x += (mNorm.x - uv.x) * 0.3;',
+    '    uv.x += mNorm.x * 0.15;',
+    '    mouseIntensity = 0.4 + (u_mouse.y / u_res.y) * 1.2;',
     '  }',
     '  float t = u_time * u_waveSpeed;',
     '  int lineCount = int(u_lineCount);',
@@ -125,6 +128,7 @@
     '  float vig = 1.0 - dot(uv, uv) * 0.4;',
     '  col *= max(vig, 0.0);',
     '',
+    '  col *= mouseIntensity;',
     '  gl_FragColor = vec4(col, 1.0);',
     '}'
   ].join('\n');

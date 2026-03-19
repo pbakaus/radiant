@@ -384,7 +384,7 @@
         var toMY = mouseY - y;
         var mDist = Math.sqrt(toMX * toMX + toMY * toMY);
         if (mDist > 5 && mDist < 350) {
-          var mStr = mouseDown ? 250 : -400;
+          var mStr = mouseDown ? 600 : -400;
           var falloff = 1 - mDist / 350;
           falloff *= falloff;
           ax += toMX / mDist * mStr * falloff;

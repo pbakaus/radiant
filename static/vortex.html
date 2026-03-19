@@ -87,7 +87,7 @@
     '  float baseTheta = log(r / a) / b;',
     '',
     '  // Add time rotation',
-    '  baseTheta -= t * 0.3;',
+    '  baseTheta -= t * 0.3 + u_mouse.x;',
     '',
     '  // Find nearest arm',
     '  float armSpacing = TAU / numArms;',
@@ -110,11 +110,8 @@
     '  vec2 uv = (gl_FragCoord.xy - 0.5 * u_res.xy) / u_res.y;',
     '  float t = u_time * u_waveSpeed;',
     '',
-    '  // Center: drifts slowly, or follows mouse when active',
+    '  // Center drifts slowly',
     '  vec2 center = vec2(sin(t * 0.07) * 0.05, cos(t * 0.09) * 0.04);',
-    '  if (u_mouse.x > -0.5) {',
-    '    center = (u_mouse - 0.5 * u_res.xy) / u_res.y;',
-    '  }',
     '  vec2 p = uv - center;',
     '',
     '  float r = length(p);',
@@ -200,14 +197,21 @@
 
   var waveSpeedVal = 1.0;
   var lineCountVal = 6.0;
-  var mouseXVal = -1.0, mouseYVal = -1.0;
+  var mouseRotOffset = 0;
+  var mouseDown = false, lastMX = 0;
 
-  // Mouse interaction: move the vortex center
-  canvas.addEventListener('mousemove', function(e) { mouseXVal = e.clientX * dpr; mouseYVal = (canvas.clientHeight - e.clientY) * dpr; });
-  canvas.addEventListener('mouseleave', function() { mouseXVal = -1; mouseYVal = -1; });
-  canvas.addEventListener('touchstart', function(e) { e.preventDefault(); mouseXVal = e.touches[0].clientX * dpr; mouseYVal = (canvas.clientHeight - e.touches[0].clientY) * dpr; }, { passive: false });
-  canvas.addEventListener('touchmove', function(e) { e.preventDefault(); mouseXVal = e.touches[0].clientX * dpr; mouseYVal = (canvas.clientHeight - e.touches[0].clientY) * dpr; }, { passive: false });
-  canvas.addEventListener('touchend', function() { mouseXVal = -1; mouseYVal = -1; });
+  // Drag to spin the vortex
+  canvas.addEventListener('mousedown', function(e) { mouseDown = true; lastMX = e.clientX; });
+  canvas.addEventListener('mousemove', function(e) {
+    if (mouseDown) { mouseRotOffset += (e.clientX - lastMX) * 0.008; lastMX = e.clientX; }
+  });
+  canvas.addEventListener('mouseup', function() { mouseDown = false; });
+  canvas.addEventListener('touchstart', function(e) { e.preventDefault(); mouseDown = true; lastMX = e.touches[0].clientX; }, { passive: false });
+  canvas.addEventListener('touchmove', function(e) {
+    e.preventDefault();
+    if (mouseDown) { mouseRotOffset += (e.touches[0].clientX - lastMX) * 0.008; lastMX = e.touches[0].clientX; }
+  }, { passive: false });
+  canvas.addEventListener('touchend', function() { mouseDown = false; });
 
   var dpr = Math.min(window.devicePixelRatio || 1, 2) * pixelScale;
   var needsResize = true;
@@ -231,7 +235,7 @@
     gl.uniform1f(uTime, prefersReduced ? 0.0 : now * 0.001);
     gl.uniform1f(uWaveSpeed, waveSpeedVal);
     gl.uniform1f(uLineCount, lineCountVal);
-    gl.uniform2f(uMouse, mouseXVal, mouseYVal);
+    gl.uniform2f(uMouse, mouseRotOffset, 0.0);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     requestAnimationFrame(render);
   }

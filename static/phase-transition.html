@@ -254,6 +254,11 @@
       wavePhase = cycleIndex % 4 < 2 ? 0 : 1;
     }
 
+    // Mouse overrides wave position — directly controls the boundary
+    if (mouseActive) {
+      wavePos = mouseWavePos;
+    }
+
     // Wave position in pixels
     var wavePx = wavePos * width;
     // Transition width: how wide the wavefront band is
@@ -609,20 +614,28 @@
 
   requestAnimationFrame(render);
 
-  // Mouse: click to trigger wavefront from cursor position
-  canvas.addEventListener('click', function(e) {
-    wavePos = e.clientX / width;
-    waveDir = Math.random() < 0.5 ? 1 : -1;
-    wavePhase = 1 - wavePhase; // toggle order/chaos
-    waveCycleTime = 0;
+  // Mouse: hover position controls wave boundary, click toggles order/chaos
+  var mouseActive = false;
+  var mouseWavePos = 0.5;
+  canvas.addEventListener('mousemove', function(e) {
+    mouseActive = true;
+    mouseWavePos = e.clientX / width;
+  });
+  canvas.addEventListener('mouseleave', function() { mouseActive = false; });
+  canvas.addEventListener('click', function() {
+    wavePhase = 1 - wavePhase;
   });
   canvas.addEventListener('touchstart', function(e) {
     e.preventDefault();
-    wavePos = e.touches[0].clientX / width;
-    waveDir = Math.random() < 0.5 ? 1 : -1;
+    mouseActive = true;
+    mouseWavePos = e.touches[0].clientX / width;
     wavePhase = 1 - wavePhase;
-    waveCycleTime = 0;
   }, { passive: false });
+  canvas.addEventListener('touchmove', function(e) {
+    e.preventDefault();
+    mouseWavePos = e.touches[0].clientX / width;
+  }, { passive: false });
+  canvas.addEventListener('touchend', function() { mouseActive = false; });
 
   // ── Visibility pause ──
   document.addEventListener('visibilitychange', function() {
