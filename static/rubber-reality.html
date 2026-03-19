@@ -150,7 +150,7 @@
     '    vec2 mp = (u_mouse - u_res * 0.5) / min(u_res.x, u_res.y);',
     '    vec2 toMouse = p - mp;',
     '    float md = length(toMouse);',
-    '    float warp = exp(-md * md * 5.0) * 4.0;',
+    '    float warp = exp(-md * md * 6.0) * 1.5;',
     '    deformedGP += toMouse * gridScale * warp;',
     '  }',
     '',
@@ -266,7 +266,9 @@
     mouseActive = 1;
   }
 
-  canvas.addEventListener('mousemove', function(e) { updateMousePos(e.clientX, e.clientY); });
+  canvas.addEventListener('mousedown', function(e) { mouseActive = 1; updateMousePos(e.clientX, e.clientY); });
+  canvas.addEventListener('mousemove', function(e) { if (mouseActive) updateMousePos(e.clientX, e.clientY); });
+  canvas.addEventListener('mouseup', function() { mouseActive = 0; });
   canvas.addEventListener('mouseleave', function() { mouseActive = 0; });
   canvas.addEventListener('touchstart', function(e) {
     e.preventDefault();
