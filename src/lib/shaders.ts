@@ -853,9 +853,10 @@ export const shaders: Shader[] = [
 		inspiration: 'Zendaya',
 		tags: ['fill', 'organic', 'particles'],
 		technique: 'webgl',
+		defaultScheme: 'blue',
 		params: [
-			{ name: 'PULSE_SPEED', label: 'Pulse Speed', min: 0.2, max: 2.0, step: 0.1, default: 0.8 },
-			{ name: 'PLANKTON_COUNT', label: 'Plankton Count', min: 50, max: 500, step: 25, default: 200 }
+			{ name: 'GLOW_INTENSITY', label: 'Glow Intensity', min: 0.3, max: 2.0, step: 0.1, default: 1.0 },
+			{ name: 'WAVE_SPEED', label: 'Wave Speed', min: 0.2, max: 2.0, step: 0.1, default: 1.0 }
 		]
 	},
 	{
