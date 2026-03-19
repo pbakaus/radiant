@@ -193,8 +193,8 @@ function gentleDrift(t) {
 function figure8(t) {
 	const angle = t * Math.PI * 2;
 	return {
-		x: 0.5 + Math.sin(angle) * 0.3,
-		y: 0.5 + Math.sin(angle * 2) * 0.2
+		x: 0.5 + Math.sin(angle) * 0.35,
+		y: 0.5 + Math.sin(angle * 2) * 0.25
 	};
 }
 
@@ -642,31 +642,31 @@ async function recordShader(page, baseUrl, shader, options) {
 		// Move mouse (convert normalized to viewport pixels)
 		const mx = mousePos.x * viewportWidth;
 		const my = mousePos.y * viewportHeight;
-		await page.mouse.move(mx, my);
+		// Dispatch mousemove directly on canvas to ensure shaders receive it
+		await page.evaluate(({ x, y }) => {
+			const canvas = document.getElementById('canvas');
+			if (canvas) {
+				canvas.dispatchEvent(new MouseEvent('mousemove', {
+					clientX: x, clientY: y,
+					bubbles: true, cancelable: true
+				}));
+			}
+		}, { x: mx, y: my });
 
 		// Parameter changes (scene: parameters)
 		if (scene.name === 'parameters' && shader.params && shader.params.length > 0) {
 			const paramValues = computeParamValues(shader.params, progress);
 			for (const pv of paramValues) {
 				await page.evaluate(({ name, value }) => {
-					// Most shaders expose params on window
-					if (typeof window[name] !== 'undefined') {
-						window[name] = value;
-					}
-					// Also try updating via uniform if a setParam function exists
-					if (typeof window.__setParam === 'function') {
-						window.__setParam(name, value);
-					}
+					window.postMessage({ type: 'param', name, value }, '*');
 				}, { name: pv.name, value: pv.value });
 			}
 		} else if (scene.name !== 'parameters') {
 			// Reset params to default when not in parameters scene
-			// (only needed at start of non-param scenes)
 			if (frame === scene.startFrame && shader.params) {
 				for (const p of shader.params) {
 					await page.evaluate(({ name, value }) => {
-						if (typeof window[name] !== 'undefined') window[name] = value;
-						if (typeof window.__setParam === 'function') window.__setParam(name, value);
+						window.postMessage({ type: 'param', name, value }, '*');
 					}, { name: p.name, value: p.default });
 				}
 			}
@@ -716,7 +716,7 @@ async function recordShader(page, baseUrl, shader, options) {
 					break;
 				}
 				case 'outro':
-					captionText = 'radiant.website';
+					captionText = `radiant-shaders.com/shader/${shader.id}`;
 					break;
 			}
 
