@@ -761,6 +761,31 @@ async function recordShader(page, baseUrl, devUrl, shader, options) {
 	await page.evaluateOnNewDocument(() => { window.__skipRAFOverride = true; });
 	await page.goto(detailUrl, { waitUntil: 'networkidle2', timeout: 15000 });
 	await new Promise(r => setTimeout(r, 2000)); // let iframe shader warm up
+
+	// Force the preview area to match the video aspect ratio
+	const videoAspect = preset.width / preset.height;
+	await page.evaluate((aspect) => {
+		const style = document.createElement('style');
+		style.id = '__video-aspect-override';
+		style.textContent = `
+			.preview-area {
+				display: flex !important;
+				align-items: center !important;
+				justify-content: center !important;
+			}
+			.preview-area .preview {
+				aspect-ratio: ${aspect} !important;
+				width: 100% !important;
+				height: auto !important;
+				max-height: 100% !important;
+			}
+			.preview-area .preview.layout-full .mock-layout {
+				aspect-ratio: ${aspect} !important;
+			}
+		`;
+		document.head.appendChild(style);
+	}, videoAspect);
+	await new Promise(r => setTimeout(r, 300));
 	process.stdout.write(' done\n');
 
 	// Apply default color scheme on the detail page
