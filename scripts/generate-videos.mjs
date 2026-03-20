@@ -688,9 +688,8 @@ function colorSceneFilter(t) {
 // ---------------------------------------------------------------------------
 const RAF_OVERRIDE_SCRIPT = `
 (function() {
-	// Skip override when loading non-shader pages (detail page, outro)
-	// Note: override DOES apply inside iframes so we can control their timing
-	if (window.__skipRAFOverride) { delete window.__skipRAFOverride; return; }
+	// Only apply override to shader HTML files (not SvelteKit pages)
+	if (!location.pathname.endsWith('.html')) return;
 
 	// Store the real rAF but replace with our controlled version
 	const _realRAF = window.requestAnimationFrame;
@@ -772,8 +771,6 @@ async function recordShader(page, baseUrl, devUrl, shader, options) {
 	// ── Start on the SvelteKit detail page (real UI) ──
 	const detailUrl = `${devUrl}/shader/${shader.id}`;
 	process.stdout.write(`  Loading detail page...`);
-	// Temporarily disable rAF override for the SvelteKit page
-	await page.evaluateOnNewDocument(() => { window.__skipRAFOverride = true; });
 	await page.goto(detailUrl, { waitUntil: 'networkidle2', timeout: 15000 });
 	await new Promise(r => setTimeout(r, 2000)); // let iframe shader warm up
 
