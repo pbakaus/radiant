@@ -673,6 +673,8 @@ function colorSceneFilter(t) {
 // ---------------------------------------------------------------------------
 const RAF_OVERRIDE_SCRIPT = `
 (function() {
+	// Skip override in iframes (detail page embeds shader in iframe)
+	if (window !== window.top) return;
 	// Skip override when loading non-shader pages (detail page, outro)
 	if (window.__skipRAFOverride) { delete window.__skipRAFOverride; return; }
 
@@ -856,43 +858,61 @@ async function recordShader(page, baseUrl, devUrl, shader, options) {
 			const zoomProgress = easeInOut(sceneProgress(scene, frame));
 
 			await page.evaluate((p) => {
-				const preview = document.querySelector('.preview-area');
+				// Find the shader iframe or its container
+				const iframe = document.querySelector('.preview-area iframe') ||
+					document.querySelector('.preview iframe') ||
+					document.querySelector('iframe');
+				const previewArea = document.querySelector('.preview-area');
 				const sidebar = document.querySelector('.sidebar');
-				const header = document.querySelector('header');
 				const nav = document.querySelector('nav');
-				const backLink = document.querySelector('.back-link, a[href*="Gallery"]');
 
-				if (preview) {
-					// Get preview rect to compute transform origin
-					const rect = preview.getBoundingClientRect();
+				// Use the iframe's rect as the source for the zoom
+				const target = iframe || previewArea;
+				if (target) {
+					const rect = target.getBoundingClientRect();
 					const vw = window.innerWidth;
 					const vh = window.innerHeight;
 
-					// Scale to fill viewport
+					// Scale to cover the entire viewport
 					const scaleX = vw / rect.width;
 					const scaleY = vh / rect.height;
 					const scale = Math.max(scaleX, scaleY);
 					const targetScale = 1 + (scale - 1) * p;
 
-					// Translate to center
+					// Translate center of target to center of viewport
 					const cx = rect.left + rect.width / 2;
 					const cy = rect.top + rect.height / 2;
 					const tx = (vw / 2 - cx) * p;
 					const ty = (vh / 2 - cy) * p;
 
-					preview.style.transform = `translate(${tx}px, ${ty}px) scale(${targetScale})`;
-					preview.style.transformOrigin = 'center center';
-					preview.style.zIndex = '10000';
-					preview.style.position = 'relative';
-					preview.style.borderRadius = (8 * (1 - p)) + 'px';
+					// Apply transform to the preview area (parent of iframe)
+					if (previewArea) {
+						previewArea.style.transform = `translate(${tx}px, ${ty}px) scale(${targetScale})`;
+						previewArea.style.transformOrigin = `${cx - previewArea.getBoundingClientRect().left + previewArea.scrollLeft}px ${cy - previewArea.getBoundingClientRect().top + previewArea.scrollTop}px`;
+						previewArea.style.zIndex = '10000';
+						previewArea.style.overflow = 'visible';
+					}
+
+					// Remove border radius as we zoom
+					const preview = document.querySelector('.preview');
+					if (preview) {
+						preview.style.borderRadius = (8 * (1 - p)) + 'px';
+						preview.style.borderColor = `rgba(200, 149, 108, ${0.12 * (1 - p)})`;
+						preview.style.overflow = 'hidden';
+					}
 				}
 
-				// Fade out chrome
-				const fadeOut = 1 - p;
+				// Fade out chrome quickly (complete by 60% of zoom)
+				const fadeOut = Math.max(0, 1 - p * 2.5);
 				if (sidebar) sidebar.style.opacity = String(fadeOut);
-				if (header) header.style.opacity = String(fadeOut);
 				if (nav) nav.style.opacity = String(fadeOut);
-				if (backLink) backLink.style.opacity = String(fadeOut);
+				// Fade out all other page elements
+				document.querySelectorAll('.page > *:not(.main)').forEach(el => {
+					el.style.opacity = String(fadeOut);
+				});
+				// Also fade header inside main
+				const header = document.querySelector('.main > header');
+				if (header) header.style.opacity = String(fadeOut);
 			}, zoomProgress);
 
 			await new Promise(r => setTimeout(r, dt));
@@ -910,22 +930,20 @@ async function recordShader(page, baseUrl, devUrl, shader, options) {
 				lastPercent = percent;
 			}
 
-			// At the end of zoom, navigate to standalone shader for deterministic capture
+			// At end of zoom, switch to standalone shader for deterministic capture
 			if (frame === scene.startFrame + scene.durationFrames - 1) {
-				process.stdout.write('\n  Switching to fullscreen shader...');
-				// Re-enable rAF override for the shader page
+				process.stdout.write('\n  Switching to fullscreen...');
+				// Re-enable rAF override
 				await page.evaluateOnNewDocument(() => { delete window.__skipRAFOverride; });
 				const shaderUrl = `${baseUrl}/${shader.file}`;
 				await page.goto(shaderUrl, { waitUntil: 'domcontentloaded' });
 				await new Promise(r => setTimeout(r, 500));
 
-				// Hide label
 				await page.evaluate(() => {
 					const label = document.querySelector('.label');
 					if (label) label.style.display = 'none';
 				});
 
-				// Apply default color scheme filter
 				if (defaultScheme.filter !== 'none') {
 					await page.evaluate((f) => {
 						const c = document.getElementById('canvas');
@@ -933,14 +951,12 @@ async function recordShader(page, baseUrl, devUrl, shader, options) {
 					}, defaultScheme.filter);
 				}
 
-				// Warmup the standalone shader
 				const warmupFrames = options.warmup;
 				for (let i = 0; i < warmupFrames; i++) {
 					await page.evaluate((d) => {
 						if (window.__captureAdvanceFrame) window.__captureAdvanceFrame(d);
 					}, dt);
 				}
-
 				process.stdout.write(' done\n');
 			}
 
