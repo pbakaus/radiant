@@ -255,8 +255,23 @@ async function detectInteraction(shaderFile) {
  * Create or update a caption overlay on the page.
  * Opacity is controlled per-frame for fade-in/fade-out.
  */
+/**
+ * Ensure an overlay container exists on <html> (outside body transforms).
+ * Must be called once before using caption/slider/cursor overlays.
+ */
+async function ensureOverlayContainer(page) {
+	await page.evaluate(() => {
+		if (document.getElementById('__video-overlays')) return;
+		const c = document.createElement('div');
+		c.id = '__video-overlays';
+		c.style.cssText = 'position:fixed;inset:0;z-index:999999;pointer-events:none;overflow:hidden';
+		document.documentElement.appendChild(c);
+	});
+}
+
 async function setCaption(page, text, opacity) {
 	await page.evaluate(({ text, opacity }) => {
+		const container = document.getElementById('__video-overlays') || document.body;
 		let el = document.getElementById('__video-caption');
 		if (!el) {
 			el = document.createElement('div');
@@ -283,7 +298,7 @@ async function setCaption(page, text, opacity) {
 				whiteSpace: 'nowrap',
 				transition: 'none'
 			});
-			document.body.appendChild(el);
+			(document.getElementById('__video-overlays') || document.body).appendChild(el);
 		}
 		el.textContent = text;
 		el.style.opacity = String(opacity);
@@ -335,7 +350,7 @@ async function setSliderOverlay(page, label, value, min, max, opacity) {
 				</div>
 				<div id="__slider-thumb" style="position:absolute;width:12px;height:12px;border-radius:50%;background:rgba(200,149,108,0.9);box-shadow:0 0 8px rgba(200,149,108,0.4);transform:translateX(-50%);transition:none"></div>
 			`;
-			document.body.appendChild(el);
+			(document.getElementById('__video-overlays') || document.body).appendChild(el);
 		}
 		el.style.opacity = String(opacity);
 		document.getElementById('__slider-label').textContent = label;
@@ -389,7 +404,7 @@ async function showCursor(page, x, y, state) {
 				transform: 'translate(-50%, -50%)',
 				transition: 'none'
 			});
-			document.body.appendChild(cursor);
+			(document.getElementById('__video-overlays') || document.body).appendChild(cursor);
 		}
 		cursor.style.left = x + 'px';
 		cursor.style.top = y + 'px';
@@ -429,7 +444,7 @@ async function showCursor(page, x, y, state) {
 				pointerEvents: 'none',
 				animation: 'cursorRipple 0.6s ease-out forwards'
 			});
-			document.body.appendChild(ripple);
+			(document.getElementById('__video-overlays') || document.body).appendChild(ripple);
 
 			// Add animation keyframes if not yet added
 			if (!document.getElementById('__cursor-styles')) {
@@ -761,6 +776,9 @@ async function recordShader(page, baseUrl, devUrl, shader, options) {
 	await page.evaluateOnNewDocument(() => { window.__skipRAFOverride = true; });
 	await page.goto(detailUrl, { waitUntil: 'networkidle2', timeout: 15000 });
 	await new Promise(r => setTimeout(r, 2000)); // let iframe shader warm up
+
+	// Create overlay container on <html> (outside body transforms)
+	await ensureOverlayContainer(page);
 
 	// Force the preview area to match the video aspect ratio
 	const videoAspect = preset.width / preset.height;
