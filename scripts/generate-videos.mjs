@@ -1096,96 +1096,107 @@ async function recordShader(page, baseUrl, devUrl, shader, options) {
 			}
 		}
 
-		// Color scheme scene: 6-panel split screen
+		// Color scheme scene: animated 6-panel split screen
 		if (scene.name === 'colors') {
-			// On first frame, capture 6 screenshots and build the grid
-			if (frame === scene.startFrame) {
+			const frameInScene = frame - scene.startFrame;
+			const updateInterval = Math.round(fps * 0.5); // re-capture every 0.5s
+
+			// Capture 6 panels and build/update the grid
+			if (frameInScene % updateInterval === 0) {
+				// Advance iframe a frame first so panels show progression
+				await page.evaluate((dt) => {
+					const iframe = document.querySelector('iframe');
+					if (iframe && iframe.contentWindow && iframe.contentWindow.__captureAdvanceFrame) {
+						iframe.contentWindow.__captureAdvanceFrame(dt);
+					}
+				}, dt);
+
 				const panelImages = [];
-				const iframe = 'document.querySelector("iframe")';
 				for (const scheme of COLOR_SCHEMES) {
-					// Apply filter
 					await page.evaluate((f) => {
 						const iframe = document.querySelector('iframe');
 						if (iframe) iframe.style.filter = f;
 					}, scheme.filter);
-					await page.evaluate(() => new Promise(r => setTimeout(r, 50)));
-					// Capture screenshot as base64
-					const shot = await page.screenshot({ type: 'jpeg', quality: 85, fullPage: false, encoding: 'base64' });
+					await page.evaluate(() => new Promise(r => setTimeout(r, 30)));
+					const shot = await page.screenshot({ type: 'jpeg', quality: 80, fullPage: false, encoding: 'base64' });
 					panelImages.push({ base64: shot, name: scheme.name });
 				}
-				// Reset to default
+				// Reset filter
 				await page.evaluate((f) => {
 					const iframe = document.querySelector('iframe');
 					if (iframe) iframe.style.filter = f;
 				}, defaultScheme.filter);
 
-				// Inject 6-panel grid overlay
+				// Build or update grid
 				await page.evaluate((panels) => {
 					const container = document.getElementById('__video-overlays') || document.body;
 					let grid = document.getElementById('__color-grid');
-					if (grid) grid.remove();
-					grid = document.createElement('div');
-					grid.id = '__color-grid';
-					Object.assign(grid.style, {
-						position: 'fixed',
-						inset: '0',
-						display: 'grid',
-						gridTemplateColumns: 'repeat(3, 1fr)',
-						gridTemplateRows: 'repeat(2, 1fr)',
-						gap: '3px',
-						background: '#0a0a0a',
-						zIndex: '100000',
-						opacity: '0',
-						transition: 'none'
-					});
-					for (const p of panels) {
-						const cell = document.createElement('div');
-						Object.assign(cell.style, {
-							position: 'relative',
-							overflow: 'hidden',
-							backgroundImage: 'url(data:image/jpeg;base64,' + p.base64 + ')',
-							backgroundSize: 'cover',
-							backgroundPosition: 'center'
+					if (!grid) {
+						grid = document.createElement('div');
+						grid.id = '__color-grid';
+						Object.assign(grid.style, {
+							position: 'fixed',
+							inset: '0',
+							display: 'grid',
+							gridTemplateColumns: 'repeat(3, 1fr)',
+							gridTemplateRows: 'repeat(2, 1fr)',
+							gap: '3px',
+							background: '#0a0a0a',
+							zIndex: '100000',
+							opacity: '0',
+							transition: 'none'
 						});
-						const label = document.createElement('div');
-						Object.assign(label.style, {
-							position: 'absolute',
-							bottom: '8px',
-							left: '50%',
-							transform: 'translateX(-50%)',
-							fontFamily: '"Inter", -apple-system, system-ui, sans-serif',
-							fontSize: '11px',
-							fontWeight: '500',
-							letterSpacing: '0.08em',
-							textTransform: 'uppercase',
-							color: 'rgba(232, 224, 216, 0.8)',
-							background: 'rgba(10, 10, 10, 0.6)',
-							padding: '3px 10px',
-							borderRadius: '4px',
-							whiteSpace: 'nowrap'
-						});
-						label.textContent = p.name;
-						cell.appendChild(label);
-						grid.appendChild(cell);
+						for (const p of panels) {
+							const cell = document.createElement('div');
+							cell.className = '__color-cell';
+							Object.assign(cell.style, {
+								position: 'relative',
+								overflow: 'hidden',
+								backgroundSize: 'cover',
+								backgroundPosition: 'center'
+							});
+							const label = document.createElement('div');
+							Object.assign(label.style, {
+								position: 'absolute',
+								bottom: '8px',
+								left: '50%',
+								transform: 'translateX(-50%)',
+								fontFamily: '"Inter", -apple-system, system-ui, sans-serif',
+								fontSize: '11px',
+								fontWeight: '500',
+								letterSpacing: '0.08em',
+								textTransform: 'uppercase',
+								color: 'rgba(232, 224, 216, 0.8)',
+								background: 'rgba(10, 10, 10, 0.6)',
+								padding: '3px 10px',
+								borderRadius: '4px',
+								whiteSpace: 'nowrap'
+							});
+							label.textContent = p.name;
+							cell.appendChild(label);
+							grid.appendChild(cell);
+						}
+						container.appendChild(grid);
 					}
-					container.appendChild(grid);
+					// Update panel images
+					const cells = grid.querySelectorAll('.__color-cell');
+					panels.forEach((p, i) => {
+						if (cells[i]) cells[i].style.backgroundImage = 'url(data:image/jpeg;base64,' + p.base64 + ')';
+					});
 				}, panelImages);
 			}
 
-			// Fade the grid in/out
+			// Fade in only (no fade out — grid stays until outro navigates away)
 			const fadeFrames = Math.round(0.5 * fps);
-			const gridOpacity = captionOpacity(frame - scene.startFrame, scene.durationFrames, fadeFrames);
+			const gridOpacity = Math.min(1, frameInScene / fadeFrames);
 			await page.evaluate((o) => {
 				const grid = document.getElementById('__color-grid');
 				if (grid) grid.style.opacity = String(o);
 			}, gridOpacity);
 
 		} else if (scene.name !== 'colors') {
-			// Remove grid and reset filter outside colors scene
 			if (frame === scene.startFrame) {
 				await page.evaluate((f) => {
-					const grid = document.getElementById('__color-grid');
-					if (grid) grid.remove();
 					const iframe = document.querySelector('iframe');
 					if (iframe) iframe.style.filter = f;
 				}, defaultScheme.filter);
