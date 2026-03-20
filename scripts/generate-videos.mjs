@@ -55,8 +55,8 @@ const COLOR_SCHEMES = [
 // DPR for crisp output
 const DPR = 2;
 
-// Warmup frames before recording (5 seconds at 60fps)
-const WARMUP_FRAMES = 300;
+// Default warmup: 0 frames (start from the beginning)
+const DEFAULT_WARMUP_FRAMES = 0;
 
 // ---------------------------------------------------------------------------
 // Parse shader metadata from shaders.ts
@@ -670,14 +670,17 @@ async function recordShader(page, baseUrl, shader, options) {
 	const paramCount = shader.params ? shader.params.length : 0;
 	process.stdout.write(`  ${durationSec}s video (${paramCount} params, ${interactionType} interaction, ${totalFrames} frames)\n`);
 
-	// Warmup: advance frames without recording
-	process.stdout.write(`  Warming up (${WARMUP_FRAMES} frames)...`);
-	for (let i = 0; i < WARMUP_FRAMES; i++) {
+	// Warmup: advance frames without recording (configurable via --warmup)
+	const warmupFrames = options.warmup;
+	if (warmupFrames > 0) {
+		process.stdout.write(`  Warming up (${warmupFrames} frames)...`);
+	}
+	for (let i = 0; i < warmupFrames; i++) {
 		await page.evaluate((dt) => {
 			if (window.__captureAdvanceFrame) window.__captureAdvanceFrame(dt);
 		}, dt);
 	}
-	process.stdout.write(' done\n');
+	if (warmupFrames > 0) process.stdout.write(' done\n');
 
 	// Spawn ffmpeg
 	const ffmpegArgs = [
@@ -932,6 +935,7 @@ function parseArgs() {
 		all: false,
 		format: 'landscape',
 		fps: 60,
+		warmup: DEFAULT_WARMUP_FRAMES,
 		output: join(ROOT, 'videos'),
 		captions: true
 	};
@@ -941,6 +945,8 @@ function parseArgs() {
 			opts.shader = arg.split('=')[1];
 		} else if (arg === '--all') {
 			opts.all = true;
+		} else if (arg.startsWith('--warmup=')) {
+			opts.warmup = parseInt(arg.split('=')[1], 10);
 		} else if (arg.startsWith('--format=')) {
 			opts.format = arg.split('=')[1];
 		} else if (arg.startsWith('--fps=')) {
@@ -961,6 +967,7 @@ Options:
   --all                Record all shaders
   --format=PRESET      landscape|reel|square (default: landscape)
   --fps=FPS            Frame rate (default: 60)
+  --warmup=FRAMES      Warmup frames before recording (default: 0)
   --output=DIR         Output directory (default: videos/)
   --no-captions        Disable caption burn-in
   --help, -h           Show this help
@@ -1073,6 +1080,7 @@ async function main() {
 			const outPath = await recordShader(page, baseUrl, shader, {
 				format: opts.format,
 				fps: opts.fps,
+				warmup: opts.warmup,
 				enableCaptions: opts.captions,
 				outputDir: opts.output
 			});
