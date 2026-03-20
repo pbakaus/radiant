@@ -484,17 +484,23 @@ function buildChoreography(shader, fps, interactionType) {
 	const hasParams = paramCount > 0;
 
 	// Duration is derived from content, not hardcoded
-	const s1 = 4;                              // Opening
+	const sDetail = 3;                         // Detail page UI reveal
+	const sZoom = 1.5;                         // Zoom-in transition
+	const s1 = 3;                              // Opening (fullscreen, with title)
 	const s2 = 4;                              // Interaction
 	const s3 = hasParams ? paramCount * 3 : 0; // Parameters: 3s per param
 	const s4 = 4;                              // Color themes
 	const s5 = 3;                              // Outro
 
-	let scenes = [
-		{ name: 'opening',     startSec: 0, durationSec: s1 }
-	];
+	let scenes = [];
+	let t = 0;
 
-	let t = s1;
+	scenes.push({ name: 'detailpage', startSec: t, durationSec: sDetail });
+	t += sDetail;
+	scenes.push({ name: 'zoom',       startSec: t, durationSec: sZoom });
+	t += sZoom;
+	scenes.push({ name: 'opening',    startSec: t, durationSec: s1 });
+	t += s1;
 	scenes.push({ name: 'interaction', startSec: t, durationSec: s2 });
 	t += s2;
 
@@ -667,6 +673,9 @@ function colorSceneFilter(t) {
 // ---------------------------------------------------------------------------
 const RAF_OVERRIDE_SCRIPT = `
 (function() {
+	// Skip override when loading non-shader pages (detail page, outro)
+	if (window.__skipRAFOverride) { delete window.__skipRAFOverride; return; }
+
 	// Store the real rAF but replace with our controlled version
 	const _realRAF = window.requestAnimationFrame;
 	let _storedCallback = null;
@@ -721,42 +730,13 @@ const RAF_OVERRIDE_SCRIPT = `
 // ---------------------------------------------------------------------------
 // Record a single shader
 // ---------------------------------------------------------------------------
-async function recordShader(page, baseUrl, shader, options) {
+async function recordShader(page, baseUrl, devUrl, shader, options) {
 	const { format, fps, enableCaptions, outputDir } = options;
 	const preset = FORMAT_PRESETS[format];
 	const viewportWidth = preset.width / DPR;
 	const viewportHeight = preset.height / DPR;
 	const dt = 1000 / fps; // ms per frame
 	const outputPath = join(outputDir, `${shader.id}-${format}.mp4`);
-
-	// Set viewport
-	await page.setViewport({
-		width: viewportWidth,
-		height: viewportHeight,
-		deviceScaleFactor: DPR
-	});
-
-	// Navigate to the shader
-	const url = `${baseUrl}/${shader.file}`;
-	await page.goto(url, { waitUntil: 'domcontentloaded' });
-
-	// Wait a moment for script execution
-	await new Promise(r => setTimeout(r, 500));
-
-	// Hide the label
-	await page.evaluate(() => {
-		const label = document.querySelector('.label');
-		if (label) label.style.display = 'none';
-	});
-
-	// Apply default color scheme
-	const defaultScheme = COLOR_SCHEMES.find(s => s.id === shader.defaultScheme) || COLOR_SCHEMES[0];
-	if (defaultScheme.filter !== 'none') {
-		await page.evaluate((f) => {
-			const c = document.getElementById('canvas');
-			if (c) c.style.filter = f;
-		}, defaultScheme.filter);
-	}
 
 	// Detect interaction type and build choreography
 	const interactionType = await detectInteraction(shader.file);
@@ -766,17 +746,45 @@ async function recordShader(page, baseUrl, shader, options) {
 	const paramCount = shader.params ? shader.params.length : 0;
 	process.stdout.write(`  ${durationSec}s video (${paramCount} params, ${interactionType} interaction, ${totalFrames} frames)\n`);
 
-	// Warmup: advance frames without recording (configurable via --warmup)
-	const warmupFrames = options.warmup;
-	if (warmupFrames > 0) {
-		process.stdout.write(`  Warming up (${warmupFrames} frames)...`);
+	// Set viewport
+	await page.setViewport({
+		width: viewportWidth,
+		height: viewportHeight,
+		deviceScaleFactor: DPR
+	});
+
+	// ── Start on the SvelteKit detail page (real UI) ──
+	const detailUrl = `${devUrl}/shader/${shader.id}`;
+	process.stdout.write(`  Loading detail page...`);
+	// Temporarily disable rAF override for the SvelteKit page
+	await page.evaluateOnNewDocument(() => { window.__skipRAFOverride = true; });
+	await page.goto(detailUrl, { waitUntil: 'networkidle2', timeout: 15000 });
+	await new Promise(r => setTimeout(r, 2000)); // let iframe shader warm up
+	process.stdout.write(' done\n');
+
+	// Apply default color scheme on the detail page
+	const defaultScheme = COLOR_SCHEMES.find(s => s.id === shader.defaultScheme) || COLOR_SCHEMES[0];
+	if (defaultScheme.id !== 'amber') {
+		// Click the color scheme button
+		await page.evaluate((schemeId) => {
+			const btns = document.querySelectorAll('.ctrl-btn');
+			for (const btn of btns) {
+				if (btn.textContent.trim().toLowerCase().includes(schemeId) ||
+					btn.querySelector(`[style*="${schemeId}"]`)) {
+					btn.click();
+					return;
+				}
+			}
+			// Fallback: find by scheme name in title attribute
+			for (const btn of btns) {
+				if (btn.title && btn.title.toLowerCase() === schemeId) {
+					btn.click();
+					return;
+				}
+			}
+		}, defaultScheme.id);
+		await new Promise(r => setTimeout(r, 500));
 	}
-	for (let i = 0; i < warmupFrames; i++) {
-		await page.evaluate((dt) => {
-			if (window.__captureAdvanceFrame) window.__captureAdvanceFrame(dt);
-		}, dt);
-	}
-	if (warmupFrames > 0) process.stdout.write(' done\n');
 
 	// Spawn ffmpeg
 	const ffmpegArgs = [
@@ -819,6 +827,125 @@ async function recordShader(page, baseUrl, shader, options) {
 		const progress = sceneProgress(scene, frame);
 
 		// --- Apply scene-specific actions ---
+
+		// ── Detail page scene: capture in real-time (no rAF override) ──
+		if (scene.name === 'detailpage') {
+			// Real-time capture of the SvelteKit detail page
+			await new Promise(r => setTimeout(r, dt));
+
+			// Force a repaint
+			await page.evaluate(() => new Promise(r => setTimeout(r, 0)));
+
+			const screenshot = await page.screenshot({ type: 'png', fullPage: false, omitBackground: false });
+			const canWrite = ffmpeg.stdin.write(screenshot);
+			if (!canWrite) await new Promise(resolve => ffmpeg.stdin.once('drain', resolve));
+
+			// Progress
+			const percent = Math.floor((frame / totalFrames) * 100);
+			if (percent !== lastPercent && percent % 5 === 0) {
+				const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+				const framesPerSec = (frame / (Date.now() - startTime) * 1000).toFixed(1);
+				process.stdout.write(`  Recording: ${percent}% (frame ${frame}/${totalFrames}, ${framesPerSec} fps, ${elapsed}s elapsed)\r`);
+				lastPercent = percent;
+			}
+			continue;
+		}
+
+		// ── Zoom scene: animate preview area to fullscreen ──
+		if (scene.name === 'zoom') {
+			const zoomProgress = easeInOut(sceneProgress(scene, frame));
+
+			await page.evaluate((p) => {
+				const preview = document.querySelector('.preview-area');
+				const sidebar = document.querySelector('.sidebar');
+				const header = document.querySelector('header');
+				const nav = document.querySelector('nav');
+				const backLink = document.querySelector('.back-link, a[href*="Gallery"]');
+
+				if (preview) {
+					// Get preview rect to compute transform origin
+					const rect = preview.getBoundingClientRect();
+					const vw = window.innerWidth;
+					const vh = window.innerHeight;
+
+					// Scale to fill viewport
+					const scaleX = vw / rect.width;
+					const scaleY = vh / rect.height;
+					const scale = Math.max(scaleX, scaleY);
+					const targetScale = 1 + (scale - 1) * p;
+
+					// Translate to center
+					const cx = rect.left + rect.width / 2;
+					const cy = rect.top + rect.height / 2;
+					const tx = (vw / 2 - cx) * p;
+					const ty = (vh / 2 - cy) * p;
+
+					preview.style.transform = `translate(${tx}px, ${ty}px) scale(${targetScale})`;
+					preview.style.transformOrigin = 'center center';
+					preview.style.zIndex = '10000';
+					preview.style.position = 'relative';
+					preview.style.borderRadius = (8 * (1 - p)) + 'px';
+				}
+
+				// Fade out chrome
+				const fadeOut = 1 - p;
+				if (sidebar) sidebar.style.opacity = String(fadeOut);
+				if (header) header.style.opacity = String(fadeOut);
+				if (nav) nav.style.opacity = String(fadeOut);
+				if (backLink) backLink.style.opacity = String(fadeOut);
+			}, zoomProgress);
+
+			await new Promise(r => setTimeout(r, dt));
+			await page.evaluate(() => new Promise(r => setTimeout(r, 0)));
+
+			const screenshot = await page.screenshot({ type: 'png', fullPage: false, omitBackground: false });
+			const canWrite = ffmpeg.stdin.write(screenshot);
+			if (!canWrite) await new Promise(resolve => ffmpeg.stdin.once('drain', resolve));
+
+			const percent = Math.floor((frame / totalFrames) * 100);
+			if (percent !== lastPercent && percent % 5 === 0) {
+				const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+				const framesPerSec = (frame / (Date.now() - startTime) * 1000).toFixed(1);
+				process.stdout.write(`  Recording: ${percent}% (frame ${frame}/${totalFrames}, ${framesPerSec} fps, ${elapsed}s elapsed)\r`);
+				lastPercent = percent;
+			}
+
+			// At the end of zoom, navigate to standalone shader for deterministic capture
+			if (frame === scene.startFrame + scene.durationFrames - 1) {
+				process.stdout.write('\n  Switching to fullscreen shader...');
+				// Re-enable rAF override for the shader page
+				await page.evaluateOnNewDocument(() => { delete window.__skipRAFOverride; });
+				const shaderUrl = `${baseUrl}/${shader.file}`;
+				await page.goto(shaderUrl, { waitUntil: 'domcontentloaded' });
+				await new Promise(r => setTimeout(r, 500));
+
+				// Hide label
+				await page.evaluate(() => {
+					const label = document.querySelector('.label');
+					if (label) label.style.display = 'none';
+				});
+
+				// Apply default color scheme filter
+				if (defaultScheme.filter !== 'none') {
+					await page.evaluate((f) => {
+						const c = document.getElementById('canvas');
+						if (c) c.style.filter = f;
+					}, defaultScheme.filter);
+				}
+
+				// Warmup the standalone shader
+				const warmupFrames = options.warmup;
+				for (let i = 0; i < warmupFrames; i++) {
+					await page.evaluate((d) => {
+						if (window.__captureAdvanceFrame) window.__captureAdvanceFrame(d);
+					}, dt);
+				}
+
+				process.stdout.write(' done\n');
+			}
+
+			continue;
+		}
 
 		// ── Outro: navigate to dedicated outro page ──
 		if (scene.name === 'outro' && !outroLoaded) {
@@ -1037,6 +1164,7 @@ function parseArgs() {
 		format: 'landscape',
 		fps: 60,
 		warmup: DEFAULT_WARMUP_FRAMES,
+		devUrl: 'http://localhost:5174',
 		output: join(ROOT, 'videos'),
 		captions: true
 	};
@@ -1048,6 +1176,8 @@ function parseArgs() {
 			opts.all = true;
 		} else if (arg.startsWith('--warmup=')) {
 			opts.warmup = parseInt(arg.split('=')[1], 10);
+		} else if (arg.startsWith('--dev-url=')) {
+			opts.devUrl = arg.split('=')[1];
 		} else if (arg.startsWith('--format=')) {
 			opts.format = arg.split('=')[1];
 		} else if (arg.startsWith('--fps=')) {
@@ -1178,7 +1308,7 @@ async function main() {
 	for (const shader of allShaders) {
 		console.log(`[${++done}/${allShaders.length}] ${shader.id} (${shader.title})`);
 		try {
-			const outPath = await recordShader(page, baseUrl, shader, {
+			const outPath = await recordShader(page, baseUrl, opts.devUrl, shader, {
 				format: opts.format,
 				fps: opts.fps,
 				warmup: opts.warmup,
