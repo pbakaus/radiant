@@ -858,19 +858,17 @@
 	</div>
 {/if}
 
-<div class="morph-ui">
-	<nav class="attribution">
-		<a href="https://github.com/boxabirds/radiant" target="_blank" rel="noopener">By Julian Harris</a>
-		<span class="sep">|</span>
-		<a href="https://radiant-shaders.com" target="_blank" rel="noopener">Based on Radiant</a>
-	</nav>
-	<div class="key-guide">
-		<span><kbd>f</kbd> fade</span>
-		<span class="sep">·</span>
-		<span><kbd>space</kbd> sound</span>
-		<span class="sep">·</span>
-		<span><kbd>-</kbd><kbd>=</kbd> volume</span>
-	</div>
+<nav class="attribution">
+	<a href="https://github.com/boxabirds/radiant" target="_blank" rel="noopener">By Julian Harris</a>
+	<span class="sep">|</span>
+	<a href="https://radiant-shaders.com" target="_blank" rel="noopener">Based on Radiant</a>
+</nav>
+<div class="key-guide">
+	<span><kbd>f</kbd> fade</span>
+	<span class="sep">·</span>
+	<span><kbd>space</kbd> sound</span>
+	<span class="sep">·</span>
+	<span><kbd>-</kbd><kbd>=</kbd> volume</span>
 </div>
 
 <style>
@@ -901,13 +899,6 @@
 	.fallback .subtle { font-size: 13px; color: rgba(232, 224, 216, 0.4); }
 	.fallback a { color: #c8956c; text-decoration: underline; margin-top: 8px; }
 
-	.morph-ui {
-		position: fixed;
-		inset: 0;
-		z-index: 10000;
-		pointer-events: none;
-	}
-
 	.attribution {
 		position: fixed;
 		top: 20px;
@@ -922,6 +913,7 @@
 		background: rgba(10, 10, 10, 0.4);
 		padding: 6px 12px;
 		border-radius: 20px;
+		z-index: 10003;
 		pointer-events: auto;
 		opacity: 1;
 		transition: opacity 0.4s ease;
@@ -956,6 +948,7 @@
 		background: rgba(10, 10, 10, 0.4);
 		padding: 5px 14px;
 		border-radius: 20px;
+		z-index: 10003;
 		white-space: nowrap;
 		opacity: 1;
 		transition: opacity 0.4s ease;
