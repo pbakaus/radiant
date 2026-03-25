@@ -2,6 +2,9 @@
 	<a href="/" class="logo">Radiant</a>
 	<div class="links">
 		<a href="/gallery">Gallery</a>
+		<a href="/zoom">Zoom</a>
+		<a href="/morph">Morph</a>
+		<a href="/morph-webgpu">Morph GPU</a>
 		<a href="/#how-to-use">How to Use</a>
 		<a href="https://github.com/pbakaus/radiant" target="_blank" rel="noopener noreferrer">GitHub</a>
 	</div>
