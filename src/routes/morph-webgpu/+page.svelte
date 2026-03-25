@@ -31,8 +31,15 @@
 	let fpsText = $state('');
 	let dominantPreset = $state('');
 	let faded = $state(false); // true = fully faded to black/silent
+	let showUI = $state(true); // attribution + key guide visibility
+	let showSoundHint = $state(false); // mobile: "double tap for sound"
+	let soundFeedback = $state(''); // "Sound on" / "Sound off"
+	let soundFeedbackVisible = $state(false);
 
 	const FADE_DURATION_S = 10;
+	const MOBILE_CREDITS_MS = 15_000;
+	const SOUND_HINT_MS = 15 * 60 * 1000; // 15 minutes
+	const SOUND_FEEDBACK_MS = 5_000;
 
 	// Grid-free drift using incommensurate sine sums.
 	// No cell boundaries, infinitely smooth derivatives, zero discontinuities.
@@ -204,7 +211,7 @@
 				prox[5] = drift(timeSec, 0.020, 17);
 				prox[6] = drift(timeSec, 0.039, 19);
 				prox[7] = drift(timeSec, 0.033, 23);
-				prox[8] = drift(timeSec, 0.015, 29);
+				prox[8] = drift(timeSec, 0.025, 29);
 				prox[9] = drift(timeSec, 0.035, 31);
 				prox[2] = drift(timeSec, 0.025, 3);
 				prox[3] = drift(timeSec, 0.042, 5);
@@ -229,6 +236,11 @@
 
 				// Voronoi always off
 				buf[30] = 0; buf[31] = 4;
+
+				// Suppress kaleido at startup — ramp 0→1 over first 60 real seconds
+				// timeSec = elapsed_ms / 4000, so 60s real = timeSec 15
+				const ke = Math.min(1, timeSec / 15);
+				buf[56] *= ke * ke * (3 - 2 * ke); // smoothstep
 
 				buf[27] = 0.4;
 				buf[28] = 0.012;
@@ -800,24 +812,73 @@
 		}
 		// ── End rain overlay ─────────────────────────────────────────────────
 
-		// ── Cursor auto-hide after 3s of inactivity ─────────────────────────
-		const CURSOR_HIDE_MS = 3000;
+		// ── Mobile vs desktop UI behaviour ──────────────────────────────────
+		const isMobile = 'ontouchstart' in window;
 		let cursorTimer: ReturnType<typeof setTimeout>;
-		function resetCursorTimer() {
-			document.body.classList.remove('cursor-hidden');
-			clearTimeout(cursorTimer);
-			cursorTimer = setTimeout(() => document.body.classList.add('cursor-hidden'), CURSOR_HIDE_MS);
+		let soundFeedbackTimer: ReturnType<typeof setTimeout>;
+		let cleanupCursor = () => {};
+
+		if (isMobile) {
+			// Credits visible for 15s then fade
+			setTimeout(() => { showUI = false; }, MOBILE_CREDITS_MS);
+			// Sound hint appears immediately, fades after 15 min
+			showSoundHint = true;
+			setTimeout(() => { showSoundHint = false; }, SOUND_HINT_MS);
+
+			// Double-tap to toggle audio
+			let lastTap = 0;
+			async function handleTouchEnd() {
+				const now = Date.now();
+				if (now - lastTap < 350) {
+					lastTap = 0;
+					showSoundHint = false;
+					if (!audio && !audioLoading) {
+						audioLoading = true;
+						try {
+							audio = await MorphAudio.create(AUDIO_URL);
+							await audio.start();
+							soundFeedback = 'Sound on';
+						} catch { audio = null; soundFeedback = 'Sound off'; }
+						audioLoading = false;
+					} else if (audio) {
+						soundFeedback = audio.toggle() ? 'Sound on' : 'Sound off';
+					}
+					clearTimeout(soundFeedbackTimer);
+					soundFeedbackVisible = true;
+					soundFeedbackTimer = setTimeout(() => { soundFeedbackVisible = false; }, SOUND_FEEDBACK_MS);
+				} else {
+					lastTap = now;
+				}
+			}
+			window.addEventListener('touchend', handleTouchEnd);
+			cleanupCursor = () => window.removeEventListener('touchend', handleTouchEnd);
+		} else {
+			// Desktop: hide cursor + UI after 3s inactivity
+			const CURSOR_HIDE_MS = 3000;
+			function resetCursorTimer() {
+				showUI = true;
+				document.body.classList.remove('cursor-hidden');
+				clearTimeout(cursorTimer);
+				cursorTimer = setTimeout(() => {
+					showUI = false;
+					document.body.classList.add('cursor-hidden');
+				}, CURSOR_HIDE_MS);
+			}
+			window.addEventListener('mousemove', resetCursorTimer);
+			resetCursorTimer();
+			cleanupCursor = () => {
+				window.removeEventListener('mousemove', resetCursorTimer);
+				clearTimeout(cursorTimer);
+				document.body.classList.remove('cursor-hidden');
+			};
 		}
-		window.addEventListener('mousemove', resetCursorTimer);
-		resetCursorTimer(); // start the clock immediately on mount
 
 		return () => {
 			cancelAnimationFrame(raf);
 			cancelAnimationFrame(rainRaf);
 			window.removeEventListener('keydown', handleKey);
-			window.removeEventListener('mousemove', resetCursorTimer);
-			clearTimeout(cursorTimer);
-			document.body.classList.remove('cursor-hidden');
+			cleanupCursor();
+			clearTimeout(soundFeedbackTimer);
 			if (onResize) window.removeEventListener('resize', onResize);
 			audio?.destroy();
 			engine?.destroy();
@@ -858,18 +919,48 @@
 	</div>
 {/if}
 
-<div class="attribution">
+<div class="attribution" class:ui-hidden={!showUI}>
 	<a href="https://github.com/boxabirds/radiant" target="_blank" rel="noopener">By Julian Harris</a>
 	<span class="sep">|</span>
 	<a href="https://radiant-shaders.com" target="_blank" rel="noopener">Based on Radiant</a>
 </div>
-<div class="key-guide">
+<div class="key-guide" class:ui-hidden={!showUI}>
 	<span><kbd>f</kbd> fade</span>
 	<span class="sep">·</span>
 	<span><kbd>space</kbd> sound</span>
 	<span class="sep">·</span>
 	<span><kbd>-</kbd><kbd>=</kbd> volume</span>
 </div>
+
+{#if showSoundHint}
+	<div class="sound-hint">
+		<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+			<path d="M11 5L6 9H2v6h4l5 4V5z"/>
+			<path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+			<path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+		</svg>
+		Double tap for sound
+	</div>
+{/if}
+
+{#if soundFeedbackVisible}
+	<div class="sound-feedback">
+		{#if soundFeedback === 'Sound on'}
+			<svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
+				<path d="M11 5L6 9H2v6h4l5 4V5z"/>
+				<path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+				<path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+			</svg>
+		{:else}
+			<svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
+				<path d="M11 5L6 9H2v6h4l5 4V5z"/>
+				<line x1="23" y1="9" x2="17" y2="15"/>
+				<line x1="17" y1="9" x2="23" y2="15"/>
+			</svg>
+		{/if}
+		<span>{soundFeedback}</span>
+	</div>
+{/if}
 
 <style>
 	.gl-canvas {
@@ -919,7 +1010,7 @@
 		transition: opacity 0.4s ease;
 	}
 
-	:global(body.cursor-hidden) .attribution {
+	.attribution.ui-hidden {
 		opacity: 0;
 		pointer-events: none;
 	}
@@ -954,7 +1045,7 @@
 		transition: opacity 0.4s ease;
 	}
 
-	:global(body.cursor-hidden) .key-guide {
+	.key-guide.ui-hidden {
 		opacity: 0;
 	}
 
@@ -968,6 +1059,59 @@
 	}
 
 	.key-guide .sep { opacity: 0.3; }
+
+	.sound-hint {
+		position: fixed;
+		top: 50%;
+		left: 50%;
+		transform: translate(-50%, -50%);
+		z-index: 10003;
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		font-size: 14px;
+		font-weight: 300;
+		letter-spacing: 0.05em;
+		color: rgba(232, 224, 216, 0.6);
+		background: rgba(10, 10, 10, 0.5);
+		padding: 12px 20px;
+		border-radius: 30px;
+		pointer-events: none;
+		animation: hint-pulse 3s ease-in-out infinite;
+	}
+
+	@keyframes hint-pulse {
+		0%, 100% { opacity: 0.5; }
+		50% { opacity: 1; }
+	}
+
+	.sound-feedback {
+		position: fixed;
+		top: 50%;
+		left: 50%;
+		transform: translate(-50%, -50%);
+		z-index: 10004;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 12px;
+		color: rgba(232, 224, 216, 0.9);
+		pointer-events: none;
+		animation: feedback-fade 5s ease forwards;
+	}
+
+	.sound-feedback span {
+		font-size: 18px;
+		font-weight: 300;
+		letter-spacing: 0.08em;
+	}
+
+	@keyframes feedback-fade {
+		0% { opacity: 0; transform: translate(-50%, -50%) scale(0.9); }
+		15% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+		70% { opacity: 1; }
+		100% { opacity: 0; }
+	}
 
 	.rain-canvas {
 		position: fixed;

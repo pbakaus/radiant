@@ -19,7 +19,7 @@ const CUTOFF_MIN_HZ = 200;
 const CUTOFF_MAX_HZ = 20000;
 const CUTOFF_RATIO = CUTOFF_MAX_HZ / CUTOFF_MIN_HZ; // 100
 const FILTER_Q = 2.0;
-const LFO_RATE_HZ = 0.08;
+const LFO_RATE_HZ = 0.04; // half speed — 25s full cycle
 const LFO_DEPTH_OCTAVES = 1.0;
 const TWO_PI = Math.PI * 2;
 const SMOOTHING_S = 0.016; // ~1 frame exponential smoothing
@@ -126,9 +126,12 @@ export class MorphAudio {
 		// Exponential mapping: sharpness 0→200Hz, 1→20000Hz
 		const baseCutoff = CUTOFF_MIN_HZ * Math.pow(CUTOFF_RATIO, sharpness);
 
-		// LFO: slow sine modulation ±1 octave
+		// LFO: square-wave-like shape (fundamental + 3rd + 5th harmonics).
+		// Spends ~half the cycle near +1 (20kHz, unfiltered) and half near -1 (dark).
+		// tanh soft-clips the Gibbs overshoot to keep within ±1.
 		const lfoPhase = performance.now() * 0.001 * LFO_RATE_HZ * TWO_PI;
-		const lfoValue = Math.sin(lfoPhase);
+		const lfoRaw = Math.sin(lfoPhase) + Math.sin(3 * lfoPhase) / 3 + Math.sin(5 * lfoPhase) / 5;
+		const lfoValue = Math.tanh(lfoRaw * 1.8);
 		const cutoff = baseCutoff * Math.pow(2, lfoValue * LFO_DEPTH_OCTAVES);
 
 		// Apply to both filter stages with exponential smoothing
