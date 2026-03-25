@@ -576,32 +576,163 @@
 				drops = []; dropletsCounter = 0; rdLastRender = null;
 			}
 
+			// ── WebGL refraction renderer ──
+			// Refracts the morph canvas through the drop normal map.
+			// Intermediate 2D snap canvas reads WebGPU content each frame.
+			const snapCanvas = mkCanvas(2, 2); // resized on first frame
+			const snapCtx = snapCanvas.getContext('2d')!;
+
+			const gl = rc.getContext('webgl', { alpha: true, antialias: false, premultipliedAlpha: false })!;
+
+			const vertSrc = `
+				attribute vec2 a_pos;
+				void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }
+			`;
+			const fragSrc = `
+				precision mediump float;
+				uniform sampler2D u_waterMap;
+				uniform sampler2D u_textureFg;
+				uniform sampler2D u_textureBg;
+				uniform vec2  u_resolution;
+				uniform float u_textureRatio;
+				uniform float u_minRefraction;
+				uniform float u_refractionDelta;
+				uniform float u_brightness;
+				uniform float u_alphaMultiply;
+				uniform float u_alphaSubtract;
+
+				vec2 texCoord() {
+					return vec2(gl_FragCoord.x, u_resolution.y - gl_FragCoord.y) / u_resolution;
+				}
+				vec2 scaledTC() {
+					float ratio = u_resolution.x / u_resolution.y;
+					vec2 scale = vec2(1.0); vec2 offset = vec2(0.0);
+					float d = ratio - u_textureRatio;
+					if (d >= 0.0) { scale.y = 1.0 + d; offset.y = d / 2.0; }
+					else          { scale.x = 1.0 - d; offset.x = -d / 2.0; }
+					return (texCoord() + offset) / scale;
+				}
+				vec4 blend(vec4 bg, vec4 fg) {
+					float ia = 1.0 - fg.a;
+					float a  = fg.a + bg.a * ia;
+					if (a == 0.0) return vec4(0.0);
+					return vec4((fg.rgb * fg.a + bg.rgb * bg.a * ia) / a, a);
+				}
+				void main() {
+					vec2 tc  = texCoord();
+					vec4 cur = texture2D(u_waterMap, tc);
+					float d  = cur.b;
+					float a  = clamp(cur.a * u_alphaMultiply - u_alphaSubtract, 0.0, 1.0);
+					if (a <= 0.0) { gl_FragColor = vec4(0.0); return; }
+					vec2  refr = (vec2(cur.g, cur.r) - 0.5) * 2.0;
+					vec2  pixel = 1.0 / u_resolution;
+					vec2  refrPos = scaledTC() + pixel * refr * (u_minRefraction + d * u_refractionDelta);
+					vec4  tex = texture2D(u_textureFg, refrPos);
+					gl_FragColor = vec4(tex.rgb * u_brightness, a);
+				}
+			`;
+
+			function compileShader(type: number, src: string): WebGLShader {
+				const s = gl.createShader(type)!;
+				gl.shaderSource(s, src); gl.compileShader(s); return s;
+			}
+			const prog = gl.createProgram()!;
+			gl.attachShader(prog, compileShader(gl.VERTEX_SHADER,   vertSrc));
+			gl.attachShader(prog, compileShader(gl.FRAGMENT_SHADER, fragSrc));
+			gl.linkProgram(prog); gl.useProgram(prog);
+
+			const quadBuf = gl.createBuffer()!;
+			gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+			gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, -1,1, 1,-1, 1,1]), gl.STATIC_DRAW);
+			const aPos = gl.getAttribLocation(prog, 'a_pos');
+			gl.enableVertexAttribArray(aPos);
+			gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+			const uLoc = {
+				resolution:      gl.getUniformLocation(prog, 'u_resolution'),
+				textureRatio:    gl.getUniformLocation(prog, 'u_textureRatio'),
+				minRefraction:   gl.getUniformLocation(prog, 'u_minRefraction'),
+				refractionDelta: gl.getUniformLocation(prog, 'u_refractionDelta'),
+				brightness:      gl.getUniformLocation(prog, 'u_brightness'),
+				alphaMultiply:   gl.getUniformLocation(prog, 'u_alphaMultiply'),
+				alphaSubtract:   gl.getUniformLocation(prog, 'u_alphaSubtract'),
+				waterMap:        gl.getUniformLocation(prog, 'u_waterMap'),
+				textureFg:       gl.getUniformLocation(prog, 'u_textureFg'),
+				textureBg:       gl.getUniformLocation(prog, 'u_textureBg'),
+			};
+
+			function initTex(unit: number, source?: TexImageSource): WebGLTexture {
+				const tex = gl.createTexture()!;
+				gl.activeTexture(gl.TEXTURE0 + unit);
+				gl.bindTexture(gl.TEXTURE_2D, tex);
+				gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+				gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+				gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+				gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+				if (source) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+				return tex;
+			}
+
+			const waterTex = initTex(0);    // drop normal map — updated each frame
+			const fgTex    = initTex(1);    // morph canvas (sharp, through drops)
+			const bgTex    = initTex(2);    // morph canvas (shows between drops)
+
 			// ── Resize + init ──
-			const rcCtx = rc.getContext('2d')!;
 			function resizeRain() {
-				rc.width = innerWidth;
+				rc.width  = innerWidth;
 				rc.height = innerHeight;
+				gl.viewport(0, 0, rc.width, rc.height);
+				snapCanvas.width  = rc.width;
+				snapCanvas.height = rc.height;
 				initRd(rc.width, rc.height, 1);
 			}
 			resizeRain();
 			window.addEventListener('resize', resizeRain);
 
-			// ── Render loop: update physics → draw rdCanvas onto overlay ──
+			// ── Render loop ──
 			function tickRain() {
 				rainRaf = requestAnimationFrame(tickRain);
-				if (document.hidden) return;
+				if (document.hidden || !canvas) return;
 
+				// Physics tick
 				rdCtx.clearRect(0, 0, rdW, rdH);
 				const now = Date.now();
 				if (rdLastRender == null) rdLastRender = now;
-				let ts = (now - rdLastRender) / (1000 / 60);
-				if (ts > 1.1) ts = 1.1;
-				ts *= opts.globalTimeScale;
+				let ts = Math.min((now - rdLastRender) / (1000 / 60), 1.1) * opts.globalTimeScale;
 				rdLastRender = now;
 				updateDrops(ts);
 
-				rcCtx.clearRect(0, 0, rc.width, rc.height);
-				rcCtx.drawImage(rdCanvas, 0, 0);
+				// Snap morph canvas into 2D intermediate (WebGPU → readable source)
+				snapCtx.drawImage(canvas, 0, 0, rc.width, rc.height);
+
+				// Upload water map (drop normal map)
+				gl.activeTexture(gl.TEXTURE0);
+				gl.bindTexture(gl.TEXTURE_2D, waterTex);
+				gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, rdCanvas);
+
+				// Upload morph snapshot as both fg and bg textures
+				gl.activeTexture(gl.TEXTURE1);
+				gl.bindTexture(gl.TEXTURE_2D, fgTex);
+				gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, snapCanvas);
+				gl.activeTexture(gl.TEXTURE2);
+				gl.bindTexture(gl.TEXTURE_2D, bgTex);
+				gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, snapCanvas);
+
+				// Uniforms
+				gl.useProgram(prog);
+				gl.uniform2f(uLoc.resolution,      rc.width, rc.height);
+				gl.uniform1f(uLoc.textureRatio,     rc.width / rc.height);
+				gl.uniform1f(uLoc.minRefraction,    256.0);
+				gl.uniform1f(uLoc.refractionDelta,  256.0);
+				gl.uniform1f(uLoc.brightness,       1.04);
+				gl.uniform1f(uLoc.alphaMultiply,    6.0);
+				gl.uniform1f(uLoc.alphaSubtract,    3.0);
+				gl.uniform1i(uLoc.waterMap,   0);
+				gl.uniform1i(uLoc.textureFg,  1);
+				gl.uniform1i(uLoc.textureBg,  2);
+
+				gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+				gl.drawArrays(gl.TRIANGLES, 0, 6);
 			}
 			rainRaf = requestAnimationFrame(tickRain);
 		}
