@@ -623,7 +623,8 @@
 			// ── WebGL refraction renderer ──
 			// Refracts morphSnap (written by morph's own rAF) through the drop normal map.
 
-			const gl = rc.getContext('webgl', { alpha: true, antialias: false, premultipliedAlpha: false })!;
+			// Opaque: WebGL owns the full frame — blurred bg everywhere, sharp refracted fg through drops.
+			const gl = rc.getContext('webgl', { alpha: false, antialias: false })!;
 
 			const vertSrc = `
 				attribute vec2 a_pos;
@@ -633,6 +634,7 @@
 				precision mediump float;
 				uniform sampler2D u_waterMap;
 				uniform sampler2D u_textureFg;
+				uniform sampler2D u_textureBg;
 				uniform vec2  u_resolution;
 				uniform float u_minRefraction;
 				uniform float u_refractionDelta;
@@ -640,20 +642,31 @@
 				uniform float u_alphaMultiply;
 				uniform float u_alphaSubtract;
 
-				vec2 texCoord() {
+				vec2 tc() {
 					return vec2(gl_FragCoord.x, u_resolution.y - gl_FragCoord.y) / u_resolution;
 				}
 				void main() {
-					vec2 tc  = texCoord();
-					vec4 cur = texture2D(u_waterMap, tc);
-					float d  = cur.b;
-					float a  = clamp(cur.a * u_alphaMultiply - u_alphaSubtract, 0.0, 1.0);
-					if (a <= 0.0) { gl_FragColor = vec4(0.0); return; }
+					vec2  uv   = tc();
+					vec2  px   = 1.0 / u_resolution;
+					vec4  cur  = texture2D(u_waterMap, uv);
+					float d    = cur.b;
+					float a    = clamp(cur.a * u_alphaMultiply - u_alphaSubtract, 0.0, 1.0);
+					vec4  bg   = texture2D(u_textureBg, uv);
+
+					if (a <= 0.0) { gl_FragColor = bg; return; }
+
+					// Drop shadow: sample water map offset downward, darken bg at rim
+					float shadowA = clamp(texture2D(u_waterMap, uv + vec2(0.0, -d * 6.0 * px.y)).a
+					                      * u_alphaMultiply - (u_alphaSubtract + 0.5), 0.0, 1.0) * 0.35;
+					bg = mix(bg, vec4(0.0, 0.0, 0.0, 1.0), shadowA);
+
+					// Refracted foreground through drop lens
 					vec2  refr    = (vec2(cur.g, cur.r) - 0.5) * 2.0;
-					vec2  pixel   = 1.0 / u_resolution;
-					vec2  refrPos = tc + pixel * refr * (u_minRefraction + d * u_refractionDelta);
-					vec4  tex     = texture2D(u_textureFg, refrPos);
-					gl_FragColor  = vec4(tex.rgb * u_brightness, a);
+					vec2  refrPos = uv + px * refr * (u_minRefraction + d * u_refractionDelta);
+					vec4  fg      = vec4(texture2D(u_textureFg, refrPos).rgb * u_brightness, a);
+
+					float ia = 1.0 - fg.a;
+					gl_FragColor = vec4(fg.rgb * fg.a + bg.rgb * ia, 1.0);
 				}
 			`;
 
@@ -675,7 +688,6 @@
 
 			const uLoc = {
 				resolution:      gl.getUniformLocation(prog, 'u_resolution'),
-				textureRatio:    gl.getUniformLocation(prog, 'u_textureRatio'),
 				minRefraction:   gl.getUniformLocation(prog, 'u_minRefraction'),
 				refractionDelta: gl.getUniformLocation(prog, 'u_refractionDelta'),
 				brightness:      gl.getUniformLocation(prog, 'u_brightness'),
@@ -683,6 +695,7 @@
 				alphaSubtract:   gl.getUniformLocation(prog, 'u_alphaSubtract'),
 				waterMap:        gl.getUniformLocation(prog, 'u_waterMap'),
 				textureFg:       gl.getUniformLocation(prog, 'u_textureFg'),
+				textureBg:       gl.getUniformLocation(prog, 'u_textureBg'),
 			};
 
 			function initTex(unit: number, source?: TexImageSource): WebGLTexture {
@@ -697,14 +710,21 @@
 				return tex;
 			}
 
-			const waterTex = initTex(0);    // drop normal map — updated each frame
-			const fgTex    = initTex(1);    // morph canvas (sampled through drop lens)
+			const waterTex = initTex(0);  // drop normal map — updated each frame
+			const fgTex    = initTex(1);  // full-res morphSnap — refracted through drop lens
+			const bgTex    = initTex(2);  // 1/8-scale morphSnap — blurred bg between drops
+
+			// Small canvas for cheap blur: drawImage at 1/8 scale, bilinear upscale = free gaussian
+			const blurCanvas = mkCanvas(2, 2);
+			const blurCtx    = blurCanvas.getContext('2d')!;
 
 			// ── Resize + init ──
 			function resizeRain() {
 				rc.width  = innerWidth;
 				rc.height = innerHeight;
 				gl.viewport(0, 0, rc.width, rc.height);
+				blurCanvas.width  = Math.max(1, Math.floor(rc.width  / 8));
+				blurCanvas.height = Math.max(1, Math.floor(rc.height / 8));
 				initRd(rc.width, rc.height, 1);
 			}
 			resizeRain();
@@ -728,11 +748,18 @@
 				gl.bindTexture(gl.TEXTURE_2D, waterTex);
 				gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, rdCanvas);
 
-				// Upload morph snapshot as fg texture (sampled through drop lens)
-				gl.activeTexture(gl.TEXTURE1);
-				gl.bindTexture(gl.TEXTURE_2D, fgTex);
-				if (morphSnap.width > 1)
+				if (morphSnap.width > 1) {
+					// fg: full-res — sharp through drop lens
+					gl.activeTexture(gl.TEXTURE1);
+					gl.bindTexture(gl.TEXTURE_2D, fgTex);
 					gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, morphSnap);
+
+					// bg: 1/8-scale — blurred, shows between drops (frosted glass feel)
+					blurCtx.drawImage(morphSnap, 0, 0, blurCanvas.width, blurCanvas.height);
+					gl.activeTexture(gl.TEXTURE2);
+					gl.bindTexture(gl.TEXTURE_2D, bgTex);
+					gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, blurCanvas);
+				}
 
 				// Uniforms
 				gl.useProgram(prog);
@@ -742,8 +769,9 @@
 				gl.uniform1f(uLoc.brightness,       1.04);
 				gl.uniform1f(uLoc.alphaMultiply,    6.0);
 				gl.uniform1f(uLoc.alphaSubtract,    3.0);
-				gl.uniform1i(uLoc.waterMap,  0);
-				gl.uniform1i(uLoc.textureFg, 1);
+				gl.uniform1i(uLoc.waterMap,   0);
+				gl.uniform1i(uLoc.textureFg,  1);
+				gl.uniform1i(uLoc.textureBg,  2);
 
 				gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
 				gl.drawArrays(gl.TRIANGLES, 0, 6);
@@ -867,6 +895,10 @@
 		height: 100vh;
 		z-index: 10000;
 		pointer-events: none;
+		/* Opaque — owns the full frame. Morph canvas hidden beneath. */
+	}
+	:global(body:has(.rain-canvas)) .gl-canvas {
+		visibility: hidden;
 	}
 
 	.debug-hud {
