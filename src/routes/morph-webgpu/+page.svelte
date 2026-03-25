@@ -285,101 +285,323 @@
 		window.addEventListener('keydown', handleKey);
 
 		// ── Rain overlay ────────────────────────────────────────────────────────
-		// Self-contained Canvas 2D rain sim. Delete this block + rainCanvas
-		// binding + the <canvas class="rain-canvas"> element to remove it.
+		// Full physics port from static/rain-on-glass.html: drop merging,
+		// collision, trail spawning, micro-droplet clusters. Canvas 2D only
+		// (no WebGL refraction). Delete this block + rainCanvas binding +
+		// <canvas class="rain-canvas"> to remove entirely.
 		let rainRaf = 0;
 		if (rainCanvas) {
 			const rc = rainCanvas;
-			const rctx = rc.getContext('2d')!;
 
-			const DROP_COUNT = 80;
-			const TRAIL_COUNT = 180;
+			// ── Helpers (ported verbatim) ──
+			function rnd(from = 0, to = 1, interp?: (n: number) => number): number {
+				const delta = to - from;
+				const fn = interp ?? ((n: number) => n);
+				return from + fn(Math.random()) * delta;
+			}
+			function chance(c: number): boolean { return Math.random() <= c; }
+			function mkCanvas(w: number, h: number): HTMLCanvasElement {
+				const c = document.createElement('canvas');
+				c.width = w; c.height = h; return c;
+			}
 
-			type Drop = {
-				x: number; y: number; vy: number;
-				w: number; h: number; alpha: number;
-				trail: boolean;
+			// ── Drop shape bitmaps (64×64 alpha mask + glass tint) ──
+			const DROP_SIZE = 64;
+
+			function genDropAlpha(size: number): HTMLCanvasElement {
+				const c = mkCanvas(size, size);
+				const ctx = c.getContext('2d')!;
+				const img = ctx.createImageData(size, size);
+				const cx = size / 2, cy = size / 2;
+				for (let py = 0; py < size; py++) {
+					for (let px = 0; px < size; px++) {
+						let dx = (px - cx) / cx, dy = (py - cy) / cy;
+						dy *= 1.0 + dy * 0.15;
+						const dist = Math.sqrt(dx * dx + dy * dy);
+						if (dist > 1.0) continue;
+						const alpha = Math.max(0, 1.0 - Math.pow(dist / 0.35, 6)) * 255;
+						const i = (py * size + px) * 4;
+						img.data[i] = img.data[i+1] = img.data[i+2] = 255;
+						img.data[i+3] = Math.round(Math.min(255, Math.max(0, alpha)));
+					}
+				}
+				ctx.putImageData(img, 0, 0); return c;
+			}
+
+			// Visible drop bitmap: glass-like teardrop using alpha mask
+			function genDropGfx(alphaTex: HTMLCanvasElement): HTMLCanvasElement {
+				const c = mkCanvas(DROP_SIZE, DROP_SIZE);
+				const ctx = c.getContext('2d')!;
+				// Clip to drop shape
+				ctx.drawImage(alphaTex, 0, 0);
+				ctx.globalCompositeOperation = 'source-in';
+				// Radial glass gradient: bright top edge, dark lower rim
+				const g = ctx.createRadialGradient(
+					DROP_SIZE * 0.38, DROP_SIZE * 0.32, 0,
+					DROP_SIZE * 0.5,  DROP_SIZE * 0.55, DROP_SIZE * 0.5
+				);
+				g.addColorStop(0,   'rgba(255,255,255,0.55)');
+				g.addColorStop(0.3, 'rgba(200,215,255,0.22)');
+				g.addColorStop(0.7, 'rgba(140,165,220,0.10)');
+				g.addColorStop(1,   'rgba(80,100,160,0.25)');
+				ctx.fillStyle = g;
+				ctx.fillRect(0, 0, DROP_SIZE, DROP_SIZE);
+				return c;
+			}
+
+			// Clearing stamp for micro-droplets layer
+			function genClearStamp(): HTMLCanvasElement {
+				const c = mkCanvas(128, 128);
+				const ctx = c.getContext('2d')!;
+				ctx.fillStyle = '#000';
+				ctx.beginPath();
+				ctx.arc(64, 64, 64, 0, Math.PI * 2);
+				ctx.fill();
+				return c;
+			}
+
+			const dropAlphaTex = genDropAlpha(DROP_SIZE);
+			const dropGfx      = genDropGfx(dropAlphaTex);
+			const clearStamp   = genClearStamp();
+
+			// ── Physics options (ported verbatim) ──
+			const opts = {
+				minR: 20, maxR: 50, maxDrops: 900,
+				rainChance: 0.35, rainLimit: 6,
+				dropletsRate: 120, dropletsSize: [2, 5] as [number, number],
+				dropletsCleaningRadiusMultiplier: 0.28,
+				globalTimeScale: 1, trailRate: 1,
+				autoShrink: true, spawnArea: [-0.1, 0.95] as [number, number],
+				trailScaleRange: [0.25, 0.35] as [number, number],
+				collisionRadius: 0.45, collisionRadiusIncrease: 0.0002,
+				dropFallMultiplier: 1, collisionBoostMultiplier: 0.05, collisionBoost: 1,
 			};
 
-			function makeDrop(trail: boolean, w: number, h: number): Drop {
-				const size = trail
-					? 2 + Math.random() * 6
-					: 8 + Math.random() * 20;
+			// ── State ──
+			interface RDrop {
+				x: number; y: number; r: number;
+				spreadX: number; spreadY: number;
+				momentum: number; momentumX: number;
+				lastSpawn: number; nextSpawn: number;
+				parent: RDrop | null; isNew: boolean;
+				killed: boolean; shrink: number;
+			}
+
+			let rdW = 0, rdH = 0, rdScale = 1;
+			let rdCanvas: HTMLCanvasElement, rdCtx: CanvasRenderingContext2D;
+			let dropletsCanvas: HTMLCanvasElement, dropletsCtx: CanvasRenderingContext2D;
+			const dropletsPixelDensity = 1;
+			let dropletsCounter = 0;
+			let drops: RDrop[] = [];
+			let rdLastRender: number | null = null;
+
+			const deltaR = () => opts.maxR - opts.minR;
+			const area   = () => (rdW * rdH) / rdScale;
+			const areaMul = () => Math.sqrt(area() / (1024 * 768));
+
+			function drawRdDrop(ctx: CanvasRenderingContext2D, drop: RDrop) {
+				const { x, y, r, spreadX, spreadY } = drop;
+				const scaleX = 1, scaleY = 1.5;
+				ctx.globalAlpha = 1;
+				ctx.globalCompositeOperation = 'source-over';
+				ctx.drawImage(
+					dropGfx,
+					(x - r * scaleX * (spreadX + 1)) * rdScale,
+					(y - r * scaleY * (spreadY + 1)) * rdScale,
+					(r * 2 * scaleX * (spreadX + 1)) * rdScale,
+					(r * 2 * scaleY * (spreadY + 1)) * rdScale,
+				);
+			}
+
+			function drawDroplet(x: number, y: number, r: number) {
+				drawRdDrop(dropletsCtx, {
+					x: x * dropletsPixelDensity, y: y * dropletsPixelDensity,
+					r: r * dropletsPixelDensity,
+					spreadX: 0, spreadY: 0,
+					momentum: 0, momentumX: 0, lastSpawn: 0, nextSpawn: 0,
+					parent: null, isNew: false, killed: false, shrink: 0,
+				});
+			}
+
+			function clearDroplets(x: number, y: number, r = 30) {
+				dropletsCtx.globalCompositeOperation = 'destination-out';
+				dropletsCtx.drawImage(
+					clearStamp,
+					(x - r) * dropletsPixelDensity * rdScale,
+					(y - r) * dropletsPixelDensity * rdScale,
+					r * 2 * dropletsPixelDensity * rdScale,
+					r * 2 * dropletsPixelDensity * rdScale * 1.5,
+				);
+			}
+
+			function createDrop(o: Partial<RDrop>): RDrop | null {
+				if (drops.length >= opts.maxDrops * areaMul()) return null;
 				return {
-					x: Math.random() * w,
-					y: Math.random() * h,
-					vy: trail ? 40 + Math.random() * 80 : 20 + Math.random() * 50,
-					w: size * 0.55,
-					h: size,
-					alpha: trail ? 0.06 + Math.random() * 0.12 : 0.10 + Math.random() * 0.18,
-					trail,
+					x: 0, y: 0, r: 0, spreadX: 0, spreadY: 0,
+					momentum: 0, momentumX: 0, lastSpawn: 0, nextSpawn: 0,
+					parent: null, isNew: true, killed: false, shrink: 0,
+					...o,
 				};
 			}
 
+			function updateRain(ts: number): RDrop[] {
+				const result: RDrop[] = [];
+				const limit = opts.rainLimit * ts * areaMul();
+				let count = 0;
+				while (chance(opts.rainChance * ts * areaMul()) && count < limit) {
+					count++;
+					const r = rnd(opts.minR, opts.maxR, (n) => Math.pow(n, 3));
+					const d = createDrop({
+						x: rnd(rdW / rdScale), y: rnd((rdH / rdScale) * opts.spawnArea[0], (rdH / rdScale) * opts.spawnArea[1]),
+						r, momentum: 1 + (r - opts.minR) * 0.1 + rnd(2),
+						spreadX: 1.5, spreadY: 1.5,
+					});
+					if (d) result.push(d);
+				}
+				return result;
+			}
+
+			function updateDroplets(ts: number) {
+				dropletsCounter += opts.dropletsRate * ts * areaMul();
+				let total = Math.floor(dropletsCounter);
+				dropletsCounter -= total;
+				while (total > 0) {
+					if (chance(0.8) && total >= 4) {
+						const clusterSize = Math.min(total, 4 + Math.floor(Math.random() * 5));
+						const cx = rnd(rdW / rdScale), cy = rnd(rdH / rdScale);
+						const spread = 4 + Math.random() * 8;
+						for (let ci = 0; ci < clusterSize; ci++) {
+							const angle = Math.random() * Math.PI * 2;
+							drawDroplet(cx + Math.cos(angle) * Math.random() * spread, cy + Math.sin(angle) * Math.random() * spread,
+								rnd(opts.dropletsSize[0], opts.dropletsSize[1], (n) => n * n));
+						}
+						total -= clusterSize;
+					} else {
+						drawDroplet(rnd(rdW / rdScale), rnd(rdH / rdScale),
+							rnd(opts.dropletsSize[0], opts.dropletsSize[1], (n) => n * n));
+						total--;
+					}
+				}
+				rdCtx.drawImage(dropletsCanvas, 0, 0, rdW, rdH);
+			}
+
+			function updateDrops(ts: number) {
+				let newDrops: RDrop[] = [];
+				updateDroplets(ts);
+				newDrops = newDrops.concat(updateRain(ts));
+
+				drops.sort((a, b) => {
+					const va = a.y * (rdW / rdScale) + a.x;
+					const vb = b.y * (rdW / rdScale) + b.x;
+					return va > vb ? 1 : va < vb ? -1 : 0;
+				});
+
+				for (let i = 0; i < drops.length; i++) {
+					const drop = drops[i];
+					if (drop.killed) continue;
+
+					if (chance((drop.r - opts.minR * opts.dropFallMultiplier) * (0.1 / deltaR()) * ts))
+						drop.momentum += rnd((drop.r / opts.maxR) * 4);
+					if (opts.autoShrink && drop.r <= opts.minR && chance(0.05 * ts))
+						drop.shrink += 0.01;
+					drop.r -= drop.shrink * ts;
+					if (drop.r <= 0) { drop.killed = true; continue; }
+
+					// Trail spawning
+					drop.lastSpawn += drop.momentum * ts * opts.trailRate;
+					if (drop.lastSpawn > drop.nextSpawn) {
+						const trail = createDrop({
+							x: drop.x + rnd(-drop.r, drop.r) * 0.1,
+							y: drop.y - drop.r * 0.01,
+							r: drop.r * rnd(opts.trailScaleRange[0], opts.trailScaleRange[1]),
+							spreadY: drop.momentum * 0.1, parent: drop,
+						});
+						if (trail) {
+							newDrops.push(trail);
+							drop.r *= Math.pow(0.97, ts);
+							drop.lastSpawn = 0;
+							drop.nextSpawn = rnd(opts.minR, opts.maxR) - drop.momentum * 2 * opts.trailRate + (opts.maxR - drop.r);
+						}
+					}
+
+					drop.spreadX *= Math.pow(0.4, ts);
+					drop.spreadY *= Math.pow(0.7, ts);
+
+					const moved = drop.momentum > 0;
+					if (moved && !drop.killed) {
+						drop.y += drop.momentum * opts.globalTimeScale;
+						drop.x += drop.momentumX * opts.globalTimeScale;
+						if (drop.y > rdH / rdScale + drop.r) drop.killed = true;
+					}
+
+					// Collision detection + merging
+					if ((moved || drop.isNew) && !drop.killed) {
+						const end = Math.min(i + 70, drops.length);
+						for (let j = i + 1; j < end; j++) {
+							const d2 = drops[j];
+							if (drop === d2 || drop.r <= d2.r || drop.parent === d2 || d2.parent === drop || d2.killed) continue;
+							const dx = d2.x - drop.x, dy = d2.y - drop.y;
+							const dist = Math.sqrt(dx * dx + dy * dy);
+							if (dist < (drop.r + d2.r) * (opts.collisionRadius + drop.momentum * opts.collisionRadiusIncrease * ts)) {
+								const targetR = Math.min(opts.maxR, Math.sqrt((Math.PI * drop.r * drop.r + Math.PI * d2.r * d2.r * 0.8) / Math.PI));
+								drop.r = targetR;
+								drop.momentumX += dx * 0.1;
+								drop.spreadX = drop.spreadY = 0;
+								d2.killed = true;
+								drop.momentum = Math.max(d2.momentum, Math.min(40, drop.momentum + targetR * opts.collisionBoostMultiplier + opts.collisionBoost));
+							}
+						}
+					}
+					drop.isNew = false;
+					drop.momentum -= Math.max(1, opts.minR * 0.5 - drop.momentum) * 0.1 * ts;
+					if (drop.momentum < 0) drop.momentum = 0;
+					drop.momentumX *= Math.pow(0.7, ts);
+
+					if (!drop.killed) {
+						newDrops.push(drop);
+						if (moved && opts.dropletsRate > 0)
+							clearDroplets(drop.x, drop.y, drop.r * opts.dropletsCleaningRadiusMultiplier);
+						drawRdDrop(rdCtx, drop);
+					}
+				}
+				drops = newDrops;
+			}
+
+			function initRd(w: number, h: number, scale: number) {
+				rdW = w; rdH = h; rdScale = scale;
+				rdCanvas = mkCanvas(rdW, rdH);
+				rdCtx = rdCanvas.getContext('2d')!;
+				dropletsCanvas = mkCanvas(rdW * dropletsPixelDensity, rdH * dropletsPixelDensity);
+				dropletsCtx = dropletsCanvas.getContext('2d')!;
+				drops = []; dropletsCounter = 0; rdLastRender = null;
+			}
+
+			// ── Resize + init ──
+			const rcCtx = rc.getContext('2d')!;
 			function resizeRain() {
-				rc.width  = innerWidth;
+				rc.width = innerWidth;
 				rc.height = innerHeight;
+				initRd(rc.width, rc.height, 1);
 			}
 			resizeRain();
 			window.addEventListener('resize', resizeRain);
 
-			const drops: Drop[] = [
-				...Array.from({ length: DROP_COUNT  }, () => makeDrop(false, rc.width, rc.height)),
-				...Array.from({ length: TRAIL_COUNT }, () => makeDrop(true,  rc.width, rc.height)),
-			];
-
-			let lastRainTime = performance.now();
-
-			function drawDrop(ctx: CanvasRenderingContext2D, d: Drop) {
-				ctx.save();
-				ctx.translate(d.x, d.y);
-				// Teardrop: narrow at top, widest ~65% down, pinches again at bottom
-				ctx.beginPath();
-				ctx.moveTo(0, -d.h * 0.5);
-				ctx.bezierCurveTo(
-					 d.w * 0.6, -d.h * 0.2,
-					 d.w,        d.h * 0.35,
-					 0,          d.h * 0.5
-				);
-				ctx.bezierCurveTo(
-					-d.w,        d.h * 0.35,
-					-d.w * 0.6, -d.h * 0.2,
-					 0,         -d.h * 0.5
-				);
-				ctx.closePath();
-
-				const grad = ctx.createLinearGradient(0, -d.h * 0.5, 0, d.h * 0.5);
-				grad.addColorStop(0,   `rgba(255,255,255,${d.alpha * 1.4})`);
-				grad.addColorStop(0.3, `rgba(220,230,255,${d.alpha})`);
-				grad.addColorStop(1,   `rgba(180,200,255,${d.alpha * 0.3})`);
-				ctx.fillStyle = grad;
-				ctx.fill();
-
-				// Specular highlight
-				if (!d.trail) {
-					ctx.beginPath();
-					ctx.ellipse(-d.w * 0.2, -d.h * 0.25, d.w * 0.2, d.h * 0.12, -0.3, 0, Math.PI * 2);
-					ctx.fillStyle = `rgba(255,255,255,${d.alpha * 1.2})`;
-					ctx.fill();
-				}
-				ctx.restore();
-			}
-
-			function tickRain(now: number) {
+			// ── Render loop: update physics → draw rdCanvas onto overlay ──
+			function tickRain() {
 				rainRaf = requestAnimationFrame(tickRain);
-				const dt = Math.min((now - lastRainTime) / 1000, 0.05);
-				lastRainTime = now;
+				if (document.hidden) return;
 
-				rctx.clearRect(0, 0, rc.width, rc.height);
+				rdCtx.clearRect(0, 0, rdW, rdH);
+				const now = Date.now();
+				if (rdLastRender == null) rdLastRender = now;
+				let ts = (now - rdLastRender) / (1000 / 60);
+				if (ts > 1.1) ts = 1.1;
+				ts *= opts.globalTimeScale;
+				rdLastRender = now;
+				updateDrops(ts);
 
-				for (const d of drops) {
-					d.y += d.vy * dt;
-					if (d.y - d.h > rc.height) {
-						Object.assign(d, makeDrop(d.trail, rc.width, rc.height));
-						d.y = -d.h;
-					}
-					drawDrop(rctx, d);
-				}
+				rcCtx.clearRect(0, 0, rc.width, rc.height);
+				rcCtx.drawImage(rdCanvas, 0, 0);
 			}
 			rainRaf = requestAnimationFrame(tickRain);
 		}
