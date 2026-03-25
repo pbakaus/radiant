@@ -59,7 +59,7 @@ struct Uniforms {
   chladni_str: f32,     // 0=off, 1=full chladni pattern
 
   chladni_mode: f32,    // 0-5 selects mode pair (interpolated)
-  _pad1: f32,
+  colour_var_str: f32,  // 0=monotone, 1=full colour patch variation
   _pad2: f32,
   _pad3: f32,
 };
@@ -518,6 +518,14 @@ fn fs(@builtin(position) frag_coord: vec4f) -> @location(0) vec4f {
   // Burn frontier glow
   col += u.color_hot.rgb * burn_edge * burn_gate * 0.8;
   col += u.color_bright.rgb * burn_edge * burn_gate * 0.4;
+
+  // Spatially-varying colour patches: slow-drifting noise fields select hue rotation
+  // and blend strength independently, creating organic islands of colour variation
+  if (u.colour_var_str > 0.01) {
+    let patch_hue = snoise(p * 0.38 + vec2f(t * 0.019, t * 0.013)) * 3.14159;
+    let patch_mask = smoothstep(-0.1, 0.5, snoise(p * 0.28 - vec2f(t * 0.011, t * 0.017)));
+    col = mix(col, hue_rotate(col, patch_hue), patch_mask * u.colour_var_str);
+  }
 
   // Vignette
   let vig = length(p * vec2f(0.85, 1.0));

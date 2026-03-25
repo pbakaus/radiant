@@ -35,6 +35,8 @@ export const U_MOUSE_Y = 7;
 export const U_ZOOM_CENTER_X = 8;
 export const U_ZOOM_CENTER_Y = 9;
 
+export const U_COLOUR_VAR_STR = 61;
+
 // Indices for sharpness-related uniforms (used by audio VCF mapping)
 export const U_FOLD_STR = 19;
 export const U_SPEC_STR = 23;

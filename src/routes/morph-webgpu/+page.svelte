@@ -5,7 +5,8 @@
 	import {
 		UNIFORM_FLOATS,
 		U_TIME, U_ZOOM, U_HUE_SHIFT, U_RES_X, U_RES_Y,
-		U_MOUSE_X, U_MOUSE_Y, U_ZOOM_CENTER_X, U_ZOOM_CENTER_Y
+		U_MOUSE_X, U_MOUSE_Y, U_ZOOM_CENTER_X, U_ZOOM_CENTER_Y,
+		U_COLOUR_VAR_STR
 	} from './presets';
 
 	// All parameters drift continuously via low-frequency noise.
@@ -14,6 +15,8 @@
 	const ZOOM_MIN = 1.0;
 	const ZOOM_MAX = 1.15;
 	const HUE_CYCLE_S = 300;
+	// Colour patch variation: full cycle 20s, positive half = colourful, negative half = monotone
+	const COLOUR_VAR_CYCLE_S = 20;
 
 	const AUDIO_URL = '/audio/the-noble-hunt.mp3';
 
@@ -27,6 +30,9 @@
 	let showDebug = $state(false);
 	let fpsText = $state('');
 	let dominantPreset = $state('');
+	let faded = $state(false); // true = fully faded to black/silent
+
+	const FADE_DURATION_S = 10;
 
 	// Grid-free drift using incommensurate sine sums.
 	// No cell boundaries, infinitely smooth derivatives, zero discontinuities.
@@ -232,6 +238,8 @@
 				// Zoom: sine-based oscillation, no modulo discontinuity
 				buf[U_ZOOM] = 1.0 + (0.5 + 0.5 * Math.sin(timeSec * 0.05)) * 0.3;
 				buf[U_HUE_SHIFT] = (timeSec / HUE_CYCLE_S) * Math.PI * 2;
+				// Colour patch oscillation: silent (monotone) for half the cycle, peaks at ~0.9
+				buf[U_COLOUR_VAR_STR] = Math.max(0, Math.sin((timeSec / COLOUR_VAR_CYCLE_S) * Math.PI * 2)) * 0.9;
 
 				buf[U_RES_X] = cw;
 				buf[U_RES_Y] = ch;
@@ -291,6 +299,13 @@
 				audio?.volumeDown();
 			} else if (e.key === 'd') {
 				showDebug = !showDebug;
+			} else if (e.key === 'f') {
+				faded = !faded;
+				if (faded) {
+					audio?.rampGain(0, FADE_DURATION_S);
+				} else {
+					audio?.rampGain(audio.volume, FADE_DURATION_S);
+				}
 			}
 		}
 		window.addEventListener('keydown', handleKey);
@@ -785,10 +800,24 @@
 		}
 		// ── End rain overlay ─────────────────────────────────────────────────
 
+		// ── Cursor auto-hide after 3s of inactivity ─────────────────────────
+		const CURSOR_HIDE_MS = 3000;
+		let cursorTimer: ReturnType<typeof setTimeout>;
+		function resetCursorTimer() {
+			document.body.classList.remove('cursor-hidden');
+			clearTimeout(cursorTimer);
+			cursorTimer = setTimeout(() => document.body.classList.add('cursor-hidden'), CURSOR_HIDE_MS);
+		}
+		window.addEventListener('mousemove', resetCursorTimer);
+		resetCursorTimer(); // start the clock immediately on mount
+
 		return () => {
 			cancelAnimationFrame(raf);
 			cancelAnimationFrame(rainRaf);
 			window.removeEventListener('keydown', handleKey);
+			window.removeEventListener('mousemove', resetCursorTimer);
+			clearTimeout(cursorTimer);
+			document.body.classList.remove('cursor-hidden');
 			if (onResize) window.removeEventListener('resize', onResize);
 			audio?.destroy();
 			engine?.destroy();
@@ -820,6 +849,7 @@
 
 <canvas class="gl-canvas" bind:this={canvas}></canvas>
 <canvas class="rain-canvas" bind:this={rainCanvas}></canvas>
+<div class="fade-overlay" class:faded></div>
 
 {#if showDebug}
 	<div class="debug-hud">
@@ -904,6 +934,24 @@
 	}
 	:global(body:has(.rain-canvas)) .gl-canvas {
 		visibility: hidden;
+	}
+
+	:global(body.cursor-hidden),
+	:global(body.cursor-hidden *) {
+		cursor: none !important;
+	}
+
+	.fade-overlay {
+		position: fixed;
+		inset: 0;
+		z-index: 10002;
+		background: #000;
+		opacity: 0;
+		pointer-events: none;
+		transition: opacity 10s linear;
+	}
+	.fade-overlay.faded {
+		opacity: 1;
 	}
 
 	.debug-hud {
