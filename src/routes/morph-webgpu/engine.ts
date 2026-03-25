@@ -51,13 +51,17 @@ export class MorphEngine {
 			entries: [{ binding: 0, resource: { buffer: uniformBuffer } }]
 		});
 
+		// FBM_MAX_OCTAVES=3 matches all current presets; passed as an override constant
+		// so the compiler can unroll the loop and eliminate dead iterations.
+		const FBM_MAX_OCTAVES = 3;
 		const pipeline = device.createRenderPipeline({
 			layout: device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout] }),
-			vertex: { module, entryPoint: 'vs' },
+			vertex: { module, entryPoint: 'vs', constants: { FBM_MAX_OCTAVES } },
 			fragment: {
 				module,
 				entryPoint: 'fs',
-				targets: [{ format }]
+				targets: [{ format }],
+				constants: { FBM_MAX_OCTAVES }
 			},
 			primitive: { topology: 'triangle-list' }
 		});

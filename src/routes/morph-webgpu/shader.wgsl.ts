@@ -66,6 +66,10 @@ struct Uniforms {
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 
+// Override constant: lets the driver unroll the FBM loop at pipeline-compile time.
+// All presets use fbm_octaves=3; driver eliminates the dead iterations entirely.
+override FBM_MAX_OCTAVES: i32 = 3;
+
 // ─── Vertex ───
 struct VSOut { @builtin(position) pos: vec4f };
 
@@ -121,7 +125,7 @@ fn fbm(p_in: vec2f, t: f32) -> f32 {
   var val = 0.0;
   var amp = 0.5;
   let rot = mat2x2f(0.8, 0.6, -0.6, 0.8);
-  for (var i = 0; i < 5; i++) {
+  for (var i = 0; i < FBM_MAX_OCTAVES; i++) {
     if (f32(i) >= u.fbm_octaves) { break; }
     val += amp * snoise(p + vec2f(sin(t * 0.13), cos(t * 0.17)) * 2.0);
     p = rot * p * u.fbm_freq_mul;
@@ -415,36 +419,51 @@ fn fs(@builtin(position) frag_coord: vec4f) -> @location(0) vec4f {
   // Ridged noise: fold field into vein patterns
   field = apply_ridge(field);
 
-  // Wave interference: undulation added to field height
-  // Cache result so wave crest highlight below reuses it without a second call.
-  let wave_raw = wave_field(p, t);
-  field += wave_raw * u.wave_str;
+  // Wave interference: undulation added to field height — gated when wave is off
+  var wave_raw = 0.0;
+  if (u.wave_str > 0.01) {
+    wave_raw = wave_field(p, t);
+    field += wave_raw * u.wave_str;
+  }
 
-  // Aurora curtain: vertical flowing light threads
-  let curtain_gate = smoothstep(0.3, 0.6, u.curtain_str);
-  let curtain_val = curtain_field(p, t) * curtain_gate;
-  field += curtain_val;
+  // Aurora curtain: vertical flowing light threads — gated to skip loop when inactive
+  var curtain_val = 0.0;
+  if (u.curtain_str > 0.01) {
+    let curtain_gate = smoothstep(0.3, 0.6, u.curtain_str);
+    curtain_val = curtain_field(p, t) * curtain_gate;
+    field += curtain_val;
+  }
 
-  // Chladni modes: cymatics standing-wave patterns
-  let chladni_gate = smoothstep(0.3, 0.6, u.chladni_str);
-  field += chladni_field(p, t) * chladni_gate;
+  // Chladni modes: cymatics standing-wave patterns — gated to skip when inactive
+  if (u.chladni_str > 0.01) {
+    let chladni_gate = smoothstep(0.3, 0.6, u.chladni_str);
+    field += chladni_field(p, t) * chladni_gate;
+  }
 
-  // Spiral arms: log-spiral distance field
-  let spiral_gate = smoothstep(0.3, 0.6, u.spiral_str);
-  field += spiral_field(p, t) * spiral_gate;
+  // Spiral arms: log-spiral distance field — gated to skip when inactive
+  if (u.spiral_str > 0.01) {
+    let spiral_gate = smoothstep(0.3, 0.6, u.spiral_str);
+    field += spiral_field(p, t) * spiral_gate;
+  }
 
-  // Moiré interference: high-freq rings need hard gate to avoid bleed
-  let moire_gate = smoothstep(0.3, 0.6, u.moire_str);
-  field += moire_field(p, t) * moire_gate;
+  // Moiré interference: high-freq rings — gated to skip when inactive
+  if (u.moire_str > 0.01) {
+    let moire_gate = smoothstep(0.3, 0.6, u.moire_str);
+    field += moire_field(p, t) * moire_gate;
+  }
 
-  // Burn frontier: threshold sweep on noise field with bright edge
-  let burn_gate = smoothstep(0.3, 0.6, u.burn_str);
-  let burn_phase = fract(t * u.burn_speed * 0.05);
-  let burn_thresh = mix(0.85, -0.3, smoothstep(0.0, 0.85, burn_phase));
-  let burn_mask = smoothstep(burn_thresh, burn_thresh - 0.12, field);
-  let burn_edge = smoothstep(burn_thresh - 0.02, burn_thresh, field)
-                * smoothstep(burn_thresh + 0.08, burn_thresh, field);
-  field = mix(field, field * burn_mask, burn_gate);
+  // Burn frontier: threshold sweep on noise field with bright edge — gated when inactive
+  var burn_gate = 0.0;
+  var burn_edge = 0.0;
+  if (u.burn_str > 0.01) {
+    burn_gate = smoothstep(0.3, 0.6, u.burn_str);
+    let burn_phase = fract(t * u.burn_speed * 0.05);
+    let burn_thresh = mix(0.85, -0.3, smoothstep(0.0, 0.85, burn_phase));
+    let burn_mask = smoothstep(burn_thresh, burn_thresh - 0.12, field);
+    burn_edge = smoothstep(burn_thresh - 0.02, burn_thresh, field)
+              * smoothstep(burn_thresh + 0.08, burn_thresh, field);
+    field = mix(field, field * burn_mask, burn_gate);
+  }
 
   // Voronoi cracks: gated behind uniform check — 3×3 neighbor loop is expensive
   // and voronoi_str is 0 across all current presets.
@@ -461,15 +480,20 @@ fn fs(@builtin(position) frag_coord: vec4f) -> @location(0) vec4f {
     field += (vor.min_dist - 0.3) * u.voronoi_str * 0.2;
   }
 
-  // Orbs
-  let orbs = compute_orbs(p, t);
-
-  // Combine field + orbs
-  let envelope = mix(
-    mix(1.0, clamp(orbs.field, 0.0, 1.0), 1.0 - u.orb_color_mode),
-    1.0, u.orb_color_mode
-  );
-  var height = field * envelope + orbs.field * (1.0 - u.orb_color_mode) * 0.08;
+  // Orbs: gated to skip 7-orb loop when orb_intensity is effectively zero
+  var orb_field_val = 0.0;
+  var orb_color_val = vec3f(0.0);
+  var envelope = 1.0; // default: no modulation when orbs off
+  if (u.orb_intensity > 0.01) {
+    let orbs = compute_orbs(p, t);
+    orb_field_val = orbs.field;
+    orb_color_val = orbs.color;
+    envelope = mix(
+      mix(1.0, clamp(orbs.field, 0.0, 1.0), 1.0 - u.orb_color_mode),
+      1.0, u.orb_color_mode
+    );
+  }
+  var height = field * envelope + orb_field_val * (1.0 - u.orb_color_mode) * 0.08;
 
   // Fabric fold: gated behind uniform check — calls fbm2() twice + 4 sines per pixel
   var fold_grad = vec2f(0.0);
@@ -535,8 +559,8 @@ fn fs(@builtin(position) frag_coord: vec4f) -> @location(0) vec4f {
   let refl_uv = N.xy * 0.5 + 0.5;
   col += mix(u.color_shadow.rgb, u.color_bright.rgb, refl_uv.y) * fres * u.fresnel_f0 * 0.3;
 
-  // Additive orb color
-  col = mix(col, orbs.color, u.orb_color_mode);
+  // Additive orb color (orb_color_val is vec3(0) when orbs are gated off)
+  col = mix(col, orb_color_val, u.orb_color_mode);
 
   // Edge glow (from noise field edges)
   let ink = smoothstep(-0.2, 0.1, field) * envelope;
