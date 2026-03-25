@@ -859,11 +859,11 @@
 {/if}
 
 <div class="morph-ui">
-	<a href="/gallery/all" class="close-btn" aria-label="Close">
-		<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-			<path d="M18 6L6 18M6 6l12 12" />
-		</svg>
-	</a>
+	<nav class="attribution">
+		<a href="https://github.com/boxabirds/radiant" target="_blank" rel="noopener">By Julian Harris</a>
+		<span class="sep">|</span>
+		<a href="https://radiant-shaders.com" target="_blank" rel="noopener">Based on Radiant</a>
+	</nav>
 </div>
 
 <style>
@@ -901,27 +901,38 @@
 		pointer-events: none;
 	}
 
-	.close-btn {
+	.attribution {
 		position: fixed;
 		top: 20px;
 		right: 20px;
-		width: 40px;
-		height: 40px;
 		display: flex;
 		align-items: center;
-		justify-content: center;
-		border-radius: 50%;
-		background: rgba(10, 10, 10, 0.5);
+		gap: 8px;
+		font-size: 12px;
+		font-weight: 300;
+		letter-spacing: 0.03em;
 		color: rgba(232, 224, 216, 0.5);
-		transition: color 0.3s, background 0.3s;
+		background: rgba(10, 10, 10, 0.4);
+		padding: 6px 12px;
+		border-radius: 20px;
 		pointer-events: auto;
-		cursor: pointer;
+		opacity: 1;
+		transition: opacity 0.4s ease;
 	}
 
-	.close-btn:hover {
-		color: rgba(232, 224, 216, 0.9);
-		background: rgba(10, 10, 10, 0.8);
+	:global(body.cursor-hidden) .attribution {
+		opacity: 0;
+		pointer-events: none;
 	}
+
+	.attribution a {
+		color: inherit;
+		text-decoration: none;
+		cursor: pointer;
+	}
+	.attribution a:hover { color: rgba(232, 224, 216, 0.9); }
+
+	.attribution .sep { opacity: 0.35; }
 
 	.rain-canvas {
 		position: fixed;
