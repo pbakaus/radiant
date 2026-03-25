@@ -488,11 +488,16 @@
 				};
 			}
 
+			// Rain amount: oscillates 0.1→1.1 over a 10s sine cycle
+			let rainAmount = 0.6;
+			const RAIN_CYCLE_S = 10_000;
+
 			function updateRain(ts: number): RDrop[] {
+				rainAmount = 0.1 + 0.5 + 0.5 * Math.sin((Date.now() / RAIN_CYCLE_S) * Math.PI * 2);
 				const result: RDrop[] = [];
-				const limit = opts.rainLimit * ts * areaMul();
+				const limit = opts.rainLimit * ts * areaMul() * rainAmount;
 				let count = 0;
-				while (chance(opts.rainChance * ts * areaMul()) && count < limit) {
+				while (chance(opts.rainChance * ts * areaMul() * rainAmount) && count < limit) {
 					count++;
 					const r = rnd(opts.minR, opts.maxR, (n) => Math.pow(n, 3));
 					const d = createDrop({
@@ -506,7 +511,7 @@
 			}
 
 			function updateDroplets(ts: number) {
-				dropletsCounter += opts.dropletsRate * ts * areaMul();
+				dropletsCounter += opts.dropletsRate * ts * areaMul() * rainAmount;
 				let total = Math.floor(dropletsCounter);
 				dropletsCounter -= total;
 				while (total > 0) {
