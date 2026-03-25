@@ -59,9 +59,9 @@ struct Uniforms {
   chladni_str: f32,     // 0=off, 1=full chladni pattern
 
   chladni_mode: f32,    // 0-5 selects mode pair (interpolated)
+  curtain_str: f32,     // 0=off, 1=full aurora curtains
+  curtain_count: f32,   // number of curtain lines (3-8)
   _pad1: f32,
-  _pad2: f32,
-  _pad3: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -294,6 +294,30 @@ fn kaleido_fold(p: vec2f) -> vec2f {
   return vec2f(cos(a), sin(a)) * r;
 }
 
+// ─── Aurora curtain ───
+// Vertical sine-displaced luminous lines with per-line phase variation.
+fn curtain_field(p: vec2f, t: f32) -> f32 {
+  var glow = 0.0;
+  let count = i32(u.curtain_count + 0.5);
+  for (var i = 0; i < 8; i++) {
+    if (i >= count) { break; }
+    let fi = f32(i);
+    let spacing = 1.6 / max(u.curtain_count, 1.0);
+    var cx = (fi - u.curtain_count * 0.5 + 0.5) * spacing;
+    // Horizontal drift
+    cx += sin(t * (0.12 + fi * 0.02) + fi * 1.7) * 0.15;
+    // Vertical sine displacement: multi-freq stack
+    let disp = sin(p.y * 3.0 + t * 0.4 + fi * 2.3) * 0.08
+             + sin(p.y * 7.0 - t * 0.25 + fi * 1.1) * 0.03
+             + sin(p.y * 1.5 + t * 0.15 + fi * 3.7) * 0.12;
+    let dx = abs(p.x - cx - disp);
+    // Tapered width: narrower at top/bottom
+    let width = 0.025 * (1.0 - smoothstep(0.3, 0.6, abs(p.y)));
+    glow += smoothstep(width * 2.0, 0.0, dx) * 0.4;
+  }
+  return glow;
+}
+
 // ─── Chladni modes ───
 // Standing-wave eigenfunctions: cos(nπx)cos(mπy) + cos(mπx)cos(nπy).
 // Sand accumulates on nodal lines where field ≈ 0.
@@ -393,6 +417,11 @@ fn fs(@builtin(position) frag_coord: vec4f) -> @location(0) vec4f {
 
   // Wave interference: undulation added to field height
   field += wave_field(p, t) * u.wave_str;
+
+  // Aurora curtain: vertical flowing light threads
+  let curtain_gate = smoothstep(0.3, 0.6, u.curtain_str);
+  let curtain_val = curtain_field(p, t) * curtain_gate;
+  field += curtain_val;
 
   // Chladni modes: cymatics standing-wave patterns
   let chladni_gate = smoothstep(0.3, 0.6, u.chladni_str);
@@ -518,6 +547,10 @@ fn fs(@builtin(position) frag_coord: vec4f) -> @location(0) vec4f {
   // Burn frontier glow
   col += u.color_hot.rgb * burn_edge * burn_gate * 0.8;
   col += u.color_bright.rgb * burn_edge * burn_gate * 0.4;
+
+  // Aurora curtain glow: additive bright threads
+  col += u.color_bright.rgb * curtain_val * 0.5;
+  col += u.color_hot.rgb * curtain_val * curtain_val * 0.3;
 
   // Vignette
   let vig = length(p * vec2f(0.85, 1.0));

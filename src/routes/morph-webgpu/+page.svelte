@@ -115,48 +115,53 @@
 			//   ridge, waveStr, waveF,
 			//   sR,sG,sB, mR,mG,mB, bR,bG,bB, hR,hG,hB,
 			//   orbSharp, moireStr, burnStr, burnSpeed, spiralStr, spiralArms,
-			//   kaleidoStr, kaleidoSeg, chromaStr, chladniStr, chladniMode]
+			//   kaleidoStr, kaleidoSeg, chromaStr, chladniStr, chladniMode,
+			//   curtainStr, curtainCount]
 			const P = [
 				// 0: Flowing warp (fluid-amber)
 				[3, .48, 2.10, .70, 3.2, 2.5,  7,.25,0,0, 0,2, 0,0,0,40,0, .6,
 				 .35, 0,2,
-				 .03,.025,.01, .20,.14,.07, .78,.58,.24, .95,.85,.50, 0,0, 0,.5, 0,5, 0,8, 0, 0,3],
+				 .03,.025,.01, .20,.14,.07, .78,.58,.24, .95,.85,.50, 0,0, 0,.5, 0,5, 0,8, 0, 0,3, 0,6],
 				// 1: Orb field (chromatic-bloom)
 				[3, .15, 2.0, .25, 0,0,  7,.30,1.5,1.0, 0,2, 0,0,0,40,0, 0,
 				 0, 0,2,
-				 .01,.008,.005, .04,.03,.02, .20,.15,.08, .80,.65,.35, 0,0, 0,.5, 0,5, 0,8, .15, 0,3],
+				 .01,.008,.005, .04,.03,.02, .20,.15,.08, .80,.65,.35, 0,0, 0,.5, 0,5, 0,8, .15, 0,3, 0,6],
 				// 2: Silk folds (silk-cascade)
 				[3, .30, 2.0, .50, .15,0,  7,.25,0,0, 1.0,3.0, 1.0,.75,.85,42,.15, 0,
 				 0, 0,2,
-				 .04,.025,.015, .35,.18,.10, .85,.55,.30, 1.0,.88,.65, 0,0, 0,.5, 0,5, 0,8, 0, 0,3],
+				 .04,.025,.015, .35,.18,.10, .85,.55,.30, 1.0,.88,.65, 0,0, 0,.5, 0,5, 0,8, 0, 0,3, 0,6],
 				// 3: Ocean waves (bioluminescence)
 				[3, .42, 2.03, .65, .8,.3,  7,.25,0,0, 0,2, .4,.25,0,40,0, 0,
 				 0, .8,3.0,
-				 .02,.025,.03, .08,.18,.15, .40,.60,.45, .90,.80,.55, 0,0, 0,.5, 0,5, 0,8, 0, 0,3],
+				 .02,.025,.03, .08,.18,.15, .40,.60,.45, .90,.80,.55, 0,0, 0,.5, 0,5, 0,8, 0, 0,3, 0,6],
 				// 4: Neon metaballs (neon-drip)
 				[3, .15, 2.0, .30, 0,0,  7,.28,1.8,1.0, 0,2, 0,0,0,40,0, 0,
 				 0, 0,2,
-				 .005,.005,.01, .03,.02,.06, .15,.08,.30, .90,.50,.80, 1.0,0, 0,.5, 0,5, 0,8, .2, 0,3],
+				 .005,.005,.01, .03,.02,.06, .15,.08,.30, .90,.50,.80, 1.0,0, 0,.5, 0,5, 0,8, .2, 0,3, 0,6],
 				// 5: Moiré beats (moire-interference)
 				[3, .15, 2.0, .40, 0,0,  7,.25,0,0, 0,2, 0,0,0,40,0, 0,
 				 0, 0,2,
-				 .01,.01,.008, .08,.06,.04, .50,.35,.15, .85,.75,.40, 0,1.0, 0,.5, 0,5, 0,8, .1, 0,3],
+				 .01,.01,.008, .08,.06,.04, .50,.35,.15, .85,.75,.40, 0,1.0, 0,.5, 0,5, 0,8, .1, 0,3, 0,6],
 				// 6: Burning film (burning-film)
 				[3, .48, 2.10, .65, 2.5,1.8,  7,.25,0,0, 0,2, 0,0,0,40,0, .8,
 				 .4, 0,2,
-				 .02,.01,.005, .25,.10,.03, .80,.45,.12, 1.0,.85,.40, 0,0, 1.0,.4, 0,5, 0,8, 0, 0,3],
+				 .02,.01,.005, .25,.10,.03, .80,.45,.12, 1.0,.85,.40, 0,0, 1.0,.4, 0,5, 0,8, 0, 0,3, 0,6],
 				// 7: Spiral vortex (vortex)
 				[3, .42, 2.05, .55, 1.0,.5,  7,.25,0,0, 0,2, 0,0,0,40,0, .2,
 				 0, 0,2,
-				 .02,.015,.008, .12,.08,.04, .55,.40,.18, .90,.75,.40, 0,0, 0,.5, 1.0,5, 0,8, 0, 0,3],
+				 .02,.015,.008, .12,.08,.04, .55,.40,.18, .90,.75,.40, 0,0, 0,.5, 1.0,5, 0,8, 0, 0,3, 0,6],
 				// 8: Kaleidoscope mandala (kaleidoscope-runway)
 				[3, .40, 2.05, .60, 1.5,.8,  7,.25,0,0, 0,2, 0,0,0,40,0, .3,
 				 .2, 0,2,
-				 .02,.015,.01, .15,.10,.06, .65,.45,.20, .95,.80,.45, 0,0, 0,.5, 0,5, 1.0,8, 0, 0,3],
+				 .02,.015,.01, .15,.10,.06, .65,.45,.20, .95,.80,.45, 0,0, 0,.5, 0,5, 1.0,8, 0, 0,3, 0,6],
 				// 9: Chladni cymatics (chladni-resonance)
 				[3, .15, 2.0, .40, 0,0,  7,.25,0,0, 0,2, 0,0,0,40,0, .2,
 				 0, 0,2,
-				 .01,.01,.008, .06,.05,.04, .45,.35,.20, .90,.80,.50, 0,0, 0,.5, 0,5, 0,8, 0, 1.0,3],
+				 .01,.01,.008, .06,.05,.04, .45,.35,.20, .90,.80,.50, 0,0, 0,.5, 0,5, 0,8, 0, 1.0,3, 0,6],
+				// 10: Aurora threads (aurora-curtain)
+				[3, .15, 2.0, .35, 0,0,  7,.25,0,0, 0,2, 0,0,0,40,0, 0,
+				 0, 0,2,
+				 .008,.008,.005, .04,.06,.05, .25,.50,.35, .70,.90,.65, 0,0, 0,.5, 0,5, 0,8, 0, 0,3, 1.0,7],
 			];
 
 			// Map preset array index to uniform buffer index (no voronoi)
@@ -166,14 +171,15 @@
 				19, 20, 21, 22, 23, 24, 25, 26, // fold + lighting + edge
 				29, 48, 49,                    // ridge, waves (skip voronoi)
 				32,33,34, 36,37,38, 40,41,42, 44,45,46, // colors
-				50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60 // t2+t3 params
+				50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62 // t2+t3 params
 			];
 
 			const N_PRESETS = P.length;
 			const N_PARAMS = MAP.length;
 			const PRESET_NAMES = [
 				'fluid-amber', 'chromatic-bloom', 'silk-cascade', 'bioluminescence',
-				'neon-drip', 'moiré', 'burning-film', 'vortex', 'kaleidoscope', 'chladni'
+				'neon-drip', 'moiré', 'burning-film', 'vortex', 'kaleidoscope', 'chladni',
+				'aurora'
 			];
 
 			// Pre-allocate proximity array
@@ -194,14 +200,16 @@
 				prox[7] = drift(timeSec, 0.033, 23);
 				prox[8] = drift(timeSec, 0.015, 29);
 				prox[9] = drift(timeSec, 0.035, 31);
+				prox[10] = drift(timeSec, 0.022, 37);
 				prox[2] = drift(timeSec, 0.025, 3);
 				prox[3] = drift(timeSec, 0.042, 5);
 
-				// Power-4 winner-take-all
+				// Power-8 winner-take-all: ~80% dominance with 11 presets
 				let sum = 0.001;
 				for (let i = 0; i < N_PRESETS; i++) {
 					const p2 = prox[i] * prox[i];
-					prox[i] = p2 * p2;
+					const p4 = p2 * p2;
+					prox[i] = p4 * p4;
 					sum += prox[i];
 				}
 				for (let i = 0; i < N_PRESETS; i++) { prox[i] /= sum; }
@@ -323,13 +331,6 @@
 	</div>
 {/if}
 
-<div class="morph-ui">
-	<a href="/gallery/all" class="close-btn" aria-label="Close">
-		<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-			<path d="M18 6L6 18M6 6l12 12" />
-		</svg>
-	</a>
-</div>
 
 <style>
 	.gl-canvas {
@@ -359,34 +360,6 @@
 	.fallback .subtle { font-size: 13px; color: rgba(232, 224, 216, 0.4); }
 	.fallback a { color: #c8956c; text-decoration: underline; margin-top: 8px; }
 
-	.morph-ui {
-		position: fixed;
-		inset: 0;
-		z-index: 10000;
-		pointer-events: none;
-	}
-
-	.close-btn {
-		position: fixed;
-		top: 20px;
-		right: 20px;
-		width: 40px;
-		height: 40px;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		border-radius: 50%;
-		background: rgba(10, 10, 10, 0.5);
-		color: rgba(232, 224, 216, 0.5);
-		transition: color 0.3s, background 0.3s;
-		pointer-events: auto;
-		cursor: pointer;
-	}
-
-	.close-btn:hover {
-		color: rgba(232, 224, 216, 0.9);
-		background: rgba(10, 10, 10, 0.8);
-	}
 
 	.debug-hud {
 		position: fixed;

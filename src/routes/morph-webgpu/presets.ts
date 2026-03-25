@@ -18,7 +18,7 @@
  * 48: wave_str      49: wave_freq     50: orb_sharpness  51: moire_str
  * 52: burn_str      53: burn_speed    54: spiral_str      55: spiral_arms
  * 56: kaleido_str   57: kaleido_seg   58: chroma_str      59: chladni_str
- * 60: chladni_mode  61: _pad          62: _pad            63: _pad
+ * 60: chladni_mode  61: curtain_str   62: curtain_count    63: _pad
  */
 
 export const UNIFORM_FLOATS = 64;
