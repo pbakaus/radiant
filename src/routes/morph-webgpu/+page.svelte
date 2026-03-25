@@ -38,7 +38,7 @@
 
 	const FADE_DURATION_S = 10;
 	const MOBILE_CREDITS_MS = 15_000;
-	const SOUND_HINT_MS = 15 * 60 * 1000; // 15 minutes
+	const SOUND_HINT_MS = 15_000; // 15 seconds
 	const SOUND_FEEDBACK_MS = 5_000;
 
 	// Grid-free drift using incommensurate sine sums.
@@ -1067,15 +1067,18 @@
 		transform: translate(-50%, -50%);
 		z-index: 10003;
 		display: flex;
+		flex-direction: column;
 		align-items: center;
-		gap: 10px;
+		justify-content: center;
+		gap: 8px;
 		font-size: 14px;
 		font-weight: 300;
 		letter-spacing: 0.05em;
+		text-align: center;
 		color: rgba(232, 224, 216, 0.6);
 		background: rgba(10, 10, 10, 0.5);
-		padding: 12px 20px;
-		border-radius: 30px;
+		padding: 16px 24px;
+		border-radius: 20px;
 		pointer-events: none;
 		animation: hint-pulse 3s ease-in-out infinite;
 	}
