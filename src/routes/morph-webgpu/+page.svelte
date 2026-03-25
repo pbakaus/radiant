@@ -92,12 +92,14 @@
 
 			// Only resize on actual window resize events, never in the tick loop.
 			// Setting canvas.width clears the WebGPU surface → black frame.
+			// Also notify the engine so it can recreate the half-res texture.
 			onResize = function() {
 				const w = Math.round(innerWidth * dpr);
 				const h = Math.round(innerHeight * dpr);
 				if (w !== cw || h !== ch) {
 					cw = w; ch = h;
 					canvas!.width = w; canvas!.height = h;
+					engine?.resize(w, h);
 				}
 			}
 			window.addEventListener('resize', onResize);
@@ -187,6 +189,7 @@
 
 			// Debug HUD frame counter
 			let debugFrameCount = 0;
+			let firstFrame = true;
 
 			function tick(now: number) {
 				const timeSec = (now - start) / 4000; // quarter speed
@@ -214,13 +217,17 @@
 				}
 				for (let i = 0; i < N_PRESETS; i++) { prox[i] /= sum; }
 
-				// Blend toward attractors
+				// Blend toward attractors with temporal smoothing.
+				// Power-8 gives sharp identity but fast leader swaps —
+				// exponential smoothing (~1s transition) absorbs the jumps.
+				const SMOOTH = 0.04; // ~25 frames to 63%, ~75 frames to 95%
 				for (let j = 0; j < N_PARAMS; j++) {
 					let v = 0;
 					for (let i = 0; i < N_PRESETS; i++) { v += prox[i] * P[i][j]; }
 					v *= 1.0 + (drift(timeSec, 0.12, j + 60) - 0.5) * 0.06;
-					buf[MAP[j]] = v;
+					if (firstFrame) { buf[MAP[j]] = v; } else { buf[MAP[j]] += (v - buf[MAP[j]]) * SMOOTH; }
 				}
+				firstFrame = false;
 
 				// Voronoi always off
 				buf[30] = 0; buf[31] = 4;
