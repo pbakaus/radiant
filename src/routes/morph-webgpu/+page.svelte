@@ -197,11 +197,12 @@
 				prox[2] = drift(timeSec, 0.025, 3);
 				prox[3] = drift(timeSec, 0.042, 5);
 
-				// Power-4 winner-take-all
+				// Power-8 winner-take-all: ~80% dominance with 10 presets
 				let sum = 0.001;
 				for (let i = 0; i < N_PRESETS; i++) {
 					const p2 = prox[i] * prox[i];
-					prox[i] = p2 * p2;
+					const p4 = p2 * p2;
+					prox[i] = p4 * p4;
 					sum += prox[i];
 				}
 				for (let i = 0; i < N_PRESETS; i++) { prox[i] /= sum; }
