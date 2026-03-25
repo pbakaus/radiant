@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { MorphEngine } from './engine';
+	import { MorphAudio } from './audio';
 	import {
 		UNIFORM_FLOATS,
 		U_TIME, U_ZOOM, U_HUE_SHIFT, U_RES_X, U_RES_Y,
@@ -14,10 +15,14 @@
 	const ZOOM_MAX = 1.15;
 	const HUE_CYCLE_S = 300;
 
+	const AUDIO_URL = '/audio/the-noble-hunt.mp3';
+
 	let canvas: HTMLCanvasElement | undefined = $state();
 	let mouseX = 0;
 	let mouseY = 0;
 	let supported = $state(true);
+	let audio: MorphAudio | null = null;
+	let audioLoading = false;
 
 	// Grid-free drift using incommensurate sine sums.
 	// No cell boundaries, infinitely smooth derivatives, zero discontinuities.
@@ -62,7 +67,7 @@
 		if (!canvas) return;
 		if (!navigator.gpu) { supported = false; return; }
 
-		const buf = new Float32Array(UNIFORM_FLOATS); // 52 floats = 208 bytes
+		const buf = new Float32Array(UNIFORM_FLOATS); // 64 floats = 256 bytes
 		let raf = 0;
 		let engine: MorphEngine | null = null;
 		let onResize: (() => void) | null = null;
@@ -100,34 +105,27 @@
 			// Matched to original gallery shaders. Each preset's "hero" feature is
 			// at full strength; competing features are zeroed so intermediate blends
 			// still read as one effect fading into another, not paint mixing.
-			// Colors stay in the warm-amber family (hue_shift provides variety)
-			// so linear blends produce coherent warm tones, never gray.
+			// Colors stay in the warm-amber family (hue_shift provides variety).
+			// Integer uniforms (octaves=3, orbs=7) held constant across all presets.
 			// No voronoi. Layout: [oct, decay, fmul, scale, w1, w2,
 			//   orbN, orbR, orbI, orbMode, fold, foldF, norm, diff, spec, specP, fres, edge,
 			//   ridge, waveStr, waveF,
 			//   sR,sG,sB, mR,mG,mB, bR,bG,bB, hR,hG,hB]
-			// All presets use 5 octaves and 7 orbs — integer uniforms are held constant
-			// to avoid discrete pops when blending. Detail and visibility are controlled
-			// via continuous params (fbm_decay, orb_intensity) instead.
 			const P = [
-				// 0: Flowing warp (fluid-amber) — heavy domain warp, edge glow, ridged veins
-				// Original: 5 oct, decay .48, freq 2.1, warp1=4.0, warp2=3.5
-				[5, .48, 2.10, .70, 3.2, 2.5,  7,.25,0,0, 0,2, 0,0,0,40,0, .6,
+				// 0: Flowing warp (fluid-amber)
+				[3, .48, 2.10, .70, 3.2, 2.5,  7,.25,0,0, 0,2, 0,0,0,40,0, .6,
 				 .35, 0,2,
 				 .03,.025,.01, .20,.14,.07, .78,.58,.24, .95,.85,.50],
-				// 1: Orb field (chromatic-bloom) — orbs only, no noise/warp
-				// decay=.15 makes octaves 2-5 negligible (0.15^1=.15, .15^2=.02)
-				[5, .15, 2.0, .25, 0,0,  7,.30,1.5,1.0, 0,2, 0,0,0,40,0, 0,
+				// 1: Orb field (chromatic-bloom)
+				[3, .15, 2.0, .25, 0,0,  7,.30,1.5,1.0, 0,2, 0,0,0,40,0, 0,
 				 0, 0,2,
 				 .01,.008,.005, .04,.03,.02, .20,.15,.08, .80,.65,.35],
-				// 2: Silk folds (silk-cascade) — strong folds + Kajiya-Kay lighting
-				// decay=.30 keeps 2 effective octaves (0.30^2=.09 negligible)
-				[5, .30, 2.0, .50, .15,0,  7,.25,0,0, 1.0,3.0, 1.0,.75,.85,42,.15, 0,
+				// 2: Silk folds (silk-cascade)
+				[3, .30, 2.0, .50, .15,0,  7,.25,0,0, 1.0,3.0, 1.0,.75,.85,42,.15, 0,
 				 0, 0,2,
 				 .04,.025,.015, .35,.18,.10, .85,.55,.30, 1.0,.88,.65],
-				// 3: Ocean waves (bioluminescence) — wave interference + moderate warp
-				// decay=.42 gives 3 effective octaves
-				[5, .42, 2.03, .65, .8,.3,  7,.25,0,0, 0,2, .4,.25,0,40,0, 0,
+				// 3: Ocean waves (bioluminescence)
+				[3, .42, 2.03, .65, .8,.3,  7,.25,0,0, 0,2, .4,.25,0,40,0, 0,
 				 0, .8,3.0,
 				 .02,.025,.03, .08,.18,.15, .40,.60,.45, .90,.80,.55],
 			];
@@ -151,15 +149,12 @@
 				const timeSec = (now - start) / 2000; // half speed: everything runs at 50%
 
 				// Proximity signals — wide speed spread (2.3:1) decorrelates them
-				// so there's usually a clear winner. driftBold avoided: its steeper
-				// mid-range derivative causes perceptible jumps at leader crossings.
 				prox[0] = drift(timeSec, 0.018, 1);
 				prox[1] = drift(timeSec, 0.037, 2);
 				prox[2] = drift(timeSec, 0.025, 3);
 				prox[3] = drift(timeSec, 0.042, 5);
 
-				// Power-4 winner-take-all: ~80% weight on dominant attractor
-				// when there's a clear winner, graceful fallback when values cluster
+				// Power-4 winner-take-all
 				let sum = 0.001;
 				for (let i = 0; i < N_PRESETS; i++) {
 					const p2 = prox[i] * prox[i];
@@ -199,6 +194,7 @@
 				buf[U_ZOOM_CENTER_X] = cx + drift(timeSec, 0.025, 31) * 0.15 - 0.075;
 				buf[U_ZOOM_CENTER_Y] = cy + drift(timeSec, 0.02, 32) * 0.15 - 0.075;
 
+				audio?.update(buf);
 				engine!.render(buf);
 				raf = requestAnimationFrame(tick);
 			}
@@ -206,9 +202,35 @@
 			raf = requestAnimationFrame(tick);
 		})();
 
+		async function handleKey(e: KeyboardEvent) {
+			if (e.key === ' ') {
+				e.preventDefault();
+				if (!audio && !audioLoading) {
+					audioLoading = true;
+					try {
+						audio = await MorphAudio.create(AUDIO_URL);
+						await audio.start();
+					} catch (err) {
+						console.warn('Audio init failed:', err);
+						audio = null;
+					}
+					audioLoading = false;
+				} else if (audio) {
+					audio.toggle();
+				}
+			} else if (e.key === '=' || e.key === '+') {
+				audio?.volumeUp();
+			} else if (e.key === '-' || e.key === '_') {
+				audio?.volumeDown();
+			}
+		}
+		window.addEventListener('keydown', handleKey);
+
 		return () => {
 			cancelAnimationFrame(raf);
+			window.removeEventListener('keydown', handleKey);
 			if (onResize) window.removeEventListener('resize', onResize);
+			audio?.destroy();
 			engine?.destroy();
 		};
 	});
