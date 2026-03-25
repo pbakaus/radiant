@@ -328,25 +328,53 @@
 				ctx.putImageData(img, 0, 0); return c;
 			}
 
-			// Visible drop bitmap: glass-like teardrop using alpha mask
-			function genDropGfx(alphaTex: HTMLCanvasElement): HTMLCanvasElement {
-				const c = mkCanvas(DROP_SIZE, DROP_SIZE);
+			// RGB normal map: R=vertical refraction offset, G=horizontal, B=depth
+			// Neutral value = 128. Ported verbatim from generateDropColor().
+			function genDropColor(size: number): HTMLCanvasElement {
+				const c = mkCanvas(size, size);
 				const ctx = c.getContext('2d')!;
-				// Clip to drop shape
-				ctx.drawImage(alphaTex, 0, 0);
-				ctx.globalCompositeOperation = 'source-in';
-				// Radial glass gradient: bright top edge, dark lower rim
-				const g = ctx.createRadialGradient(
-					DROP_SIZE * 0.38, DROP_SIZE * 0.32, 0,
-					DROP_SIZE * 0.5,  DROP_SIZE * 0.55, DROP_SIZE * 0.5
-				);
-				g.addColorStop(0,   'rgba(255,255,255,0.55)');
-				g.addColorStop(0.3, 'rgba(200,215,255,0.22)');
-				g.addColorStop(0.7, 'rgba(140,165,220,0.10)');
-				g.addColorStop(1,   'rgba(80,100,160,0.25)');
-				ctx.fillStyle = g;
-				ctx.fillRect(0, 0, DROP_SIZE, DROP_SIZE);
-				return c;
+				const img = ctx.createImageData(size, size);
+				const cx = size / 2, cy = size / 2;
+				for (let py = 0; py < size; py++) {
+					for (let px = 0; px < size; px++) {
+						let dx = (px - cx) / cx, dy = (py - cy) / cy;
+						dy *= 1.0 + dy * 0.15;
+						const dist = Math.sqrt(dx * dx + dy * dy);
+						if (dist > 1.0) continue;
+						const nx = dist > 0.001 ? dx / dist : 0;
+						const ny = dist > 0.001 ? dy / dist : 0;
+						const strength = dist;
+						const i = (py * size + px) * 4;
+						img.data[i]   = Math.max(0, Math.min(255, Math.round(ny * 60 * strength + 128)));
+						img.data[i+1] = Math.max(0, Math.min(255, Math.round(nx * 60 * strength + 128)));
+						img.data[i+2] = Math.round(Math.sqrt(Math.max(0, 1 - dist * dist)) * 255);
+						img.data[i+3] = 255;
+					}
+				}
+				ctx.putImageData(img, 0, 0); return c;
+			}
+
+			// Combine: alpha mask clips the normal map. 255 depth variants (ported verbatim).
+			function genDropsGfx(alphaTex: HTMLCanvasElement, colorTex: HTMLCanvasElement): HTMLCanvasElement[] {
+				const buf = mkCanvas(DROP_SIZE, DROP_SIZE);
+				const bufCtx = buf.getContext('2d')!;
+				const gfx: HTMLCanvasElement[] = [];
+				for (let i = 0; i < 255; i++) {
+					const drop = mkCanvas(DROP_SIZE, DROP_SIZE);
+					const dropCtx = drop.getContext('2d')!;
+					bufCtx.clearRect(0, 0, DROP_SIZE, DROP_SIZE);
+					bufCtx.globalCompositeOperation = 'source-over';
+					bufCtx.drawImage(colorTex, 0, 0, DROP_SIZE, DROP_SIZE);
+					bufCtx.globalCompositeOperation = 'screen';
+					bufCtx.fillStyle = `rgba(0,0,${i},1)`;
+					bufCtx.fillRect(0, 0, DROP_SIZE, DROP_SIZE);
+					dropCtx.globalCompositeOperation = 'source-over';
+					dropCtx.drawImage(alphaTex, 0, 0, DROP_SIZE, DROP_SIZE);
+					dropCtx.globalCompositeOperation = 'source-in';
+					dropCtx.drawImage(buf, 0, 0, DROP_SIZE, DROP_SIZE);
+					gfx.push(drop);
+				}
+				return gfx;
 			}
 
 			// Clearing stamp for micro-droplets layer
@@ -361,7 +389,8 @@
 			}
 
 			const dropAlphaTex = genDropAlpha(DROP_SIZE);
-			const dropGfx      = genDropGfx(dropAlphaTex);
+			const dropColorTex = genDropColor(DROP_SIZE);
+			const dropsGfx     = genDropsGfx(dropAlphaTex, dropColorTex);
 			const clearStamp   = genClearStamp();
 
 			// ── Physics options (ported verbatim) ──
@@ -400,12 +429,16 @@
 			const areaMul = () => Math.sqrt(area() / (1024 * 768));
 
 			function drawRdDrop(ctx: CanvasRenderingContext2D, drop: RDrop) {
+				if (dropsGfx.length === 0) return;
 				const { x, y, r, spreadX, spreadY } = drop;
 				const scaleX = 1, scaleY = 1.5;
+				let d = Math.max(0, Math.min(1, ((r - opts.minR) / deltaR()) * 0.9));
+				d *= 1 / (((spreadX + spreadY) * 0.5) + 1);
+				const idx = Math.floor(d * (dropsGfx.length - 1));
 				ctx.globalAlpha = 1;
 				ctx.globalCompositeOperation = 'source-over';
 				ctx.drawImage(
-					dropGfx,
+					dropsGfx[idx],
 					(x - r * scaleX * (spreadX + 1)) * rdScale,
 					(y - r * scaleY * (spreadY + 1)) * rdScale,
 					(r * 2 * scaleX * (spreadX + 1)) * rdScale,
