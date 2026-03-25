@@ -397,7 +397,7 @@
 			const opts = {
 				minR: 20, maxR: 50, maxDrops: 900,
 				rainChance: 0.35, rainLimit: 6,
-				dropletsRate: 120, dropletsSize: [2, 5] as [number, number],
+				dropletsRate: 25, dropletsSize: [2, 4] as [number, number],
 				dropletsCleaningRadiusMultiplier: 0.28,
 				globalTimeScale: 1, trailRate: 1,
 				autoShrink: true, spawnArea: [-0.1, 0.95] as [number, number],
@@ -611,9 +611,9 @@
 
 			// ── WebGL refraction renderer ──
 			// Refracts the morph canvas through the drop normal map.
-			// Intermediate 2D snap canvas reads WebGPU content each frame.
-			const snapCanvas = mkCanvas(2, 2); // resized on first frame
-			const snapCtx = snapCanvas.getContext('2d')!;
+			// Snap canvas bridges WebGPU → WebGL (drawImage reads GPU canvas content).
+			const snapCanvas = mkCanvas(2, 2);
+			const snapCtx = snapCanvas.getContext('2d', { willReadFrequently: false })!;
 
 			const gl = rc.getContext('webgl', { alpha: true, antialias: false, premultipliedAlpha: false })!;
 
@@ -625,9 +625,7 @@
 				precision mediump float;
 				uniform sampler2D u_waterMap;
 				uniform sampler2D u_textureFg;
-				uniform sampler2D u_textureBg;
 				uniform vec2  u_resolution;
-				uniform float u_textureRatio;
 				uniform float u_minRefraction;
 				uniform float u_refractionDelta;
 				uniform float u_brightness;
@@ -637,31 +635,17 @@
 				vec2 texCoord() {
 					return vec2(gl_FragCoord.x, u_resolution.y - gl_FragCoord.y) / u_resolution;
 				}
-				vec2 scaledTC() {
-					float ratio = u_resolution.x / u_resolution.y;
-					vec2 scale = vec2(1.0); vec2 offset = vec2(0.0);
-					float d = ratio - u_textureRatio;
-					if (d >= 0.0) { scale.y = 1.0 + d; offset.y = d / 2.0; }
-					else          { scale.x = 1.0 - d; offset.x = -d / 2.0; }
-					return (texCoord() + offset) / scale;
-				}
-				vec4 blend(vec4 bg, vec4 fg) {
-					float ia = 1.0 - fg.a;
-					float a  = fg.a + bg.a * ia;
-					if (a == 0.0) return vec4(0.0);
-					return vec4((fg.rgb * fg.a + bg.rgb * bg.a * ia) / a, a);
-				}
 				void main() {
 					vec2 tc  = texCoord();
 					vec4 cur = texture2D(u_waterMap, tc);
 					float d  = cur.b;
 					float a  = clamp(cur.a * u_alphaMultiply - u_alphaSubtract, 0.0, 1.0);
 					if (a <= 0.0) { gl_FragColor = vec4(0.0); return; }
-					vec2  refr = (vec2(cur.g, cur.r) - 0.5) * 2.0;
-					vec2  pixel = 1.0 / u_resolution;
-					vec2  refrPos = scaledTC() + pixel * refr * (u_minRefraction + d * u_refractionDelta);
-					vec4  tex = texture2D(u_textureFg, refrPos);
-					gl_FragColor = vec4(tex.rgb * u_brightness, a);
+					vec2  refr    = (vec2(cur.g, cur.r) - 0.5) * 2.0;
+					vec2  pixel   = 1.0 / u_resolution;
+					vec2  refrPos = tc + pixel * refr * (u_minRefraction + d * u_refractionDelta);
+					vec4  tex     = texture2D(u_textureFg, refrPos);
+					gl_FragColor  = vec4(tex.rgb * u_brightness, a);
 				}
 			`;
 
@@ -691,7 +675,6 @@
 				alphaSubtract:   gl.getUniformLocation(prog, 'u_alphaSubtract'),
 				waterMap:        gl.getUniformLocation(prog, 'u_waterMap'),
 				textureFg:       gl.getUniformLocation(prog, 'u_textureFg'),
-				textureBg:       gl.getUniformLocation(prog, 'u_textureBg'),
 			};
 
 			function initTex(unit: number, source?: TexImageSource): WebGLTexture {
@@ -707,8 +690,7 @@
 			}
 
 			const waterTex = initTex(0);    // drop normal map — updated each frame
-			const fgTex    = initTex(1);    // morph canvas (sharp, through drops)
-			const bgTex    = initTex(2);    // morph canvas (shows between drops)
+			const fgTex    = initTex(1);    // morph canvas (sampled through drop lens)
 
 			// ── Resize + init ──
 			function resizeRain() {
@@ -735,34 +717,30 @@
 				rdLastRender = now;
 				updateDrops(ts);
 
-				// Snap morph canvas into 2D intermediate (WebGPU → readable source)
-				snapCtx.drawImage(canvas, 0, 0, rc.width, rc.height);
+				// Bridge WebGPU → WebGL: draw morph canvas into 2D snap, upload snap as texture.
+				// drawImage on a WebGPU canvas reads the last presented frame.
+				snapCtx.drawImage(canvas!, 0, 0, rc.width, rc.height);
 
 				// Upload water map (drop normal map)
 				gl.activeTexture(gl.TEXTURE0);
 				gl.bindTexture(gl.TEXTURE_2D, waterTex);
 				gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, rdCanvas);
 
-				// Upload morph snapshot as both fg and bg textures
+				// Upload morph snapshot as fg texture (sampled through drop lens)
 				gl.activeTexture(gl.TEXTURE1);
 				gl.bindTexture(gl.TEXTURE_2D, fgTex);
-				gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, snapCanvas);
-				gl.activeTexture(gl.TEXTURE2);
-				gl.bindTexture(gl.TEXTURE_2D, bgTex);
 				gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, snapCanvas);
 
 				// Uniforms
 				gl.useProgram(prog);
 				gl.uniform2f(uLoc.resolution,      rc.width, rc.height);
-				gl.uniform1f(uLoc.textureRatio,     rc.width / rc.height);
 				gl.uniform1f(uLoc.minRefraction,    256.0);
 				gl.uniform1f(uLoc.refractionDelta,  256.0);
 				gl.uniform1f(uLoc.brightness,       1.04);
 				gl.uniform1f(uLoc.alphaMultiply,    6.0);
 				gl.uniform1f(uLoc.alphaSubtract,    3.0);
-				gl.uniform1i(uLoc.waterMap,   0);
-				gl.uniform1i(uLoc.textureFg,  1);
-				gl.uniform1i(uLoc.textureBg,  2);
+				gl.uniform1i(uLoc.waterMap,  0);
+				gl.uniform1i(uLoc.textureFg, 1);
 
 				gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
 				gl.drawArrays(gl.TRIANGLES, 0, 6);
