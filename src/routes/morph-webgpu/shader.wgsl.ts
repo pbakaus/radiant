@@ -416,7 +416,9 @@ fn fs(@builtin(position) frag_coord: vec4f) -> @location(0) vec4f {
   field = apply_ridge(field);
 
   // Wave interference: undulation added to field height
-  field += wave_field(p, t) * u.wave_str;
+  // Cache result so wave crest highlight below reuses it without a second call.
+  let wave_raw = wave_field(p, t);
+  field += wave_raw * u.wave_str;
 
   // Aurora curtain: vertical flowing light threads
   let curtain_gate = smoothstep(0.3, 0.6, u.curtain_str);
@@ -444,16 +446,20 @@ fn fs(@builtin(position) frag_coord: vec4f) -> @location(0) vec4f {
                 * smoothstep(burn_thresh + 0.08, burn_thresh, field);
   field = mix(field, field * burn_mask, burn_gate);
 
-  // Voronoi cracks: computed in WARPED space so they flow with the field
-  // The warp gradient displaces the voronoi lookup, integrating it with the noise
-  let vor_p = p + g_warp_grad * 0.15; // cracks follow the warp flow
-  let vor = voronoi_cracks(vor_p, t);
-  let crack_edge = vor.edge_dist;
-  // Cracks CUT INTO the field — they create dark valleys with bright edges
-  let crack_cut = smoothstep(0.12, 0.0, crack_edge); // 1 at crack, 0 away
-  field = mix(field, field * 0.3 - 0.2, crack_cut * u.voronoi_str); // darken at cracks
-  // Cell distance modulates the field subtly (each cell gets slightly different value)
-  field += (vor.min_dist - 0.3) * u.voronoi_str * 0.2;
+  // Voronoi cracks: gated behind uniform check — 3×3 neighbor loop is expensive
+  // and voronoi_str is 0 across all current presets.
+  var crack_edge = 0.0;
+  var crack_cut = 0.0;
+  if (u.voronoi_str > 0.01) {
+    let vor_p = p + g_warp_grad * 0.15; // cracks follow the warp flow
+    let vor = voronoi_cracks(vor_p, t);
+    crack_edge = vor.edge_dist;
+    // Cracks CUT INTO the field — they create dark valleys with bright edges
+    crack_cut = smoothstep(0.12, 0.0, crack_edge); // 1 at crack, 0 away
+    field = mix(field, field * 0.3 - 0.2, crack_cut * u.voronoi_str); // darken at cracks
+    // Cell distance modulates the field subtly (each cell gets slightly different value)
+    field += (vor.min_dist - 0.3) * u.voronoi_str * 0.2;
+  }
 
   // Orbs
   let orbs = compute_orbs(p, t);
@@ -465,10 +471,13 @@ fn fs(@builtin(position) frag_coord: vec4f) -> @location(0) vec4f {
   );
   var height = field * envelope + orbs.field * (1.0 - u.orb_color_mode) * 0.08;
 
-  // Fabric fold
-  let fold = fabric_fold(p, t);
-  height = mix(height, fold.x, u.fold_str);
-  let fold_grad = fold.yz * u.fold_str;
+  // Fabric fold: gated behind uniform check — calls fbm2() twice + 4 sines per pixel
+  var fold_grad = vec2f(0.0);
+  if (u.fold_str > 0.01) {
+    let fold = fabric_fold(p, t);
+    height = mix(height, fold.x, u.fold_str);
+    fold_grad = fold.yz * u.fold_str;
+  }
 
   // Normal: warp gradient + fold gradient + crack edges contribute
   var grad = g_warp_grad * 0.3 + fold_grad * 1.8;
@@ -539,9 +548,8 @@ fn fs(@builtin(position) frag_coord: vec4f) -> @location(0) vec4f {
   let crack_glow = smoothstep(0.06, 0.0, crack_edge) * u.voronoi_str;
   col += u.color_hot.rgb * crack_glow * 0.6;
 
-  // Wave crest highlights
-  let wave_val = wave_field(p, t);
-  let wave_crest = smoothstep(0.3, 0.7, wave_val) * u.wave_str;
+  // Wave crest highlights (reuse cached wave_raw from above — no second evaluation)
+  let wave_crest = smoothstep(0.3, 0.7, wave_raw) * u.wave_str;
   col += u.color_bright.rgb * wave_crest * 0.25;
 
   // Burn frontier glow
