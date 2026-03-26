@@ -194,7 +194,7 @@ class RadiantScreenSaverView: ScreenSaverView {
         guard let drawable = metalLayer.nextDrawable() else { return }
 
         let now = CACurrentMediaTime()
-        let timeSec = Float((now - startTime) * 1000.0 / TIME_DIVISOR)
+        let timeSec = Float(now - startTime) // real-time seconds — shaders have their own speed constants
         let phaseElapsed = now - phaseStartTime
 
         // State machine: seqIndex always points to the DISPLAYED shader.
