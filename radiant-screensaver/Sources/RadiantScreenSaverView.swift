@@ -292,9 +292,8 @@ class RadiantScreenSaverView: ScreenSaverView {
 
         ensureOffscreenTextures(width: drawW, height: drawH)
 
-        guard let drawable = metalLayer.nextDrawable(),
-              let textureA = textureA,
-              let textureB = textureB else { return }
+        guard let drawable = metalLayer.nextDrawable() else { return }
+        guard self.textureA != nil, self.textureB != nil else { return }
 
         let now = CACurrentMediaTime()
         let elapsedMs = (now - startTime) * 1000.0
@@ -311,10 +310,15 @@ class RadiantScreenSaverView: ScreenSaverView {
         case .morph:
             if phaseElapsed >= MORPH_S {
                 seqIndex += 1
+                // Swap textures: B (fully revealed) becomes A for seamless dwell start
+                swap(&self.textureA, &self.textureB)
                 phase = .dwell
                 phaseStartTime = now
             }
         }
+
+        // Re-read after potential swap
+        guard let texA = self.textureA, let texB = self.textureB else { return }
 
         // ── Fill common uniforms ──
         let buf = uniformBuffer.contents().bindMemory(to: Float.self, capacity: 4)
@@ -327,7 +331,7 @@ class RadiantScreenSaverView: ScreenSaverView {
         let currentIdx = currentShaderIndex
         if currentIdx < shaderPipelines.count {
             renderShader(pipeline: shaderPipelines[currentIdx],
-                        target: textureA, commandQueue: commandQueue,
+                        target: texA, commandQueue: commandQueue,
                         uniformBuffer: uniformBuffer)
         }
 
@@ -337,7 +341,7 @@ class RadiantScreenSaverView: ScreenSaverView {
             let nextIdx = nextShaderIndex
             if nextIdx < shaderPipelines.count {
                 renderShader(pipeline: shaderPipelines[nextIdx],
-                            target: textureB, commandQueue: commandQueue,
+                            target: texB, commandQueue: commandQueue,
                             uniformBuffer: uniformBuffer)
             }
             progress = Float(min(phaseElapsed / MORPH_S, 1.0))
@@ -377,8 +381,8 @@ class RadiantScreenSaverView: ScreenSaverView {
 
         encoder.setRenderPipelineState(transitionPipeline)
         encoder.setFragmentBuffer(transitionUniformBuffer, offset: 0, index: 0)
-        encoder.setFragmentTexture(textureA, index: 0)
-        encoder.setFragmentTexture(textureB, index: 1)
+        encoder.setFragmentTexture(texA, index: 0)
+        encoder.setFragmentTexture(texB, index: 1)
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         encoder.endEncoding()
 

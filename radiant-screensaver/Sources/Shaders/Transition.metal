@@ -20,11 +20,9 @@ fragment float4 fs_transition(VSOut in [[stage_in]],
     // Zoom toward center
     float2 uv = (raw_uv - 0.5) / u.zoom + 0.5;
     uv = clamp(uv, float2(0.0), float2(1.0));
-    // Flip Y for texture sampling (Metal textures are top-down)
-    float2 tex_uv = float2(uv.x, 1.0 - uv.y);
 
-    float4 colA = texA.sample(samp, tex_uv);
-    float4 colB = texB.sample(samp, tex_uv);
+    float4 colA = texA.sample(samp, uv);
+    float4 colB = texB.sample(samp, uv);
 
     // Early exit: no transition
     if (u.progress <= 0.0) {
