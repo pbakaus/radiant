@@ -493,6 +493,13 @@ fragment float4 fs(VSOut in [[stage_in]],
     col += u.color_hot.rgb * burn_edge * burn_gate * 0.8;
     col += u.color_bright.rgb * burn_edge * burn_gate * 0.4;
 
+    // Colour patches
+    if (u.colour_var_str > 0.01) {
+        float patch_hue = snoise(p * 0.38 + float2(t * 0.019, t * 0.013)) * 3.14159;
+        float patch_mask = smoothstep(-0.1f, 0.5f, snoise(p * 0.28 - float2(t * 0.011, t * 0.017)));
+        col = mix(col, hue_rotate(col, patch_hue), patch_mask * u.colour_var_str);
+    }
+
     // Vignette
     float vig = length(p * float2(0.85, 1.0));
     col *= 1.0 - smoothstep(0.3f, 1.2f, vig) * u.vignette_str;

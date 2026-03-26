@@ -17,9 +17,11 @@ private let U_MOUSE_X: Int = 6
 private let U_MOUSE_Y: Int = 7
 private let U_ZOOM_CENTER_X: Int = 8
 private let U_ZOOM_CENTER_Y: Int = 9
+private let U_COLOUR_VAR_STR: Int = 61
 
 // Timing
 private let HUE_CYCLE_S: Float = 300.0
+private let COLOUR_VAR_CYCLE_S: Float = 20.0
 private let KALEIDO_RAMP_TIME: Float = 15.0 // timeSec units (= 60 real seconds)
 private let TIME_DIVISOR: Double = 4000.0 // quarter speed: elapsed_ms / 4000
 
@@ -337,6 +339,7 @@ class MorphScreenSaverView: ScreenSaverView {
         buf[U_TIME] = timeSec
         buf[U_ZOOM] = 1.0 + (0.5 + 0.5 * sin(timeSec * 0.05)) * 0.3
         buf[U_HUE_SHIFT] = (timeSec / HUE_CYCLE_S) * Float.pi * 2
+        buf[U_COLOUR_VAR_STR] = max(0, sin((timeSec / COLOUR_VAR_CYCLE_S) * Float.pi * 2)) * 0.9
 
         let drawableSize = metalLayer.drawableSize
         buf[U_RES_X] = Float(drawableSize.width)
