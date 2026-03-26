@@ -33,6 +33,8 @@ vite.config.ts.timestamp-*
 
 # Build artifacts
 static/radiant-shaders.zip
+morph-screensaver/build/
+screensaver-webgpu-poc/build/
 
 # Generated videos
 videos/
