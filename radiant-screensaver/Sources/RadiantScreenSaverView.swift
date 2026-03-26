@@ -129,6 +129,7 @@ class RadiantScreenSaverView: ScreenSaverView {
         layer.pixelFormat = .bgra8Unorm
         layer.framebufferOnly = false // need to sample offscreen textures
         layer.displaySyncEnabled = true
+        layer.contentsGravity = .resize // stretch half-res drawable to fill view
         layer.frame = self.bounds
         layer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2.0
         self.wantsLayer = true
