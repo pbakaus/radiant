@@ -280,7 +280,8 @@ class RadiantScreenSaverView: ScreenSaverView {
         guard let metalLayer = metalLayer,
               let commandQueue = commandQueue,
               let uniformBuffer = uniformBuffer,
-              let transitionUniformBuffer = transitionUniformBuffer else { return }
+              let transitionUniformBuffer = transitionUniformBuffer,
+              let transitionPipeline = transitionPipeline else { return }
 
         // Update layer size
         let scale = self.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
@@ -327,36 +328,19 @@ class RadiantScreenSaverView: ScreenSaverView {
         buf[2] = Float(drawW)
         buf[3] = Float(drawH)
 
-        // ── Render current shader to textureA ──
-        let currentIdx = currentShaderIndex
-        if currentIdx < shaderPipelines.count {
-            renderShader(pipeline: shaderPipelines[currentIdx],
-                        target: texA, commandQueue: commandQueue,
-                        uniformBuffer: uniformBuffer)
-        }
-
-        // ── During morph: render next shader to textureB ──
+        // ── Compute phase progress and zoom ──
         let progress: Float
-        if phase == .morph {
-            let nextIdx = nextShaderIndex
-            if nextIdx < shaderPipelines.count {
-                renderShader(pipeline: shaderPipelines[nextIdx],
-                            target: texB, commandQueue: commandQueue,
-                            uniformBuffer: uniformBuffer)
-            }
-            progress = Float(min(phaseElapsed / MORPH_S, 1.0))
+        let zoom: Float
+        let isMorphing = (phase == .morph)
+
+        if isMorphing {
+            let morphProgress = Float(min(phaseElapsed / MORPH_S, 1.0))
+            progress = morphProgress
+            zoom = ZOOM_MAX - (ZOOM_MAX - ZOOM_MIN) * morphProgress
         } else {
             progress = 0.0
-        }
-
-        // ── Zoom calculation ──
-        let zoom: Float
-        if phase == .dwell {
             let dwellProgress = Float(min(phaseElapsed / DWELL_S, 1.0))
             zoom = ZOOM_MIN + (ZOOM_MAX - ZOOM_MIN) * dwellProgress
-        } else {
-            let morphProgress = Float(min(phaseElapsed / MORPH_S, 1.0))
-            zoom = ZOOM_MAX - (ZOOM_MAX - ZOOM_MIN) * morphProgress
         }
 
         // ── Fill transition uniforms ──
@@ -368,23 +352,59 @@ class RadiantScreenSaverView: ScreenSaverView {
         tbuf[4] = Float(drawW)
         tbuf[5] = Float(drawH)
 
-        // ── Composite to drawable ──
-        guard let transitionPipeline = transitionPipeline else { return }
+        // ── Single command buffer for all passes ──
+        guard let commandBuffer = commandQueue.makeCommandBuffer() else { return }
 
-        let passDesc = MTLRenderPassDescriptor()
-        passDesc.colorAttachments[0].texture = drawable.texture
-        passDesc.colorAttachments[0].loadAction = .dontCare
-        passDesc.colorAttachments[0].storeAction = .store
+        // Pass 1: Render current shader → textureA
+        let currentIdx = currentShaderIndex
+        if currentIdx < shaderPipelines.count {
+            let passA = MTLRenderPassDescriptor()
+            passA.colorAttachments[0].texture = texA
+            passA.colorAttachments[0].loadAction = .clear
+            passA.colorAttachments[0].storeAction = .store
+            passA.colorAttachments[0].clearColor = MTLClearColor(red: 0.04, green: 0.04, blue: 0.04, alpha: 1.0)
 
-        guard let commandBuffer = commandQueue.makeCommandBuffer(),
-              let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: passDesc) else { return }
+            if let enc = commandBuffer.makeRenderCommandEncoder(descriptor: passA) {
+                enc.setRenderPipelineState(shaderPipelines[currentIdx])
+                enc.setFragmentBuffer(uniformBuffer, offset: 0, index: 0)
+                enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+                enc.endEncoding()
+            }
+        }
 
-        encoder.setRenderPipelineState(transitionPipeline)
-        encoder.setFragmentBuffer(transitionUniformBuffer, offset: 0, index: 0)
-        encoder.setFragmentTexture(texA, index: 0)
-        encoder.setFragmentTexture(texB, index: 1)
-        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
-        encoder.endEncoding()
+        // Pass 2 (morph only): Render next shader → textureB
+        if isMorphing {
+            let nextIdx = nextShaderIndex
+            if nextIdx < shaderPipelines.count {
+                let passB = MTLRenderPassDescriptor()
+                passB.colorAttachments[0].texture = texB
+                passB.colorAttachments[0].loadAction = .clear
+                passB.colorAttachments[0].storeAction = .store
+                passB.colorAttachments[0].clearColor = MTLClearColor(red: 0.04, green: 0.04, blue: 0.04, alpha: 1.0)
+
+                if let enc = commandBuffer.makeRenderCommandEncoder(descriptor: passB) {
+                    enc.setRenderPipelineState(shaderPipelines[nextIdx])
+                    enc.setFragmentBuffer(uniformBuffer, offset: 0, index: 0)
+                    enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+                    enc.endEncoding()
+                }
+            }
+        }
+
+        // Pass 3: Composite textureA + textureB → drawable
+        let passC = MTLRenderPassDescriptor()
+        passC.colorAttachments[0].texture = drawable.texture
+        passC.colorAttachments[0].loadAction = .dontCare
+        passC.colorAttachments[0].storeAction = .store
+
+        if let enc = commandBuffer.makeRenderCommandEncoder(descriptor: passC) {
+            enc.setRenderPipelineState(transitionPipeline)
+            enc.setFragmentBuffer(transitionUniformBuffer, offset: 0, index: 0)
+            enc.setFragmentTexture(texA, index: 0)
+            enc.setFragmentTexture(texB, index: 1)
+            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+            enc.endEncoding()
+        }
 
         commandBuffer.present(drawable)
         commandBuffer.commit()
@@ -393,29 +413,6 @@ class RadiantScreenSaverView: ScreenSaverView {
             let shaderName = currentIdx < shaderRegistry.count ? shaderRegistry[currentIdx].title : "?"
             sslog("frame=\(frameCount) shader=\(shaderName) phase=\(phase) drawSize=\(drawW)x\(drawH)")
         }
-    }
-
-    /// Render a single shader to an offscreen texture.
-    private func renderShader(pipeline: MTLRenderPipelineState,
-                              target: MTLTexture,
-                              commandQueue: MTLCommandQueue,
-                              uniformBuffer: MTLBuffer) {
-        let passDesc = MTLRenderPassDescriptor()
-        passDesc.colorAttachments[0].texture = target
-        passDesc.colorAttachments[0].loadAction = .clear
-        passDesc.colorAttachments[0].storeAction = .store
-        passDesc.colorAttachments[0].clearColor = MTLClearColor(red: 0.04, green: 0.04, blue: 0.04, alpha: 1.0)
-
-        guard let commandBuffer = commandQueue.makeCommandBuffer(),
-              let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: passDesc) else { return }
-
-        encoder.setRenderPipelineState(pipeline)
-        encoder.setFragmentBuffer(uniformBuffer, offset: 0, index: 0)
-        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
-        encoder.endEncoding()
-
-        commandBuffer.commit()
-        commandBuffer.waitUntilCompleted()
     }
 
     // MARK: - Layout
