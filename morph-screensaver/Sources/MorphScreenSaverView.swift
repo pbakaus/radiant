@@ -20,6 +20,7 @@ private let U_ZOOM_CENTER_Y: Int = 9
 
 // Timing
 private let HUE_CYCLE_S: Float = 300.0
+private let KALEIDO_RAMP_TIME: Float = 15.0 // timeSec units (= 60 real seconds)
 private let TIME_DIVISOR: Double = 4000.0 // quarter speed: elapsed_ms / 4000
 
 // MARK: - Preset data
@@ -48,6 +49,26 @@ private let P: [[Float]] = [
     [3, 0.42, 2.03, 0.65, 0.8, 0.3,  7, 0.25, 0, 0, 0, 2, 0.4, 0.25, 0, 40, 0, 0,
      0, 0.8, 3.0,
      0.02, 0.025, 0.03, 0.08, 0.18, 0.15, 0.40, 0.60, 0.45, 0.90, 0.80, 0.55, 0, 0, 0, 0.5, 0, 5, 0, 8, 0, 0, 3],
+    // 4: Neon metaballs (neon-drip)
+    [3, 0.15, 2.0, 0.30, 0, 0,  7, 0.28, 1.8, 1.0, 0, 2, 0, 0, 0, 40, 0, 0,
+     0, 0, 2,
+     0.005, 0.005, 0.01, 0.03, 0.02, 0.06, 0.15, 0.08, 0.30, 0.90, 0.50, 0.80, 1.0, 0, 0, 0.5, 0, 5, 0, 8, 0.2, 0, 3],
+    // 5: Moire beats (moire-interference)
+    [3, 0.15, 2.0, 0.40, 0, 0,  7, 0.25, 0, 0, 0, 2, 0, 0, 0, 40, 0, 0,
+     0, 0, 2,
+     0.01, 0.01, 0.008, 0.08, 0.06, 0.04, 0.50, 0.35, 0.15, 0.85, 0.75, 0.40, 0, 1.0, 0, 0.5, 0, 5, 0, 8, 0.1, 0, 3],
+    // 6: Burning film (burning-film)
+    [3, 0.48, 2.10, 0.65, 2.5, 1.8,  7, 0.25, 0, 0, 0, 2, 0, 0, 0, 40, 0, 0.8,
+     0.4, 0, 2,
+     0.02, 0.01, 0.005, 0.25, 0.10, 0.03, 0.80, 0.45, 0.12, 1.0, 0.85, 0.40, 0, 0, 1.0, 0.4, 0, 5, 0, 8, 0, 0, 3],
+    // 7: Spiral vortex (vortex)
+    [3, 0.42, 2.05, 0.55, 1.0, 0.5,  7, 0.25, 0, 0, 0, 2, 0, 0, 0, 40, 0, 0.2,
+     0, 0, 2,
+     0.02, 0.015, 0.008, 0.12, 0.08, 0.04, 0.55, 0.40, 0.18, 0.90, 0.75, 0.40, 0, 0, 0, 0.5, 1.0, 5, 0, 8, 0, 0, 3],
+    // 8: Kaleidoscope mandala (kaleidoscope-runway)
+    [3, 0.40, 2.05, 0.60, 1.5, 0.8,  7, 0.25, 0, 0, 0, 2, 0, 0, 0, 40, 0, 0.3,
+     0.2, 0, 2,
+     0.02, 0.015, 0.01, 0.15, 0.10, 0.06, 0.65, 0.45, 0.20, 0.95, 0.80, 0.45, 0, 0, 0, 0.5, 0, 5, 1.0, 8, 0, 0, 3],
 ]
 
 // Map preset array index to uniform buffer index
@@ -60,7 +81,7 @@ private let MAP: [Int] = [
     50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60       // t2+t3 params
 ]
 
-private let N_PRESETS = 4
+private let N_PRESETS = 9
 private let N_PARAMS = 43
 
 // MARK: - Drift functions
@@ -268,6 +289,11 @@ class MorphScreenSaverView: ScreenSaverView {
         prox[1] = drift(timeSec, speed: 0.037, seed: 2)
         prox[2] = drift(timeSec, speed: 0.025, seed: 3)
         prox[3] = drift(timeSec, speed: 0.042, seed: 5)
+        prox[4] = drift(timeSec, speed: 0.028, seed: 13)
+        prox[5] = drift(timeSec, speed: 0.020, seed: 17)
+        prox[6] = drift(timeSec, speed: 0.039, seed: 19)
+        prox[7] = drift(timeSec, speed: 0.033, seed: 23)
+        prox[8] = drift(timeSec, speed: 0.025, seed: 29)
 
         // Power-8 winner-take-all
         var sum: Float = 0.001
@@ -294,6 +320,10 @@ class MorphScreenSaverView: ScreenSaverView {
         // Voronoi always off
         buf[30] = 0
         buf[31] = 4
+
+        // Kaleido startup ramp: 0->1 over first 60 real seconds (timeSec 15)
+        let ke = min(Float(1), timeSec / KALEIDO_RAMP_TIME)
+        buf[56] *= ke * ke * (3 - 2 * ke) // smoothstep
 
         buf[27] = 0.4  // vignette
         buf[28] = 0.012 // grain

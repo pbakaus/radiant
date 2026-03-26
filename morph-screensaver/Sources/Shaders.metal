@@ -284,6 +284,49 @@ static float3 fabric_fold(float2 p, float t, constant Uniforms& u) {
     return float3(h, g);
 }
 
+// ─── Kaleidoscope fold ───
+static float2 kaleido_fold(float2 p, constant Uniforms& u) {
+    float r = length(p);
+    float a = atan2(p.y, p.x);
+    float seg = 3.14159265 / max(u.kaleido_seg, 2.0f);
+    float seg2 = seg * 2.0;
+    a = a - floor(a / seg2) * seg2;
+    if (a > seg) { a = seg2 - a; }
+    return float2(cos(a), sin(a)) * r;
+}
+
+// ─── Spiral field ───
+static float spiral_field(float2 p, float t, constant Uniforms& u) {
+    float r = length(p);
+    if (r < 0.01) { return 0.0; }
+    float theta = atan2(p.y, p.x);
+    float spiral_theta = log(r / 0.03) / 0.18;
+    float arm_spacing = 6.28318 / max(u.spiral_arms, 1.0f);
+    float raw_ang = theta - spiral_theta + t * 0.3;
+    float ang = raw_ang - floor(raw_ang / arm_spacing) * arm_spacing;
+    if (ang > arm_spacing * 0.5) { ang -= arm_spacing; }
+    float screen_d = abs(ang) * r;
+    float line_w = 0.06 * smoothstep(0.08f, 0.5f, r);
+    return smoothstep(line_w, 0.0f, screen_d) * smoothstep(0.85f, 0.15f, r);
+}
+
+// ─── Moire interference ───
+static float moire_field(float2 p, float t) {
+    float product = 1.0;
+    float additive = 0.0;
+    for (int i = 0; i < 4; i++) {
+        float fi = float(i);
+        float2 center = float2(
+            0.22 * cos(t * 0.03 * (fi + 1.0) + fi * 2.1),
+            0.18 * sin(t * 0.04 * (fi + 1.0) + fi * 1.4)
+        );
+        float ring = sin(length(p - center) * 55.0);
+        product *= ring;
+        additive += ring;
+    }
+    return product * 0.7 + additive * 0.25 * 0.3;
+}
+
 // ─── Hue rotation ───
 static float3 hue_rotate(float3 c, float a) {
     float ca = cos(a); float sa = sin(a);
@@ -302,7 +345,9 @@ fragment float4 fs(VSOut in [[stage_in]],
     // g_warp_grad: local mutable, passed by reference
     float2 g_warp_grad = float2(0.0);
 
-    float2 wp = p * u.warp_scale;
+    // Kaleidoscope: binary switch
+    float2 kp = (u.kaleido_str > 0.4) ? kaleido_fold(p, u) : p;
+    float2 wp = kp * u.warp_scale;
     float field = warped_field(wp, t, u, g_warp_grad);
 
     // Ridged noise
@@ -311,7 +356,24 @@ fragment float4 fs(VSOut in [[stage_in]],
     // Wave interference
     field += wave_field(p, t, u) * u.wave_str;
 
-    // Voronoi cracks (always off in foundation — voronoi_str = 0)
+    // Spiral arms
+    float spiral_gate = smoothstep(0.3f, 0.6f, u.spiral_str);
+    field += spiral_field(p, t, u) * spiral_gate;
+
+    // Moire interference
+    float moire_gate = smoothstep(0.3f, 0.6f, u.moire_str);
+    field += moire_field(p, t) * moire_gate;
+
+    // Burn frontier
+    float burn_gate = smoothstep(0.3f, 0.6f, u.burn_str);
+    float burn_phase = fract(t * u.burn_speed * 0.05);
+    float burn_thresh = mix(0.85f, -0.3f, smoothstep(0.0f, 0.85f, burn_phase));
+    float burn_mask = smoothstep(burn_thresh, burn_thresh - 0.12, field);
+    float burn_edge = smoothstep(burn_thresh - 0.02, burn_thresh, field)
+                    * smoothstep(burn_thresh + 0.08, burn_thresh, field);
+    field = mix(field, field * burn_mask, burn_gate);
+
+    // Voronoi cracks
     float2 vor_p = p + g_warp_grad * 0.15;
     VoronoiResult vor = voronoi_cracks(vor_p, t, u);
     float crack_edge = vor.edge_dist;
@@ -401,6 +463,10 @@ fragment float4 fs(VSOut in [[stage_in]],
     float wave_val = wave_field(p, t, u);
     float wave_crest = smoothstep(0.3f, 0.7f, wave_val) * u.wave_str;
     col += u.color_bright.rgb * wave_crest * 0.25;
+
+    // Burn frontier glow
+    col += u.color_hot.rgb * burn_edge * burn_gate * 0.8;
+    col += u.color_bright.rgb * burn_edge * burn_gate * 0.4;
 
     // Vignette
     float vig = length(p * float2(0.85, 1.0));
