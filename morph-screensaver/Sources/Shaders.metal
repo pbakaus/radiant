@@ -327,6 +327,27 @@ static float moire_field(float2 p, float t) {
     return product * 0.7 + additive * 0.25 * 0.3;
 }
 
+// ─── Chladni modes ───
+static float chladni_field(float2 p, float t, constant Uniforms& u) {
+    constexpr float PI = 3.14159265;
+    constexpr float2 modes[6] = {
+        float2(1, 2), float2(2, 3), float2(3, 4),
+        float2(4, 5), float2(3, 7), float2(5, 6)
+    };
+    float idx = clamp(u.chladni_mode, 0.0f, 4.99f);
+    int i0 = int(idx);
+    int i1 = min(i0 + 1, 5);
+    float fr = idx - float(i0);
+    float2 m0 = modes[i0]; float2 m1 = modes[i1];
+    float2 sp = p * 2.5 + float2(sin(t * 0.07), cos(t * 0.09)) * 0.3;
+    float c0 = cos(m0.x * PI * sp.x) * cos(m0.y * PI * sp.y)
+             + cos(m0.y * PI * sp.x) * cos(m0.x * PI * sp.y);
+    float c1 = cos(m1.x * PI * sp.x) * cos(m1.y * PI * sp.y)
+             + cos(m1.y * PI * sp.x) * cos(m1.x * PI * sp.y);
+    float pattern = mix(c0, c1, fr);
+    return 1.0 - smoothstep(0.0f, 0.15f, abs(pattern));
+}
+
 // ─── Hue rotation ───
 static float3 hue_rotate(float3 c, float a) {
     float ca = cos(a); float sa = sin(a);
@@ -355,6 +376,10 @@ fragment float4 fs(VSOut in [[stage_in]],
 
     // Wave interference
     field += wave_field(p, t, u) * u.wave_str;
+
+    // Chladni modes
+    float chladni_gate = smoothstep(0.3f, 0.6f, u.chladni_str);
+    field += chladni_field(p, t, u) * chladni_gate;
 
     // Spiral arms
     float spiral_gate = smoothstep(0.3f, 0.6f, u.spiral_str);
@@ -475,6 +500,10 @@ fragment float4 fs(VSOut in [[stage_in]],
     // Tone map (ACES)
     col = clamp(col, float3(0.0), float3(4.0));
     col = col * (2.51 * col + 0.03) / (col * (2.43 * col + 0.59) + 0.14);
+
+    // Chromatic aberration
+    float chroma_d = length(p) * u.chroma_str;
+    col *= float3(1.0 + chroma_d * 0.25, 1.0, 1.0 - chroma_d * 0.2);
 
     // Grain
     float grain = fract(sin(dot(in.pos.xy + fract(u.time * 7.13) * 100.0, float2(12.9898, 78.233))) * 43758.5453) - 0.5;

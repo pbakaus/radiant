@@ -69,6 +69,10 @@ private let P: [[Float]] = [
     [3, 0.40, 2.05, 0.60, 1.5, 0.8,  7, 0.25, 0, 0, 0, 2, 0, 0, 0, 40, 0, 0.3,
      0.2, 0, 2,
      0.02, 0.015, 0.01, 0.15, 0.10, 0.06, 0.65, 0.45, 0.20, 0.95, 0.80, 0.45, 0, 0, 0, 0.5, 0, 5, 1.0, 8, 0, 0, 3],
+    // 9: Chladni cymatics (chladni-resonance)
+    [3, 0.15, 2.0, 0.40, 0, 0,  7, 0.25, 0, 0, 0, 2, 0, 0, 0, 40, 0, 0.2,
+     0, 0, 2,
+     0.01, 0.01, 0.008, 0.06, 0.05, 0.04, 0.45, 0.35, 0.20, 0.90, 0.80, 0.50, 0, 0, 0, 0.5, 0, 5, 0, 8, 0, 1.0, 3],
 ]
 
 // Map preset array index to uniform buffer index
@@ -81,7 +85,7 @@ private let MAP: [Int] = [
     50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60       // t2+t3 params
 ]
 
-private let N_PRESETS = 9
+private let N_PRESETS = 10
 private let N_PARAMS = 43
 
 // MARK: - Drift functions
@@ -294,6 +298,7 @@ class MorphScreenSaverView: ScreenSaverView {
         prox[6] = drift(timeSec, speed: 0.039, seed: 19)
         prox[7] = drift(timeSec, speed: 0.033, seed: 23)
         prox[8] = drift(timeSec, speed: 0.025, seed: 29)
+        prox[9] = drift(timeSec, speed: 0.035, seed: 31)
 
         // Power-8 winner-take-all
         var sum: Float = 0.001
