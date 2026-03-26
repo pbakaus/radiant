@@ -374,37 +374,52 @@ fragment float4 fs(VSOut in [[stage_in]],
     // Ridged noise
     field = apply_ridge(field, u);
 
-    // Wave interference
-    field += wave_field(p, t, u) * u.wave_str;
+    // Wave interference (cache result for reuse in crest highlights)
+    float wave_result = wave_field(p, t, u);
+    field += wave_result * u.wave_str;
 
     // Chladni modes
-    float chladni_gate = smoothstep(0.3f, 0.6f, u.chladni_str);
-    field += chladni_field(p, t, u) * chladni_gate;
+    if (u.chladni_str > 0.01) {
+        float chladni_gate = smoothstep(0.3f, 0.6f, u.chladni_str);
+        field += chladni_field(p, t, u) * chladni_gate;
+    }
 
     // Spiral arms
-    float spiral_gate = smoothstep(0.3f, 0.6f, u.spiral_str);
-    field += spiral_field(p, t, u) * spiral_gate;
+    if (u.spiral_str > 0.01) {
+        float spiral_gate = smoothstep(0.3f, 0.6f, u.spiral_str);
+        field += spiral_field(p, t, u) * spiral_gate;
+    }
 
     // Moire interference
-    float moire_gate = smoothstep(0.3f, 0.6f, u.moire_str);
-    field += moire_field(p, t) * moire_gate;
+    if (u.moire_str > 0.01) {
+        float moire_gate = smoothstep(0.3f, 0.6f, u.moire_str);
+        field += moire_field(p, t) * moire_gate;
+    }
 
     // Burn frontier
-    float burn_gate = smoothstep(0.3f, 0.6f, u.burn_str);
-    float burn_phase = fract(t * u.burn_speed * 0.05);
-    float burn_thresh = mix(0.85f, -0.3f, smoothstep(0.0f, 0.85f, burn_phase));
-    float burn_mask = smoothstep(burn_thresh, burn_thresh - 0.12, field);
-    float burn_edge = smoothstep(burn_thresh - 0.02, burn_thresh, field)
-                    * smoothstep(burn_thresh + 0.08, burn_thresh, field);
-    field = mix(field, field * burn_mask, burn_gate);
+    float burn_gate = 0.0;
+    float burn_edge = 0.0;
+    if (u.burn_str > 0.01) {
+        burn_gate = smoothstep(0.3f, 0.6f, u.burn_str);
+        float burn_phase = fract(t * u.burn_speed * 0.05);
+        float burn_thresh = mix(0.85f, -0.3f, smoothstep(0.0f, 0.85f, burn_phase));
+        float burn_mask = smoothstep(burn_thresh, burn_thresh - 0.12, field);
+        burn_edge = smoothstep(burn_thresh - 0.02, burn_thresh, field)
+                  * smoothstep(burn_thresh + 0.08, burn_thresh, field);
+        field = mix(field, field * burn_mask, burn_gate);
+    }
 
     // Voronoi cracks
-    float2 vor_p = p + g_warp_grad * 0.15;
-    VoronoiResult vor = voronoi_cracks(vor_p, t, u);
-    float crack_edge = vor.edge_dist;
-    float crack_cut = smoothstep(0.12f, 0.0f, crack_edge);
-    field = mix(field, field * 0.3 - 0.2, crack_cut * u.voronoi_str);
-    field += (vor.min_dist - 0.3) * u.voronoi_str * 0.2;
+    float crack_edge = 1.0;
+    float crack_cut = 0.0;
+    if (u.voronoi_str > 0.01) {
+        float2 vor_p = p + g_warp_grad * 0.15;
+        VoronoiResult vor = voronoi_cracks(vor_p, t, u);
+        crack_edge = vor.edge_dist;
+        crack_cut = smoothstep(0.12f, 0.0f, crack_edge);
+        field = mix(field, field * 0.3 - 0.2, crack_cut * u.voronoi_str);
+        field += (vor.min_dist - 0.3) * u.voronoi_str * 0.2;
+    }
 
     // Orbs
     OrbResult orbs = compute_orbs(p, t, u);
@@ -417,9 +432,12 @@ fragment float4 fs(VSOut in [[stage_in]],
     float height = field * envelope + orbs.field * (1.0 - u.orb_color_mode) * 0.08;
 
     // Fabric fold
-    float3 fold = fabric_fold(p, t, u);
-    height = mix(height, fold.x, u.fold_str);
-    float2 fold_grad = fold.yz * u.fold_str;
+    float2 fold_grad = float2(0.0);
+    if (u.fold_str > 0.01) {
+        float3 fold = fabric_fold(p, t, u);
+        height = mix(height, fold.x, u.fold_str);
+        fold_grad = fold.yz * u.fold_str;
+    }
 
     // Normal
     float2 grad = g_warp_grad * 0.3 + fold_grad * 1.8;
@@ -484,9 +502,8 @@ fragment float4 fs(VSOut in [[stage_in]],
     float crack_glow = smoothstep(0.06f, 0.0f, crack_edge) * u.voronoi_str;
     col += u.color_hot.rgb * crack_glow * 0.6;
 
-    // Wave crest highlights
-    float wave_val = wave_field(p, t, u);
-    float wave_crest = smoothstep(0.3f, 0.7f, wave_val) * u.wave_str;
+    // Wave crest highlights (reuse cached wave_result)
+    float wave_crest = smoothstep(0.3f, 0.7f, wave_result) * u.wave_str;
     col += u.color_bright.rgb * wave_crest * 0.25;
 
     // Burn frontier glow
