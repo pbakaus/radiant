@@ -197,10 +197,10 @@ class RadiantScreenSaverView: ScreenSaverView {
         let timeSec = Float((now - startTime) * 1000.0 / TIME_DIVISOR)
         let phaseElapsed = now - phaseStartTime
 
-        // State machine
+        // State machine: seqIndex always points to the DISPLAYED shader.
+        // Advance at morph START so the incoming shader becomes current for the next dwell.
         if isMorphing {
             if phaseElapsed >= MORPH_S {
-                seqIndex += 1
                 isMorphing = false
                 phaseStartTime = now
             }
@@ -208,10 +208,10 @@ class RadiantScreenSaverView: ScreenSaverView {
             if phaseElapsed >= DWELL_S {
                 isMorphing = true
                 phaseStartTime = now
+                seqIndex += 1 // advance here: outgoing = seqIndex-1, incoming = seqIndex
             }
         }
 
-        // Recalculate after state change
         let phaseNow = now - phaseStartTime
 
         // Fill uniforms
@@ -226,7 +226,7 @@ class RadiantScreenSaverView: ScreenSaverView {
 
         if isMorphing {
             let progress = Float(min(phaseNow / MORPH_S, 1.0))
-            let nextIdx = shuffledOrder[(seqIndex + 1) % shuffledOrder.count]
+            let outIdx = shuffledOrder[((seqIndex - 1) % shuffledOrder.count + shuffledOrder.count) % shuffledOrder.count]
 
             // Pass 1: outgoing shader at alpha = (1 - progress), clear first
             let passA = MTLRenderPassDescriptor()
@@ -236,21 +236,21 @@ class RadiantScreenSaverView: ScreenSaverView {
             passA.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
 
             if let enc = commandBuffer.makeRenderCommandEncoder(descriptor: passA) {
-                enc.setRenderPipelineState(pipelines[currentIdx])
+                enc.setRenderPipelineState(pipelines[outIdx])
                 enc.setFragmentBuffer(uniformBuffer, offset: 0, index: 0)
                 enc.setBlendColor(red: 1, green: 1, blue: 1, alpha: Float(1.0 - progress))
                 enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
                 enc.endEncoding()
             }
 
-            // Pass 2: incoming shader at alpha = progress, load (additive blend)
+            // Pass 2: incoming shader (= current for next dwell) at alpha = progress
             let passB = MTLRenderPassDescriptor()
             passB.colorAttachments[0].texture = drawable.texture
             passB.colorAttachments[0].loadAction = .load
             passB.colorAttachments[0].storeAction = .store
 
             if let enc = commandBuffer.makeRenderCommandEncoder(descriptor: passB) {
-                enc.setRenderPipelineState(pipelines[nextIdx])
+                enc.setRenderPipelineState(pipelines[currentIdx])
                 enc.setFragmentBuffer(uniformBuffer, offset: 0, index: 0)
                 enc.setBlendColor(red: 1, green: 1, blue: 1, alpha: progress)
                 enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
