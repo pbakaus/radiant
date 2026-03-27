@@ -20,6 +20,8 @@ Thumbs.db
 # Temp/reference files
 tmp/
 inspo/
+docs/
+music/
 
 # Env
 .env
