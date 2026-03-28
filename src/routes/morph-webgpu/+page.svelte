@@ -24,6 +24,8 @@
 	let rainCanvas: HTMLCanvasElement | undefined = $state(); // rain overlay
 	let mouseX = 0;
 	let mouseY = 0;
+	let rainMouseDown = false;
+	let rainWipeAt: ((cx: number, cy: number) => void) | null = null;
 	let supported = $state(true);
 	let audio: MorphAudio | null = null;
 	let audioLoading = false;
@@ -195,8 +197,24 @@
 				'neon-drip', 'moiré', 'burning-film', 'vortex', 'kaleidoscope', 'chladni'
 			];
 
-			// Pre-allocate proximity array
-			const prox = new Float64Array(N_PRESETS);
+			// ── Sequential crossfade ──
+			// Slow A→B→C crossfade between presets. Each transition is long
+			// enough to feel like a smooth morph, not a cut.
+			const HOLD_S  = 3;   // quarter-speed seconds at full preset (~12s real)
+			const XFADE_S = 12;  // quarter-speed seconds for crossfade (~48s real)
+			const SEGMENT_S = HOLD_S + XFADE_S;
+
+			// Shuffled order (Fisher-Yates at init)
+			const order = Array.from({ length: N_PRESETS }, (_, i) => i);
+			for (let i = order.length - 1; i > 0; i--) {
+				const j = Math.floor(Math.random() * (i + 1));
+				[order[i], order[j]] = [order[j], order[i]];
+			}
+
+			function smoothstep(t: number): number {
+				const c = Math.max(0, Math.min(1, t));
+				return c * c * (3 - 2 * c);
+			}
 
 			// Debug HUD frame counter
 			let debugFrameCount = 0;
@@ -204,32 +222,21 @@
 			function tick(now: number) {
 				const timeSec = (now - start) / 4000; // quarter speed
 
-				// Proximity signals
-				prox[0] = drift(timeSec, 0.018, 1);
-				prox[1] = drift(timeSec, 0.037, 2);
-				prox[4] = drift(timeSec, 0.028, 13);
-				prox[5] = drift(timeSec, 0.020, 17);
-				prox[6] = drift(timeSec, 0.039, 19);
-				prox[7] = drift(timeSec, 0.033, 23);
-				prox[8] = drift(timeSec, 0.025, 29);
-				prox[9] = drift(timeSec, 0.035, 31);
-				prox[2] = drift(timeSec, 0.025, 3);
-				prox[3] = drift(timeSec, 0.042, 5);
+				// Which segment are we in, and where within it?
+				const totalCycle = SEGMENT_S * N_PRESETS;
+				const pos = ((timeSec % totalCycle) + totalCycle) % totalCycle; // always positive
+				const segIdx = Math.max(0, Math.min(Math.floor(pos / SEGMENT_S), N_PRESETS - 1));
+				const segT = pos - segIdx * SEGMENT_S;
 
-				// Power-8 winner-take-all: ~80% dominance with 10 presets
-				let sum = 0.001;
-				for (let i = 0; i < N_PRESETS; i++) {
-					const p2 = prox[i] * prox[i];
-					const p4 = p2 * p2;
-					prox[i] = p4 * p4;
-					sum += prox[i];
-				}
-				for (let i = 0; i < N_PRESETS; i++) { prox[i] /= sum; }
+				const fromIdx = order[segIdx];
+				const toIdx = order[(segIdx + 1) % N_PRESETS];
 
-				// Blend toward attractors
+				// Hold phase: full "from" preset. Crossfade phase: blend from→to.
+				const blend = segT < HOLD_S ? 0 : smoothstep((segT - HOLD_S) / XFADE_S);
+
+				// Interpolate parameters
 				for (let j = 0; j < N_PARAMS; j++) {
-					let v = 0;
-					for (let i = 0; i < N_PRESETS; i++) { v += prox[i] * P[i][j]; }
+					let v = P[fromIdx][j] + (P[toIdx][j] - P[fromIdx][j]) * blend;
 					v *= 1.0 + (drift(timeSec, 0.12, j + 60) - 0.5) * 0.06;
 					buf[MAP[j]] = v;
 				}
@@ -255,12 +262,11 @@
 
 				buf[U_RES_X] = cw;
 				buf[U_RES_Y] = ch;
-				buf[U_MOUSE_X] = mouseX * dpr;
-				buf[U_MOUSE_Y] = (innerHeight - mouseY) * dpr;
-				// Zoom center: slowly drifts around center, mouse nudges it gently
-				const hasMouseInput = mouseX > 0 || mouseY > 0;
-				const cx = hasMouseInput ? 0.3 + (mouseX / innerWidth) * 0.4 : 0.5;
-				const cy = hasMouseInput ? 0.3 + (1.0 - mouseY / innerHeight) * 0.4 : 0.5;
+				buf[U_MOUSE_X] = 0;
+				buf[U_MOUSE_Y] = 0;
+				// Zoom center: autonomous drift only (mouse reserved for rain wipe)
+				const cx = 0.5;
+				const cy = 0.5;
 				buf[U_ZOOM_CENTER_X] = cx + drift(timeSec, 0.025, 31) * 0.15 - 0.075;
 				buf[U_ZOOM_CENTER_Y] = cy + drift(timeSec, 0.02, 32) * 0.15 - 0.075;
 
@@ -276,12 +282,10 @@
 				// Debug HUD: update every 30 frames to avoid reactive overhead
 				if (showDebug && ++debugFrameCount >= 30) {
 					debugFrameCount = 0;
-					let maxW = 0, maxI = 0;
-					for (let i = 0; i < N_PRESETS; i++) {
-						if (prox[i] > maxW) { maxW = prox[i]; maxI = i; }
-					}
 					fpsText = `${engine!.gpuFps} gpu fps`;
-					dominantPreset = `${PRESET_NAMES[maxI]} ${Math.round(maxW * 100)}%`;
+					dominantPreset = blend < 0.01
+						? PRESET_NAMES[fromIdx]
+						: `${PRESET_NAMES[fromIdx]} → ${PRESET_NAMES[toIdx]} ${Math.round(blend * 100)}%`;
 				}
 				raf = requestAnimationFrame(tick);
 			}
@@ -652,6 +656,38 @@
 				drops = []; dropletsCounter = 0; rdLastRender = null;
 			}
 
+			// ── Wipe interaction (click/drag to wipe drops off glass) ──
+			const WIPE_BASE_R = 150;
+
+			function screenToRd(clientX: number, clientY: number) {
+				return {
+					x: (clientX / innerWidth)  * (rdW / rdScale),
+					y: (clientY / innerHeight) * (rdH / rdScale),
+				};
+			}
+
+			function wipeAt(clientX: number, clientY: number) {
+				const p = screenToRd(clientX, clientY);
+				const wipeR = WIPE_BASE_R * rdScale;
+				const killR = wipeR * 0.5;
+				const pushR = wipeR * 1.5;
+				clearDroplets(p.x, p.y, wipeR / rdScale);
+				for (let i = drops.length - 1; i >= 0; i--) {
+					const d = drops[i];
+					const dx = d.x - p.x, dy = d.y - p.y;
+					const dist = Math.sqrt(dx * dx + dy * dy);
+					if (dist < killR) {
+						drops.splice(i, 1);
+					} else if (dist < pushR) {
+						const push = (1 - (dist - killR) / (pushR - killR)) * 20;
+						d.x += (dx / dist) * push;
+						d.y += (dy / dist) * push * 0.6;
+					}
+				}
+			}
+
+			rainWipeAt = wipeAt;
+
 			// ── WebGL refraction renderer ──
 			// Refracts morphSnap (written by morph's own rAF) through the drop normal map.
 
@@ -746,7 +782,8 @@
 			const fgTex    = initTex(1);  // full-res morphSnap — refracted through drop lens
 			const bgTex    = initTex(2);  // 1/8-scale morphSnap — blurred bg between drops
 
-			// Small canvas for cheap blur: drawImage at 1/8 scale, bilinear upscale = free gaussian
+			// Small canvas for cheap blur: drawImage at 1/2 scale, bilinear upscale ≈ gaussian
+			const BG_DOWNSAMPLE = 2;
 			const blurCanvas = mkCanvas(2, 2);
 			const blurCtx    = blurCanvas.getContext('2d')!;
 
@@ -755,8 +792,8 @@
 				rc.width  = innerWidth;
 				rc.height = innerHeight;
 				gl.viewport(0, 0, rc.width, rc.height);
-				blurCanvas.width  = Math.max(1, Math.floor(rc.width  / 8));
-				blurCanvas.height = Math.max(1, Math.floor(rc.height / 8));
+				blurCanvas.width  = Math.max(1, Math.floor(rc.width  / BG_DOWNSAMPLE));
+				blurCanvas.height = Math.max(1, Math.floor(rc.height / BG_DOWNSAMPLE));
 				initRd(rc.width, rc.height, 1);
 			}
 			resizeRain();
@@ -812,6 +849,28 @@
 		}
 		// ── End rain overlay ─────────────────────────────────────────────────
 
+		// ── Touch wipe (registered on all devices) ──────────────────────────
+		function handleTouchStartWipe(e: TouchEvent) {
+			e.preventDefault();
+			rainMouseDown = true;
+			const t = e.touches[0];
+			mouseX = t.clientX; mouseY = t.clientY;
+			rainWipeAt?.(t.clientX, t.clientY);
+		}
+		function handleTouchMoveWipe(e: TouchEvent) {
+			e.preventDefault();
+			if (!e.touches[0]) return;
+			const t = e.touches[0];
+			mouseX = t.clientX; mouseY = t.clientY;
+			if (rainMouseDown) rainWipeAt?.(t.clientX, t.clientY);
+		}
+		function handleTouchEndWipe() {
+			rainMouseDown = false;
+		}
+		window.addEventListener('touchstart', handleTouchStartWipe, { passive: false });
+		window.addEventListener('touchmove', handleTouchMoveWipe, { passive: false });
+		window.addEventListener('touchend', handleTouchEndWipe);
+
 		// ── Mobile vs desktop UI behaviour ──────────────────────────────────
 		const isMobile = 'ontouchstart' in window;
 		let cursorTimer: ReturnType<typeof setTimeout>;
@@ -827,7 +886,7 @@
 
 			// Double-tap to toggle audio
 			let lastTap = 0;
-			async function handleTouchEnd() {
+			async function handleDoubleTap() {
 				const now = Date.now();
 				if (now - lastTap < 350) {
 					lastTap = 0;
@@ -850,8 +909,10 @@
 					lastTap = now;
 				}
 			}
-			window.addEventListener('touchend', handleTouchEnd);
-			cleanupCursor = () => window.removeEventListener('touchend', handleTouchEnd);
+			window.addEventListener('touchend', handleDoubleTap);
+			cleanupCursor = () => {
+				window.removeEventListener('touchend', handleDoubleTap);
+			};
 		} else {
 			// Desktop: hide cursor + UI after 3s inactivity
 			const CURSOR_HIDE_MS = 3000;
@@ -877,19 +938,24 @@
 			cancelAnimationFrame(raf);
 			cancelAnimationFrame(rainRaf);
 			window.removeEventListener('keydown', handleKey);
+			window.removeEventListener('touchstart', handleTouchStartWipe);
+			window.removeEventListener('touchmove', handleTouchMoveWipe);
+			window.removeEventListener('touchend', handleTouchEndWipe);
 			cleanupCursor();
 			clearTimeout(soundFeedbackTimer);
 			if (onResize) window.removeEventListener('resize', onResize);
 			audio?.destroy();
 			engine?.destroy();
+			rainWipeAt = null;
 		};
 	});
 </script>
 
 <svelte:window
 	onkeydown={(e) => { if (e.key === 'Escape') history.back(); }}
-	onmousemove={(e) => { mouseX = e.clientX; mouseY = e.clientY; }}
-	ontouchmove={(e) => { if (e.touches[0]) { mouseX = e.touches[0].clientX; mouseY = e.touches[0].clientY; } }}
+	onmousedown={(e) => { rainMouseDown = true; rainWipeAt?.(e.clientX, e.clientY); }}
+	onmousemove={(e) => { mouseX = e.clientX; mouseY = e.clientY; if (rainMouseDown) rainWipeAt?.(e.clientX, e.clientY); }}
+	onmouseup={() => { rainMouseDown = false; }}
 />
 
 <svelte:head>
