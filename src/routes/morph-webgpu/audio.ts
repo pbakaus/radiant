@@ -16,10 +16,10 @@ import {
 
 // ── Filter / LFO constants ──
 const CUTOFF_MIN_HZ = 200;
-const CUTOFF_MAX_HZ = 8000;
-const CUTOFF_RATIO = CUTOFF_MAX_HZ / CUTOFF_MIN_HZ; // 40
+const CUTOFF_MAX_HZ = 20000;
+const CUTOFF_RATIO = CUTOFF_MAX_HZ / CUTOFF_MIN_HZ; // 100
 const FILTER_Q = 2.0;
-const LFO_RATE_HZ = 0.08;
+const LFO_RATE_HZ = 0.04; // half speed — 25s full cycle
 const LFO_DEPTH_OCTAVES = 1.0;
 const TWO_PI = Math.PI * 2;
 const SMOOTHING_S = 0.016; // ~1 frame exponential smoothing
@@ -123,18 +123,29 @@ export class MorphAudio {
 			W_EDGE_GLOW * buf[U_EDGE_GLOW_STR] +
 			W_FOLD * buf[U_FOLD_STR];
 
-		// Exponential mapping: sharpness 0→200Hz, 1→8000Hz
+		// Exponential mapping: sharpness 0→200Hz, 1→20000Hz
 		const baseCutoff = CUTOFF_MIN_HZ * Math.pow(CUTOFF_RATIO, sharpness);
 
-		// LFO: slow sine modulation ±1 octave
+		// LFO: square-wave-like shape (fundamental + 3rd + 5th harmonics).
+		// Spends ~half the cycle near +1 (20kHz, unfiltered) and half near -1 (dark).
+		// tanh soft-clips the Gibbs overshoot to keep within ±1.
 		const lfoPhase = performance.now() * 0.001 * LFO_RATE_HZ * TWO_PI;
-		const lfoValue = Math.sin(lfoPhase);
+		const lfoRaw = Math.sin(lfoPhase) + Math.sin(3 * lfoPhase) / 3 + Math.sin(5 * lfoPhase) / 5;
+		const lfoValue = Math.tanh(lfoRaw * 1.8);
 		const cutoff = baseCutoff * Math.pow(2, lfoValue * LFO_DEPTH_OCTAVES);
 
 		// Apply to both filter stages with exponential smoothing
 		const t = this.ctx.currentTime;
 		this.lpf1.frequency.setTargetAtTime(cutoff, t, SMOOTHING_S);
 		this.lpf2.frequency.setTargetAtTime(cutoff, t, SMOOTHING_S);
+	}
+
+	/** Ramp gain to targetVol over durationS seconds. Does not change _volume or _muted state. */
+	rampGain(targetVol: number, durationS: number): void {
+		if (!this._started) return;
+		const now = this.ctx.currentTime;
+		this.gain.gain.setValueAtTime(this.gain.gain.value, now);
+		this.gain.gain.linearRampToValueAtTime(targetVol, now + durationS);
 	}
 
 	/** Toggle mute with crossfade. Returns true if now playing. */

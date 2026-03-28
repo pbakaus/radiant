@@ -20,6 +20,8 @@ Thumbs.db
 # Temp/reference files
 tmp/
 inspo/
+docs/
+music/
 
 # Env
 .env
@@ -33,6 +35,9 @@ vite.config.ts.timestamp-*
 
 # Build artifacts
 static/radiant-shaders.zip
+morph-screensaver/build/
+radiant-screensaver/build/
+screensaver-webgpu-poc/build/
 
 # Generated videos
 videos/
