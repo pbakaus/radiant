@@ -298,30 +298,6 @@ fn kaleido_fold(p: vec2f) -> vec2f {
   return vec2f(cos(a), sin(a)) * r;
 }
 
-// ─── Aurora curtain ───
-// Vertical sine-displaced luminous lines with per-line phase variation.
-fn curtain_field(p: vec2f, t: f32) -> f32 {
-  var glow = 0.0;
-  let count = i32(u.curtain_count + 0.5);
-  for (var i = 0; i < 8; i++) {
-    if (i >= count) { break; }
-    let fi = f32(i);
-    let spacing = 1.6 / max(u.curtain_count, 1.0);
-    var cx = (fi - u.curtain_count * 0.5 + 0.5) * spacing;
-    // Horizontal drift
-    cx += sin(t * (0.12 + fi * 0.02) + fi * 1.7) * 0.15;
-    // Vertical sine displacement: multi-freq stack
-    let disp = sin(p.y * 3.0 + t * 0.4 + fi * 2.3) * 0.08
-             + sin(p.y * 7.0 - t * 0.25 + fi * 1.1) * 0.03
-             + sin(p.y * 1.5 + t * 0.15 + fi * 3.7) * 0.12;
-    let dx = abs(p.x - cx - disp);
-    // Tapered width: narrower at top/bottom
-    let width = 0.025 * (1.0 - smoothstep(0.3, 0.6, abs(p.y)));
-    glow += smoothstep(width * 2.0, 0.0, dx) * 0.4;
-  }
-  return glow;
-}
-
 // ─── Chladni modes ───
 // Standing-wave eigenfunctions: cos(nπx)cos(mπy) + cos(mπx)cos(nπy).
 // Sand accumulates on nodal lines where field ≈ 0.
@@ -424,14 +400,6 @@ fn fs(@builtin(position) frag_coord: vec4f) -> @location(0) vec4f {
   if (u.wave_str > 0.01) {
     wave_raw = wave_field(p, t);
     field += wave_raw * u.wave_str;
-  }
-
-  // Aurora curtain: vertical flowing light threads — gated to skip loop when inactive
-  var curtain_val = 0.0;
-  if (u.curtain_str > 0.01) {
-    let curtain_gate = smoothstep(0.3, 0.6, u.curtain_str);
-    curtain_val = curtain_field(p, t) * curtain_gate;
-    field += curtain_val;
   }
 
   // Chladni modes: cymatics standing-wave patterns — gated to skip when inactive
