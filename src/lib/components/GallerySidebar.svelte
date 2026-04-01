@@ -1,12 +1,21 @@
 <script lang="ts">
 	import { getSidebarSections } from '$lib/gallery-filters';
+	import { getSavedIds } from '$lib/saved-shaders.svelte';
 
-	let { currentPath }: { currentPath: string } = $props();
+	let { currentPath } = $props<{ currentPath: string }>();
 
 	const sections = getSidebarSections();
+	const savedCount = $derived(getSavedIds().length);
 </script>
 
 <aside class="sidebar">
+	<div class="section">
+		<h3>Saved</h3>
+		<a href="/gallery/saved" class:active={currentPath === '/gallery/saved'}>
+			<span class="label">My Collection</span>
+			<span class="count">{savedCount}</span>
+		</a>
+	</div>
 	{#each sections as section}
 		<div class="section">
 			<h3>{section.title}</h3>

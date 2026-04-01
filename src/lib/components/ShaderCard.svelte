@@ -3,6 +3,7 @@
 	import { getPaletteForInspiration, hexToRgb } from '$lib/inspiration-palettes';
 	import { colorSchemes, type ColorScheme } from '$lib/color-schemes';
 	import { fetchShaderHtml, getLiveMode } from '$lib/shader-budget.svelte';
+	import { toggleSaved, getSavedIds } from '$lib/saved-shaders.svelte';
 
 	let { shader, scheme }: { shader: Shader; scheme: ColorScheme } = $props();
 
@@ -100,6 +101,15 @@
 	function onMouseLeave() {
 		hovered = false;
 	}
+
+	// ── Save ─────────────────────────────────────────────────────────
+	const saved = $derived(getSavedIds().includes(shader.id));
+
+	function onSave(e: MouseEvent) {
+		e.preventDefault();
+		e.stopPropagation();
+		toggleSaved(shader.id);
+	}
 </script>
 
 <a
@@ -118,6 +128,19 @@
 			style:background-image={visible ? `url(/previews/${shader.id}.webp)` : 'none'}
 			style:background-position="0 {spritePosY}%"
 		></div>
+
+		<!-- Bookmark button -->
+		<button
+			class="save-btn"
+			class:saved={saved}
+			onclick={onSave}
+			aria-label={saved ? 'Remove from saved' : 'Save shader'}
+			title={saved ? 'Remove from saved' : 'Save'}
+		>
+			<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill={saved ? 'currentColor' : 'none'} stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+				<path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+			</svg>
+		</button>
 
 		<!-- Hover hint: fades when active -->
 		{#if !getLiveMode()}
@@ -181,6 +204,40 @@
 	.preview-sprite.hidden {
 		opacity: 0;
 	}
+	.save-btn {
+		position: absolute;
+		top: 0.6rem;
+		right: 0.6rem;
+		z-index: 4;
+		width: 36px;
+		height: 36px;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		background: rgba(10, 10, 10, 0.6);
+		backdrop-filter: blur(4px);
+		-webkit-backdrop-filter: blur(4px);
+		border: 1px solid rgba(200, 149, 108, 0.2);
+		border-radius: 6px;
+		color: rgba(232, 224, 216, 0.4);
+		cursor: pointer;
+		opacity: 0;
+		transition: opacity 0.2s, color 0.2s, border-color 0.2s;
+		padding: 0;
+	}
+	.card:hover .save-btn {
+		opacity: 1;
+	}
+	.save-btn:hover {
+		color: #c8956c;
+		border-color: rgba(200, 149, 108, 0.5);
+	}
+	.save-btn.saved {
+		opacity: 1;
+		color: #c8956c;
+		border-color: rgba(200, 149, 108, 0.5);
+	}
+
 	.hover-hint {
 		position: absolute;
 		bottom: 0.6rem;
