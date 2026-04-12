@@ -12,6 +12,9 @@
 	let activeScheme: ColorScheme = $state(colorSchemes[0]);
 	let heroVisible = $state(true);
 	let heroEl: HTMLElement | undefined = $state(undefined);
+	const siteUrl = 'https://radiant-shaders.com';
+	const pageUrl = siteUrl;
+	const shareImageUrl = `${siteUrl}/og-image.png`;
 
 	const featuredIds = ['event-horizon', 'gilded-fracture', 'kinetic-grid', 'flow-field', 'torn-paper', 'silk-cascade'];
 	const featuredShaders = $derived(
@@ -33,14 +36,19 @@
 <svelte:head>
 	<title>Radiant — Open Source Shaders & Effects</title>
 	<meta name="description" content="130+ production-ready shaders and visual effects for the web. No dependencies. Just drop in." />
+	<link rel="canonical" href={pageUrl} />
+	<meta property="og:url" content={pageUrl} />
 	<meta property="og:title" content="Radiant — Open Source Shaders & Effects" />
 	<meta property="og:description" content="130+ production-ready shaders and visual effects for the web. No dependencies. Just drop in." />
-	<meta property="og:image" content="https://radiant.website/og-image.png" />
+	<meta property="og:image" content={shareImageUrl} />
+	<meta property="og:image:type" content="image/png" />
+	<meta property="og:image:alt" content="Radiant gallery preview showing multiple generative shaders and effects." />
 	<meta property="og:type" content="website" />
 	<meta name="twitter:card" content="summary_large_image" />
 	<meta name="twitter:title" content="Radiant — Open Source Shaders & Effects" />
 	<meta name="twitter:description" content="130+ production-ready shaders and visual effects for the web. No dependencies. Just drop in." />
-	<meta name="twitter:image" content="https://radiant.website/og-image.png" />
+	<meta name="twitter:image" content={shareImageUrl} />
+	<meta name="twitter:image:alt" content="Radiant gallery preview showing multiple generative shaders and effects." />
 </svelte:head>
 
 <div bind:this={heroEl}>
