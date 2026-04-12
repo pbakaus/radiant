@@ -1278,6 +1278,11 @@ async function recordShader(page, baseUrl, devUrl, shader, options) {
 		// Force a repaint before capture (needed for Canvas 2D shaders)
 		await page.evaluate(() => new Promise(r => setTimeout(r, 0)));
 
+		// Bail out loudly if the tab crashed — don't silently capture crash UI frames.
+		if (page.__crashError) {
+			throw new Error(`Chrome tab crashed at frame ${frame}/${totalFrames}: ${page.__crashError.message}`);
+		}
+
 		// Capture the frame as PNG
 		const screenshot = await page.screenshot({
 			type: 'png',
@@ -1448,6 +1453,16 @@ async function main() {
 	});
 
 	const page = await browser.newPage();
+
+	// Crash detection. page.on('error') fires when the tab crashes (e.g. GPU process OOM,
+	// shader watchdog timeout). Without this, page.screenshot() silently captures the
+	// "aw snap" crash UI and encodes it into the final mp4.
+	page.__crashError = null;
+	page.on('error', (err) => { page.__crashError = err; });
+	page.on('pageerror', (err) => {
+		// Don't fail on pageerror (script errors are sometimes benign), just log.
+		console.error(`  [page error] ${err.message}`);
+	});
 
 	// Inject the rAF override before any page loads
 	await page.evaluateOnNewDocument(RAF_OVERRIDE_SCRIPT);
