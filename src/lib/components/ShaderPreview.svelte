@@ -146,9 +146,11 @@
 		<div class="mock-layout bg-layout">
 			<iframe use:hideLabel src="/{shader.file}" title={shader.title} style:filter></iframe>
 			<div class="mock-overlay">
-				<h2>Welcome</h2>
-				<p>Content overlaid on a full-viewport shader background with a darkening layer.</p>
-				<div class="mock-btn">Call to Action</div>
+				<div class="mock-overlay-content">
+					<h2>Welcome</h2>
+					<p>Content overlaid on a full-viewport shader background with a darkening layer.</p>
+					<div class="mock-btn">Call to Action</div>
+				</div>
 			</div>
 		</div>
 	{:else if layout === 'accent'}
@@ -292,6 +294,13 @@
 		background: rgba(10, 10, 10, 0.7);
 		padding: 2rem;
 		z-index: 1;
+		pointer-events: none;
+	}
+	.mock-overlay-content {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		pointer-events: auto;
 	}
 
 	/* Accent layout: shader's left side visible, anchored to right edge */

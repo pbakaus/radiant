@@ -327,6 +327,13 @@ function backgroundTemplate(shader: Shader, shaderEmbed: string, filterStyle: st
     justify-content: center;
     text-align: center;
     z-index: 1;
+    pointer-events: none;
+  }
+  .overlay-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    pointer-events: auto;
   }
   .overlay h1 {
     font-size: 3rem;
@@ -356,9 +363,11 @@ function backgroundTemplate(shader: Shader, shaderEmbed: string, filterStyle: st
   <section class="viewport">
     <iframe id="shader"${filterStyle}></iframe>
     <div class="overlay">
-      <h1>Welcome</h1>
-      <p>Content overlaid on a full-viewport shader background with a darkening layer.</p>
-      <a href="#" class="btn">Call to Action</a>
+      <div class="overlay-content">
+        <h1>Welcome</h1>
+        <p>Content overlaid on a full-viewport shader background with a darkening layer.</p>
+        <a href="#" class="btn">Call to Action</a>
+      </div>
     </div>
   </section>
 

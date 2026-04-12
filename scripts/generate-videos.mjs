@@ -693,14 +693,15 @@ const RAF_OVERRIDE_SCRIPT = `
 
 	// Store the real rAF but replace with our controlled version
 	const _realRAF = window.requestAnimationFrame;
-	let _storedCallback = null;
+	const _storedCallbacks = new Map();
+	let _nextId = 1;
 	let _accumulatedTime = 0;
 
-	// Override rAF to capture the callback
+	// Override rAF to capture ALL callbacks (shader + FPS counter, etc.)
 	window.requestAnimationFrame = function(cb) {
-		_storedCallback = cb;
-		// Return a fake ID
-		return 1;
+		const id = _nextId++;
+		_storedCallbacks.set(id, cb);
+		return id;
 	};
 
 	// Also override performance.now to return our controlled time
@@ -717,13 +718,13 @@ const RAF_OVERRIDE_SCRIPT = `
 		return _baseDateNow + _accumulatedTime;
 	};
 
-	// Expose advance function: steps time forward by dt ms and calls the stored callback
+	// Expose advance function: steps time forward by dt ms and calls ALL stored callbacks
 	window.__captureAdvanceFrame = function(dt) {
 		_accumulatedTime += dt;
 		const currentTime = _baseTime + _accumulatedTime;
-		if (_storedCallback) {
-			const cb = _storedCallback;
-			_storedCallback = null;
+		const cbs = Array.from(_storedCallbacks.values());
+		_storedCallbacks.clear();
+		for (const cb of cbs) {
 			cb(currentTime);
 		}
 	};
@@ -1323,7 +1324,7 @@ function parseArgs() {
 		format: 'landscape',
 		fps: 60,
 		warmup: DEFAULT_WARMUP_FRAMES,
-		devUrl: 'http://localhost:5174',
+		devUrl: 'http://localhost:5173',
 		scene: null, // debug: only render a specific scene
 		output: join(ROOT, 'videos'),
 		captions: true
