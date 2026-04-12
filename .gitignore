@@ -16,6 +16,7 @@ Thumbs.db
 .gemini/
 .claude/projects/
 .claude/worktrees/
+agents/
 
 # Temp/reference files
 tmp/
