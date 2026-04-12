@@ -22,7 +22,7 @@
 				<h1>{title}</h1>
 				<p>{description}</p>
 			</div>
-			<button class="live-toggle" class:active={live} onclick={toggleLive} title={live ? 'Disable live previews' : 'Enable live previews for all visible shaders'}>
+			<button class="live-toggle" class:active={live} onclick={toggleLive} title={live ? 'Disable live previews' : 'Enable live previews for all visible shaders'} aria-label={live ? 'Disable live previews' : 'Enable live previews'} aria-pressed={live}>
 				<span class="live-dot"></span>
 				<span class="live-label">Live</span>
 			</button>
@@ -65,7 +65,7 @@
 		background: transparent;
 		color: rgba(232, 224, 216, 0.5);
 		font-family: inherit;
-		font-size: 0.65rem;
+		font-size: 0.75rem;
 		text-transform: uppercase;
 		letter-spacing: 0.12em;
 		cursor: pointer;

@@ -39,4 +39,9 @@
 			transform: scaleX(0.95);
 		}
 	}
+	@media (prefers-reduced-motion: reduce) {
+		.ambient-glow {
+			animation: none;
+		}
+	}
 </style>

@@ -103,8 +103,19 @@
 	}
 
 	$effect(() => {
+		function handleVisibility() {
+			if (document.visibilityState === 'hidden') {
+				cancelAnimationFrame(rafId);
+			} else {
+				rafId = requestAnimationFrame(smoothUpdate);
+			}
+		}
+		document.addEventListener('visibilitychange', handleVisibility);
 		rafId = requestAnimationFrame(smoothUpdate);
-		return () => cancelAnimationFrame(rafId);
+		return () => {
+			cancelAnimationFrame(rafId);
+			document.removeEventListener('visibilitychange', handleVisibility);
+		};
 	});
 
 	function onChromatic(e: Event) {
@@ -149,6 +160,8 @@
 					class:active={scheme.id === s.id}
 					style:background={s.swatch}
 					title={s.name}
+					aria-label={s.name}
+					aria-pressed={scheme.id === s.id}
 					onclick={() => onschemechange?.(s)}
 				></button>
 			{/each}
@@ -295,7 +308,7 @@
 		cursor: pointer;
 	}
 	.control span {
-		font-size: 0.65rem;
+		font-size: 0.75rem;
 		text-transform: uppercase;
 		letter-spacing: 0.1em;
 		color: rgba(200, 149, 108, 0.5);
@@ -346,6 +359,13 @@
 		cursor: pointer;
 		transition: border-color 0.2s, transform 0.15s;
 		padding: 0;
+		/* Expand hit area without changing visual size */
+		position: relative;
+	}
+	.scheme-dot::after {
+		content: '';
+		position: absolute;
+		inset: -10px;
 	}
 	.scheme-dot:hover {
 		transform: scale(1.2);
@@ -360,7 +380,7 @@
 		flex-shrink: 0;
 	}
 	.hint {
-		font-size: 0.55rem;
+		font-size: 0.75rem;
 		text-transform: uppercase;
 		letter-spacing: 0.1em;
 		color: rgba(200, 149, 108, 0.3);

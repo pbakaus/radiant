@@ -103,7 +103,7 @@
 	{#if layout === 'hero' && hasCustomHero}
 		<div class="mock-layout hero-custom-layout">
 			<iframe use:hideLabel use:sendHeroParams src="/{shader.file}" title={shader.title} style:filter></iframe>
-			<div class="hero-custom-overlay">
+			<div class="hero-custom-overlay" aria-hidden="true">
 				<div class="mock-nav">
 					<span class="mock-logo">acme</span>
 					<span class="mock-links">
@@ -122,7 +122,7 @@
 			</div>
 		</div>
 	{:else if layout === 'hero'}
-		<div class="mock-layout hero-layout">
+		<div class="mock-layout hero-layout" aria-hidden="true">
 			<div class="mock-nav">
 				<span class="mock-logo">acme</span>
 				<span class="mock-links">
@@ -143,7 +143,7 @@
 			</div>
 		</div>
 	{:else if layout === 'background'}
-		<div class="mock-layout bg-layout">
+		<div class="mock-layout bg-layout" aria-hidden="true">
 			<iframe use:hideLabel src="/{shader.file}" title={shader.title} style:filter></iframe>
 			<div class="mock-overlay">
 				<div class="mock-overlay-content">
@@ -154,7 +154,7 @@
 			</div>
 		</div>
 	{:else if layout === 'accent'}
-		<div class="mock-layout accent-layout">
+		<div class="mock-layout accent-layout" aria-hidden="true">
 			<iframe use:hideLabel src="/{shader.file}" title={shader.title} style:filter></iframe>
 			<div class="mock-content">
 				<h2>Creative Studio</h2>

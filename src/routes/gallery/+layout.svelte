@@ -2,11 +2,14 @@
 	import GallerySidebar from '$lib/components/GallerySidebar.svelte';
 	import Footer from '$lib/components/Footer.svelte';
 	import { colorSchemes, type ColorScheme } from '$lib/color-schemes';
-	import { page } from '$app/stores';
+	import { page } from '$app/state';
 	import { onMount, setContext } from 'svelte';
+	const currentPath = $derived(page.url.pathname as string);
+	import { getToast } from '$lib/toast.svelte';
 
 	let { children } = $props();
 	let activeScheme: ColorScheme = $state(colorSchemes[0]);
+	const toast = $derived(getToast());
 
 	// Share active scheme with child pages via context
 	setContext('colorScheme', () => activeScheme);
@@ -41,13 +44,11 @@
 
 	<!-- Mobile sidebar overlay -->
 	{#if sidebarOpen}
-		<!-- svelte-ignore a11y_click_events_have_key_events -->
-		<!-- svelte-ignore a11y_no_static_element_interactions -->
-		<div class="sidebar-overlay" onclick={() => sidebarOpen = false}></div>
+		<button class="sidebar-overlay" onclick={() => sidebarOpen = false} aria-label="Close sidebar"></button>
 	{/if}
 
 	<div class="sidebar-wrapper" class:open={sidebarOpen}>
-		<GallerySidebar currentPath={$page.url.pathname} />
+		<GallerySidebar {currentPath} />
 	</div>
 
 	<main class="gallery-main" bind:this={galleryEl}>
@@ -70,6 +71,12 @@
 	{/each}
 </div>
 {/if}
+
+<!-- Toast notification -->
+{#if toast}
+	<div class="toast">{toast}</div>
+{/if}
+
 
 <Footer />
 
@@ -120,6 +127,9 @@
 
 	.sidebar-overlay {
 		display: none;
+		border: none;
+		padding: 0;
+		cursor: pointer;
 	}
 
 	/* Floating color scheme controls */
@@ -153,7 +163,7 @@
 		border: 1px solid transparent;
 		border-radius: 20px;
 		color: rgba(232, 224, 216, 0.4);
-		font-size: 0.6rem;
+		font-size: 0.75rem;
 		font-family: inherit;
 		text-transform: uppercase;
 		letter-spacing: 0.08em;
@@ -205,6 +215,55 @@
 			z-index: 54;
 			background: rgba(0, 0, 0, 0.5);
 		}
+	}
+
+	/* Toast */
+	.toast {
+		position: fixed;
+		bottom: 6.5rem;
+		left: 50%;
+		transform: translateX(-50%);
+		z-index: 100;
+		padding: 0.5rem 1.1rem;
+		background: rgba(20, 20, 20, 0.92);
+		backdrop-filter: blur(10px);
+		-webkit-backdrop-filter: blur(10px);
+		border: 1px solid rgba(200, 149, 108, 0.3);
+		border-radius: 20px;
+		font-size: 0.75rem;
+		color: #e8e0d8;
+		white-space: nowrap;
+		animation: fadeUp 0.2s ease;
+		pointer-events: none;
+	}
+
+	/* Saved FAB */
+	.saved-fab {
+		position: fixed;
+		bottom: 1.5rem;
+		right: 1.5rem;
+		z-index: 50;
+		display: flex;
+		align-items: center;
+		gap: 0.45rem;
+		padding: 0.5rem 1rem;
+		background: rgba(200, 149, 108, 0.12);
+		backdrop-filter: blur(12px);
+		-webkit-backdrop-filter: blur(12px);
+		border: 1px solid rgba(200, 149, 108, 0.35);
+		border-radius: 20px;
+		color: #c8956c;
+		font-size: 0.7rem;
+		font-family: inherit;
+		text-transform: uppercase;
+		letter-spacing: 0.08em;
+		text-decoration: none;
+		transition: background 0.2s, border-color 0.2s;
+		animation: fadeUp 0.3s ease;
+	}
+	.saved-fab:hover {
+		background: rgba(200, 149, 108, 0.2);
+		border-color: rgba(200, 149, 108, 0.6);
 	}
 
 	@media (max-width: 640px) {

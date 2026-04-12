@@ -25,7 +25,7 @@
 			<button class="panel-btn" onclick={copySource}>
 				{copied ? 'Copied!' : 'Copy'}
 			</button>
-			<button class="panel-btn close-btn" onclick={onclose}>&times;</button>
+			<button class="panel-btn close-btn" onclick={onclose} aria-label="Close source viewer">&times;</button>
 		</div>
 	</div>
 	<div class="panel-body">
@@ -54,7 +54,7 @@
 		flex-shrink: 0;
 	}
 	.panel-title {
-		font-size: 0.7rem;
+		font-size: 0.75rem;
 		text-transform: uppercase;
 		letter-spacing: 0.12em;
 		color: rgba(232, 224, 216, 0.4);
@@ -65,7 +65,7 @@
 	}
 	.panel-btn {
 		padding: 0.3rem 0.6rem;
-		font-size: 0.7rem;
+		font-size: 0.75rem;
 		font-family: inherit;
 		color: #c8956c;
 		background: transparent;

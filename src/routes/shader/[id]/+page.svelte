@@ -56,10 +56,10 @@
 	);
 
 	const layouts: { id: Layout; label: string; icon: string }[] = [
-		{ id: 'full', label: 'Full screen', icon: '⬜' },
-		{ id: 'background', label: 'Background', icon: '▣' },
-		{ id: 'hero', label: 'Hero section', icon: '◧' },
-		{ id: 'accent', label: 'Accent', icon: '◨' }
+		{ id: 'full', label: 'Full screen', icon: 'full' },
+		{ id: 'background', label: 'Background', icon: 'bg' },
+		{ id: 'hero', label: 'Hero section', icon: 'hero' },
+		{ id: 'accent', label: 'Accent', icon: 'accent' }
 	];
 
 	function sendParam(name: string, value: number) {
@@ -134,8 +134,23 @@
 							class:disabled={isMobile && desktopOnly}
 							onclick={() => { if (!(isMobile && desktopOnly)) activeLayout = layout.id; }}
 							title={isMobile && desktopOnly ? 'Desktop only' : layout.label}
+							aria-label={layout.label}
+							aria-pressed={activeLayout === layout.id}
 						>
-							<span class="ctrl-icon">{layout.icon}</span>
+							<svg aria-hidden="true" class="ctrl-icon" width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
+								{#if layout.icon === 'full'}
+									<rect x="1" y="1" width="12" height="12" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/>
+								{:else if layout.icon === 'bg'}
+									<rect x="1" y="1" width="12" height="12" rx="1" opacity="0.35"/>
+									<rect x="3.5" y="3.5" width="7" height="7" rx="0.5"/>
+								{:else if layout.icon === 'hero'}
+									<rect x="1" y="1" width="12" height="12" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/>
+									<rect x="1" y="1" width="6" height="12" rx="1" opacity="0.6"/>
+								{:else if layout.icon === 'accent'}
+									<rect x="1" y="1" width="12" height="12" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/>
+									<rect x="7" y="1" width="6" height="12" rx="1" opacity="0.6"/>
+								{/if}
+							</svg>
 							<span class="ctrl-text">{layout.label}</span>
 						</button>
 					{/each}
@@ -309,7 +324,7 @@
 		gap: 0.5rem;
 	}
 	.sidebar-label {
-		font-size: 0.65rem;
+		font-size: 0.75rem;
 		text-transform: uppercase;
 		letter-spacing: 0.12em;
 		color: rgba(232, 224, 216, 0.35);
@@ -325,12 +340,12 @@
 		display: flex;
 		align-items: center;
 		gap: 0.35rem;
-		padding: 0.3rem 0.55rem;
+		padding: 0.35rem 0.6rem;
 		background: transparent;
 		border: 1px solid rgba(200, 149, 108, 0.1);
 		border-radius: 4px;
 		color: rgba(232, 224, 216, 0.5);
-		font-size: 0.65rem;
+		font-size: 0.75rem;
 		font-family: inherit;
 		cursor: pointer;
 		transition:
@@ -352,8 +367,8 @@
 		cursor: not-allowed;
 	}
 	.ctrl-icon {
-		font-size: 0.8rem;
-		line-height: 1;
+		flex-shrink: 0;
+		display: block;
 	}
 	.ctrl-text {
 		display: inline;
@@ -380,14 +395,14 @@
 		gap: 0.2rem;
 	}
 	.param-label {
-		font-size: 0.65rem;
+		font-size: 0.75rem;
 		color: rgba(232, 224, 216, 0.5);
 	}
 	.param-row:has(.param-slider:active) .param-label {
 		color: #c8956c;
 	}
 	.param-value {
-		font-size: 0.6rem;
+		font-size: 0.75rem;
 		color: rgba(232, 224, 216, 0.3);
 		font-variant-numeric: tabular-nums;
 		align-self: flex-end;
@@ -435,7 +450,7 @@
 	}
 	.action-btn {
 		padding: 0.4rem 0.75rem;
-		font-size: 0.65rem;
+		font-size: 0.75rem;
 		font-family: inherit;
 		font-weight: 500;
 		letter-spacing: 0.03em;
