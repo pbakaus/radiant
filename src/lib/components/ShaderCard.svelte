@@ -102,6 +102,17 @@
 		hovered = false;
 	}
 
+	function trackHover(node: HTMLElement) {
+		node.addEventListener('mouseenter', onMouseEnter);
+		node.addEventListener('mouseleave', onMouseLeave);
+		return {
+			destroy() {
+				node.removeEventListener('mouseenter', onMouseEnter);
+				node.removeEventListener('mouseleave', onMouseLeave);
+			}
+		};
+	}
+
 	// ── Save ─────────────────────────────────────────────────────────
 	const saved = $derived(getSavedIds().includes(shader.id));
 
@@ -112,63 +123,67 @@
 	}
 </script>
 
-<a
-	class="card"
-	href="/shader/{shader.id}"
+<div
+	class="card-shell"
 	style:--card-accent={cardAccent}
-	onmouseenter={onMouseEnter}
-	onmouseleave={onMouseLeave}
 	use:observe
+	use:trackHover
 >
-	<div class="card-preview">
-		<!-- Static sprite preview -->
-		<div
-			class="preview-sprite"
-			class:hidden={showIframe}
-			style:background-image={visible ? `url(/previews/${shader.id}.webp)` : 'none'}
-			style:background-position="0 {spritePosY}%"
-		></div>
+	<a class="card" href="/shader/{shader.id}">
+		<div class="card-preview">
+			<!-- Static sprite preview -->
+			<div
+				class="preview-sprite"
+				class:hidden={showIframe}
+				style:background-image={visible ? `url(/previews/${shader.id}.webp)` : 'none'}
+				style:background-position="0 {spritePosY}%"
+			></div>
 
-		<!-- Bookmark button -->
-		<button
-			class="save-btn"
-			class:saved={saved}
-			onclick={onSave}
-			aria-label={saved ? 'Remove from saved' : 'Save shader'}
-			title={saved ? 'Remove from saved' : 'Save'}
-		>
-			<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill={saved ? 'currentColor' : 'none'} stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-				<path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
-			</svg>
-		</button>
+			<!-- Hover hint: fades when active -->
+			{#if !getLiveMode()}
+				<div class="hover-hint" class:hide={hovered}>
+					<span>Hover to preview</span>
+				</div>
+			{/if}
 
-		<!-- Hover hint: fades when active -->
-		{#if !getLiveMode()}
-			<div class="hover-hint" class:hide={hovered}>
-				<span>Hover to preview</span>
-			</div>
-		{/if}
+			<!-- Iframe: created once HTML is fetched + preload slot granted -->
+			{#if loadIframe && srcdoc}
+				<iframe
+					class:show={showIframe}
+					{srcdoc}
+					title={shader.title}
+					style:filter={scheme.filter}
+					onload={(e) => onIframeLoad(e.currentTarget as HTMLIFrameElement)}
+				></iframe>
+			{/if}
+		</div>
+		<div class="card-info">
+			<div class="card-number">{number}{#if shader.inspiration} <span class="card-muse">— inspired by {shader.inspiration}</span>{/if}</div>
+			<div class="card-title">{shader.title}</div>
+			<div class="card-desc">{shader.desc}</div>
+			<span class="card-action">Explore &rarr;</span>
+		</div>
+	</a>
 
-		<!-- Iframe: created once HTML is fetched + preload slot granted -->
-		{#if loadIframe && srcdoc}
-			<iframe
-				class:show={showIframe}
-				{srcdoc}
-				title={shader.title}
-				style:filter={scheme.filter}
-				onload={(e) => onIframeLoad(e.currentTarget as HTMLIFrameElement)}
-			></iframe>
-		{/if}
-	</div>
-	<div class="card-info">
-		<div class="card-number">{number}{#if shader.inspiration} <span class="card-muse">— inspired by {shader.inspiration}</span>{/if}</div>
-		<div class="card-title">{shader.title}</div>
-		<div class="card-desc">{shader.desc}</div>
-		<span class="card-action">Explore &rarr;</span>
-	</div>
-</a>
+	<button
+		type="button"
+		class="save-btn"
+		class:saved={saved}
+		onclick={onSave}
+		aria-label={saved ? 'Remove from saved' : 'Save shader'}
+		aria-pressed={saved}
+		title={saved ? 'Remove from saved' : 'Save'}
+	>
+		<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill={saved ? 'currentColor' : 'none'} stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+			<path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+		</svg>
+	</button>
+</div>
 
 <style>
+	.card-shell {
+		position: relative;
+	}
 	.card {
 		border: 1px solid rgba(var(--card-accent, 200, 149, 108), 0.25);
 		border-radius: 8px;
@@ -179,7 +194,8 @@
 		background: #111;
 		display: block;
 	}
-	.card:hover {
+	.card-shell:hover .card,
+	.card-shell:focus-within .card {
 		border-color: rgba(var(--card-accent, 200, 149, 108), 0.55);
 		transform: translateY(-2px);
 	}
@@ -225,7 +241,8 @@
 		transition: opacity 0.2s, color 0.2s, border-color 0.2s;
 		padding: 0;
 	}
-	.card:hover .save-btn {
+	.card-shell:hover .save-btn,
+	.card-shell:focus-within .save-btn {
 		opacity: 1;
 	}
 	.save-btn:hover {
@@ -236,6 +253,11 @@
 		opacity: 1;
 		color: #c8956c;
 		border-color: rgba(200, 149, 108, 0.5);
+	}
+	@media (hover: none), (pointer: coarse) {
+		.save-btn {
+			opacity: 1;
+		}
 	}
 
 	.hover-hint {
