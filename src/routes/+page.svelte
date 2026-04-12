@@ -14,7 +14,7 @@
 	let heroEl: HTMLElement | undefined = $state(undefined);
 	const siteUrl = 'https://radiant-shaders.com';
 	const pageUrl = siteUrl;
-	const shareImageUrl = `${siteUrl}/og-image.png`;
+	const shareImageUrl = `${siteUrl}/og-image.jpg`;
 
 	const featuredIds = ['event-horizon', 'gilded-fracture', 'kinetic-grid', 'flow-field', 'torn-paper', 'silk-cascade'];
 	const featuredShaders = $derived(
@@ -41,7 +41,7 @@
 	<meta property="og:title" content="Radiant — Open Source Shaders & Effects" />
 	<meta property="og:description" content="130+ production-ready shaders and visual effects for the web. No dependencies. Just drop in." />
 	<meta property="og:image" content={shareImageUrl} />
-	<meta property="og:image:type" content="image/png" />
+	<meta property="og:image:type" content="image/jpeg" />
 	<meta property="og:image:alt" content="Radiant gallery preview showing multiple generative shaders and effects." />
 	<meta property="og:type" content="website" />
 	<meta name="twitter:card" content="summary_large_image" />
