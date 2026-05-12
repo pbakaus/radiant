@@ -1,6 +1,6 @@
 import { error } from '@sveltejs/kit';
 import { getShaderById } from '$lib/shaders';
-import { hasArticle, articles } from '$lib/articles';
+import { hasArticle, articles, articleMeta } from '$lib/articles';
 import type { PageLoad } from './$types';
 
 export const prerender = true;
@@ -13,7 +13,8 @@ export const load: PageLoad = ({ params }) => {
 	if (!hasArticle(params.id)) {
 		throw error(404, 'No deep dive written for this shader yet');
 	}
-	return { shader };
+	const meta = articleMeta[params.id];
+	return { shader, meta };
 };
 
 export function entries() {

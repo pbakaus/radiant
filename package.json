@@ -13,7 +13,8 @@
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"generate-previews": "node scripts/generate-previews.mjs",
-		"generate-videos": "node scripts/generate-videos.mjs"
+		"generate-videos": "node scripts/generate-videos.mjs",
+		"generate-share-image": "node scripts/generate-share-image.mjs"
 	},
 	"devDependencies": {
 		"@sveltejs/adapter-static": "^3.0.10",

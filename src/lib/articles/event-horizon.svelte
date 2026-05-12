@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { Shader } from '$lib/shaders';
+	import { articleMeta } from '$lib/articles';
 	import ArticleShell from '$lib/components/article/ArticleShell.svelte';
 	import Sandbox from '$lib/components/article/Sandbox.svelte';
 	import Code from '$lib/components/article/Code.svelte';
@@ -10,6 +11,7 @@
 	import Compare from '$lib/components/article/Compare.svelte';
 
 	let { shader }: { shader: Shader } = $props();
+	const meta = articleMeta['event-horizon'];
 
 	// ─── Code excerpts ────────────────────────────────────────────
 	const geodesicCode = `// Schwarzschild geodesic step (in fragment shader)
@@ -83,10 +85,10 @@ if (pos.y * p1.y < 0.0 && diskAccum.a < 0.97) {
 
 <ArticleShell
 	{shader}
-	title="How to render a black hole"
-	subtitle="A real-time Schwarzschild ray tracer in under six hundred lines of WebGL. The geodesic equation, Doppler beaming, a photon ring you can actually see."
-	author="Paul Bakaus & Claude"
-	readingTime="20 minute read · 5 interactive sandboxes"
+	title={meta.title}
+	subtitle={meta.subtitle}
+	author={meta.author}
+	readingTime={meta.readingTime}
 >
 	<p>
 		The image in the header is not a texture, a video, or a 3D model. It's the output of a fragment
