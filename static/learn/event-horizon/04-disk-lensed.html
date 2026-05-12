@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Step 04 — Disk + Lensing</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 16px; left: 18px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 10px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">04 · Disk + Lensing</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// Step 04 — Bend the rays AND let them pass through the disk plane.
+// The disk uses Novikov-Thorne shading but Doppler beaming is OFF —
+// you can see the disk wrap over the top symmetrically.
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var gl = canvas.getContext('webgl', { alpha: false, antialias: false });
+  if (!gl) return;
+  var vertSrc = 'attribute vec2 a_pos; void main(){ gl_Position = vec4(a_pos, 0.0, 1.0); }';
+  var fragSrc = `
+precision highp float;
+uniform float u_time;
+uniform vec2 u_res;
+uniform float u_rotationSpeed;
+uniform float u_diskIntensity;
+uniform float u_tilt;
+uniform float u_rotate;
+uniform float u_dragX;
+uniform float u_dragY;
+
+const float PI = 3.14159265359;
+const float TAU = 6.28318530718;
+const float RS = 1.0;
+const float ISCO = 3.0;
+const float DISK_IN = 2.2;
+const float DISK_OUT = 14.0;
+
+float hash(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+float gNoise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  vec2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+  return mix(mix(hash(i), hash(i + vec2(1, 0)), u.x),
+             mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), u.x), u.y);
+}
+float fbm(vec2 p) {
+  float v = 0.0, a = 0.5;
+  mat2 rot = mat2(0.866, 0.5, -0.5, 0.866);
+  for (int i = 0; i < 4; i++) { v += a * gNoise(p); p = rot * p * 2.03 + vec2(47.0, 13.0); a *= 0.49; }
+  return v;
+}
+vec3 starField(vec3 rd) {
+  float u = atan(rd.z, rd.x) / TAU + 0.5;
+  float v = asin(clamp(rd.y, -0.999, 0.999)) / PI + 0.5;
+  vec3 col = vec3(0.0);
+  vec2 c = floor(vec2(u, v) * 55.0); vec2 f = fract(vec2(u, v) * 55.0);
+  vec2 r = vec2(hash(c), hash(c + 127.1));
+  float d = length(f - r); float b = pow(r.x, 10.0) * exp(-d * d * 500.0);
+  col += mix(vec3(1.0, 0.65, 0.35), vec3(0.55, 0.75, 1.0), r.y) * b * 4.0;
+  return col;
+}
+vec3 bbColor(float t) {
+  t = clamp(t, 0.0, 2.5);
+  vec3 lo = vec3(1.0, 0.18, 0.0);
+  vec3 mi = vec3(1.0, 0.55, 0.12);
+  vec3 hi = vec3(1.0, 0.93, 0.82);
+  vec3 hot = vec3(0.65, 0.82, 1.0);
+  vec3 c = mix(lo, mi, smoothstep(0.0, 0.3, t));
+  c = mix(c, hi, smoothstep(0.3, 0.8, t));
+  return mix(c, hot, smoothstep(0.8, 1.8, t));
+}
+
+// Disk shading WITHOUT Doppler beaming (the "fair" symmetric version)
+vec4 shadeDisk(vec3 hit, float time) {
+  float r = length(hit.xz);
+  if (r < DISK_IN * 0.5 || r > DISK_OUT * 1.05) return vec4(0.0);
+
+  float xr = ISCO / r;
+  float tProfile = pow(ISCO / r, 0.75) * pow(max(0.001, 1.0 - sqrt(xr)), 0.25);
+  float gRedshift = sqrt(max(0.01, 1.0 - RS / r));
+  tProfile *= gRedshift;
+
+  float keplerOmega = sqrt(0.5 * RS / (r * r * r));
+  float omega = max(keplerOmega, 0.04) * 10.0;
+  float rotAngle = time * omega;
+  float ca = cos(rotAngle), sa = sin(rotAngle);
+  vec2 rotXZ = vec2(hit.x * ca - hit.z * sa, hit.x * sa + hit.z * ca);
+  float lr = log2(max(r, 0.1));
+  float turb = fbm(rotXZ * 1.2 + vec2(lr * 3.0));
+  turb = 0.25 + 0.75 * turb;
+
+  float ringPhase1 = sin(r * 10.0 + rotAngle * r * 0.3) * 0.5 + 0.5;
+  float ringPhase2 = sin(r * 20.0 - rotAngle * r * 0.15) * 0.5 + 0.5;
+  float rings = ringPhase1 * 0.55 + ringPhase2 * 0.45;
+  rings = 0.5 + 0.5 * rings;
+  turb *= rings;
+
+  float I = tProfile * turb * 6.0;
+  float innerFade = smoothstep(DISK_IN * 0.7, DISK_IN * 1.2, r);
+  float iscoFade = 0.35 + 0.65 * smoothstep(ISCO * 0.85, ISCO * 1.2, r);
+  float outerFade = 1.0 - smoothstep(DISK_OUT * 0.55, DISK_OUT, r);
+  I *= innerFade * iscoFade * outerFade;
+
+  // NO Doppler factor here — same brightness on approaching and receding sides.
+  vec3 col = bbColor(tProfile * 1.2) * I;
+  float alpha = clamp(I * 1.3, 0.0, 0.96);
+  return vec4(col, alpha);
+}
+
+void main() {
+  vec2 uv = (gl_FragCoord.xy - 0.5 * u_res) / u_res.x;
+  float orbit = u_time * 0.055 * u_rotationSpeed + u_dragX;
+  float tilt = 0.25 + u_tilt + u_dragY;
+  vec3 eye = vec3(28.0 * cos(orbit) * cos(tilt), 28.0 * sin(tilt), 28.0 * sin(orbit) * cos(tilt));
+  vec3 fwd = normalize(-eye);
+  vec3 rt  = normalize(cross(fwd, vec3(0.0, 1.0, 0.0)));
+  vec3 up  = cross(rt, fwd);
+  float cr = cos(u_rotate), sr = sin(u_rotate);
+  vec3 rr = cr * rt + sr * up;
+  vec3 ru = -sr * rt + cr * up;
+  vec3 rd = normalize(fwd + uv.x * rr + uv.y * ru);
+
+  vec3 pos = eye;
+  vec3 vel = rd;
+  vec3 Lvec = cross(pos, vel);
+  float L2 = dot(Lvec, Lvec);
+  float gravCoeff = -1.5 * RS * L2;
+
+  vec4 diskAccum = vec4(0.0);
+  bool absorbed = false;
+  int diskCrossings = 0;
+
+  for (int i = 0; i < 200; i++) {
+    float r = length(pos);
+    float h = 0.16 * clamp(r - 0.4 * RS, 0.06, 3.5);
+    float invR2 = 1.0 / (r * r); float invR5 = invR2 * invR2 / r;
+    vec3 acc = (gravCoeff * invR5) * pos;
+    vec3 p1 = pos + vel * h + 0.5 * acc * h * h;
+    float r1 = length(p1);
+    float invR12 = 1.0 / (r1 * r1); float invR15 = invR12 * invR12 / r1;
+    vec3 acc1 = (gravCoeff * invR15) * p1;
+    vec3 v1 = vel + 0.5 * (acc + acc1) * h;
+
+    if (pos.y * p1.y < 0.0 && diskAccum.a < 0.97) {
+      float t = pos.y / (pos.y - p1.y);
+      vec3 hit = mix(pos, p1, t);
+      vec4 dc = shadeDisk(hit, u_time * u_rotationSpeed);
+      dc.rgb *= u_diskIntensity;
+      if (diskCrossings >= 2) { dc.rgb *= 0.15; dc.a *= 0.15; }
+      diskAccum.rgb += dc.rgb * dc.a * (1.0 - diskAccum.a);
+      diskAccum.a += dc.a * (1.0 - diskAccum.a);
+      diskCrossings++;
+    }
+
+    if (r1 < RS * 0.35) { absorbed = true; break; }
+    if (r1 > 25.0 && r1 > r) break;
+    if (r1 > 55.0) break;
+    pos = p1; vel = v1;
+  }
+
+  vec3 col = vec3(0.0);
+  if (!absorbed) col = starField(normalize(vel));
+  col = col * (1.0 - diskAccum.a) + diskAccum.rgb;
+  col *= 1.4;
+  vec3 a = col * (col + 0.0245786) - 0.000090537;
+  vec3 b = col * (0.983729 * col + 0.4329510) + 0.238081;
+  col = a / b;
+  col = pow(max(col, 0.0), vec3(0.92));
+  gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
+}
+`;
+  function compile(type, src){ var s=gl.createShader(type); gl.shaderSource(s,src); gl.compileShader(s); if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)) console.error(gl.getShaderInfoLog(s)); return s; }
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog); gl.useProgram(prog);
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog,'a_pos'); gl.enableVertexAttribArray(aPos); gl.vertexAttribPointer(aPos,2,gl.FLOAT,false,0,0);
+  var u = function(n){ return gl.getUniformLocation(prog,n); };
+  var uTime=u('u_time'), uRes=u('u_res'), uRot=u('u_rotationSpeed'), uDI=u('u_diskIntensity'),
+      uTilt=u('u_tilt'), uRoll=u('u_rotate'), uDragX=u('u_dragX'), uDragY=u('u_dragY');
+
+  var rotV = 0.3, diV = 1.0, tiltV = 0.0, rollV = 0.0;
+  var dragX = 0, dragY = 0;
+  var mouseDown=false, lastX=0, lastY=0;
+  canvas.addEventListener('mousedown', function(e){ mouseDown=true; lastX=e.clientX; lastY=e.clientY; });
+  canvas.addEventListener('mousemove', function(e){ if(mouseDown){ dragX += (e.clientX-lastX)*0.005; dragY += (e.clientY-lastY)*0.003; dragY=Math.max(-0.8,Math.min(0.8,dragY)); lastX=e.clientX; lastY=e.clientY; }});
+  canvas.addEventListener('mouseup', function(){ mouseDown=false; });
+  canvas.addEventListener('touchstart', function(e){ e.preventDefault(); mouseDown=true; lastX=e.touches[0].clientX; lastY=e.touches[0].clientY; }, {passive:false});
+  canvas.addEventListener('touchmove', function(e){ e.preventDefault(); if(mouseDown){ dragX += (e.touches[0].clientX-lastX)*0.005; dragY += (e.touches[0].clientY-lastY)*0.003; dragY=Math.max(-0.8,Math.min(0.8,dragY)); lastX=e.touches[0].clientX; lastY=e.touches[0].clientY; }}, {passive:false});
+  canvas.addEventListener('touchend', function(){ mouseDown=false; });
+
+  var dpr = Math.min(window.devicePixelRatio||1, 1.5);
+  var running=true, needsResize=true;
+  function resize(){ var w=Math.round(canvas.clientWidth*dpr), h=Math.round(canvas.clientHeight*dpr); if(canvas.width!==w||canvas.height!==h){ canvas.width=w; canvas.height=h; gl.viewport(0,0,w,h); gl.uniform2f(uRes,w,h);} needsResize=false; }
+  function render(now){ if(!running) return; if(needsResize) resize();
+    gl.uniform1f(uTime, now*0.001);
+    gl.uniform1f(uRot, rotV); gl.uniform1f(uDI, diV);
+    gl.uniform1f(uTilt, tiltV); gl.uniform1f(uRoll, rollV);
+    gl.uniform1f(uDragX, dragX); gl.uniform1f(uDragY, dragY);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+  window.addEventListener('resize', function(){ needsResize=true; });
+  resize(); requestAnimationFrame(render);
+  document.addEventListener('visibilitychange', function(){ if(document.hidden) running=false; else { running=true; requestAnimationFrame(render); } });
+
+  window.addEventListener('message', function(e){
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'ROTATION_SPEED': rotV = e.data.value; break;
+        case 'DISK_INTENSITY': diV = e.data.value; break;
+        case 'TILT':           tiltV = e.data.value; break;
+        case 'ROTATE':         rollV = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

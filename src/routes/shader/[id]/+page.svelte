@@ -197,6 +197,13 @@
 			</div>
 			{/if}
 
+			{#if shader.hasArticle}
+				<a class="deep-dive-cta" href="/learn/{shader.id}">
+					<span class="deep-dive-label">Deep dive</span>
+					<span class="deep-dive-title">How to render a black hole &rarr;</span>
+				</a>
+			{/if}
+
 			<div class="sidebar-section actions-section">
 				<button class="action-btn" class:active={showSource} onclick={toggleSource}>
 					{showSource ? 'Hide' : 'View'} Source
@@ -472,6 +479,33 @@
 	.action-btn.active {
 		border-color: rgba(200, 149, 108, 0.5);
 		background: rgba(200, 149, 108, 0.08);
+	}
+
+	.deep-dive-cta {
+		display: flex;
+		flex-direction: column;
+		gap: 0.2rem;
+		padding: 0.7rem 0.85rem;
+		background: rgba(200, 149, 108, 0.06);
+		border: 1px solid rgba(200, 149, 108, 0.25);
+		border-radius: 5px;
+		text-decoration: none;
+		transition: border-color 0.2s, background 0.2s;
+	}
+	.deep-dive-cta:hover {
+		border-color: rgba(200, 149, 108, 0.5);
+		background: rgba(200, 149, 108, 0.1);
+	}
+	.deep-dive-label {
+		font-size: 0.65rem;
+		text-transform: uppercase;
+		letter-spacing: 0.16em;
+		color: rgba(200, 149, 108, 0.7);
+	}
+	.deep-dive-title {
+		font-size: 0.8rem;
+		color: #e8e0d8;
+		line-height: 1.3;
 	}
 
 	@media (max-width: 768px) {

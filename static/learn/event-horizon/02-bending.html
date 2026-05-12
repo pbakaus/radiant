@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Step 02 — Bending Light</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed;
+    top: 16px; left: 18px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 10px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.5);
+    z-index: 10;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">02 · Light Bending</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// Step 02 — Add gravity. Same starfield as Step 01, but each ray
+// is now integrated along a Schwarzschild geodesic instead of a
+// straight line. No accretion disk yet — pure gravitational lensing.
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var gl = canvas.getContext('webgl', { alpha: false, antialias: false });
+  if (!gl) return;
+
+  var vertSrc = 'attribute vec2 a_pos; void main(){ gl_Position = vec4(a_pos, 0.0, 1.0); }';
+  var fragSrc = `
+precision highp float;
+uniform float u_time;
+uniform vec2 u_res;
+uniform float u_rotateSpeed;
+uniform float u_tilt;
+uniform float u_dragX;
+uniform float u_dragY;
+uniform float u_mass;     // Schwarzschild radius in scene units
+uniform float u_steps;    // visualization of step count
+uniform float u_showGrid; // 0/1: overlay a "background grid" instead of stars
+
+const float PI = 3.14159265359;
+const float TAU = 6.28318530718;
+
+float hash(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+
+vec3 starField(vec3 rd) {
+  float u = atan(rd.z, rd.x) / TAU + 0.5;
+  float v = asin(clamp(rd.y, -0.999, 0.999)) / PI + 0.5;
+  vec3 col = vec3(0.0);
+  {
+    vec2 cell = floor(vec2(u, v) * 55.0);
+    vec2 f = fract(vec2(u, v) * 55.0);
+    vec2 r = vec2(hash(cell), hash(cell + 127.1));
+    float d = length(f - r);
+    float b = pow(r.x, 10.0) * exp(-d * d * 500.0);
+    col += mix(vec3(1.0, 0.65, 0.35), vec3(0.55, 0.75, 1.0), r.y) * b * 4.0;
+  }
+  {
+    vec2 cell = floor(vec2(u, v) * 170.0);
+    vec2 f = fract(vec2(u, v) * 170.0);
+    vec2 r = vec2(hash(cell + 43.0), hash(cell + 91.0));
+    float d = length(f - r);
+    float b = pow(r.x, 18.0) * exp(-d * d * 1000.0);
+    col += vec3(0.85, 0.88, 1.0) * b * 2.0;
+  }
+  return col;
+}
+
+// Lat/long grid as background — makes lensing geometry obvious
+vec3 gridSky(vec3 rd) {
+  float u = atan(rd.z, rd.x) / TAU + 0.5;
+  float v = asin(clamp(rd.y, -0.999, 0.999)) / PI + 0.5;
+  float lonLine = smoothstep(0.04, 0.0, abs(fract(u * 24.0) - 0.5));
+  float latLine = smoothstep(0.04, 0.0, abs(fract(v * 12.0) - 0.5));
+  float g = max(lonLine, latLine) * 0.4;
+  // Tint by quadrant for orientation cues
+  vec3 tint = mix(vec3(0.7, 0.55, 0.3), vec3(0.4, 0.55, 0.85), step(0.5, u));
+  return tint * g + vec3(0.02, 0.02, 0.03);
+}
+
+void main() {
+  vec2 uv = (gl_FragCoord.xy - 0.5 * u_res) / u_res.x;
+
+  float orbit = u_time * 0.055 * u_rotateSpeed + u_dragX;
+  float tilt = 0.25 + u_tilt + u_dragY;
+  vec3 eye = vec3(28.0 * cos(orbit) * cos(tilt), 28.0 * sin(tilt), 28.0 * sin(orbit) * cos(tilt));
+  vec3 fwd = normalize(-eye);
+  vec3 rt  = normalize(cross(fwd, vec3(0.0, 1.0, 0.0)));
+  vec3 up  = cross(rt, fwd);
+  vec3 rd  = normalize(fwd + uv.x * rt + uv.y * up);
+
+  // ──── Geodesic integration ────
+  // Schwarzschild equation:  d²x/dλ² = -1.5 · RS · L² / r⁵ · x
+  // L = |x × v| is the angular momentum (conserved along the geodesic).
+  float RS = u_mass; // Schwarzschild radius
+  vec3 pos = eye;
+  vec3 vel = rd;
+  vec3 Lvec = cross(pos, vel);
+  float L2 = dot(Lvec, Lvec);
+  float gravCoeff = -1.5 * RS * L2;
+
+  bool absorbed = false;
+  int maxSteps = int(u_steps);
+  for (int i = 0; i < 200; i++) {
+    if (i >= maxSteps) break;
+    float r = length(pos);
+    float h = 0.16 * clamp(r - 0.4 * RS, 0.06, 3.5);
+
+    float invR2 = 1.0 / (r * r);
+    float invR5 = invR2 * invR2 / r;
+    vec3 acc = (gravCoeff * invR5) * pos;
+
+    // Velocity-Verlet (symplectic)
+    vec3 p1 = pos + vel * h + 0.5 * acc * h * h;
+    float r1 = length(p1);
+    float invR12 = 1.0 / (r1 * r1);
+    float invR15 = invR12 * invR12 / r1;
+    vec3 acc1 = (gravCoeff * invR15) * p1;
+    vec3 v1 = vel + 0.5 * (acc + acc1) * h;
+
+    if (r1 < RS * 0.35) { absorbed = true; break; }
+    if (r1 > 25.0 && r1 > r) break;
+    if (r1 > 55.0) break;
+    pos = p1; vel = v1;
+  }
+
+  vec3 col;
+  if (absorbed) {
+    col = vec3(0.0);
+  } else {
+    vec3 sky = (u_showGrid > 0.5) ? gridSky(normalize(vel)) : starField(normalize(vel));
+    col = sky;
+  }
+
+  col = col / (col + 1.0);
+  col = pow(col, vec3(0.85));
+  gl_FragColor = vec4(col, 1.0);
+}
+`;
+  function compile(type, src){ var s=gl.createShader(type); gl.shaderSource(s,src); gl.compileShader(s); if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)) console.error(gl.getShaderInfoLog(s)); return s; }
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog); gl.useProgram(prog);
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog,'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  var u = function(n){ return gl.getUniformLocation(prog, n); };
+  var uTime=u('u_time'), uRes=u('u_res'),
+      uRotateSpeed=u('u_rotateSpeed'), uTilt=u('u_tilt'),
+      uDragX=u('u_dragX'), uDragY=u('u_dragY'),
+      uMass=u('u_mass'), uSteps=u('u_steps'), uShowGrid=u('u_showGrid');
+
+  var rotateSpeedVal = 0.3;
+  var tiltVal = 0.0;
+  var massVal = 1.0;
+  var stepsVal = 200.0;
+  var showGridVal = 0.0;
+  var dragX = 0, dragY = 0;
+
+  var mouseDown=false, lastX=0, lastY=0;
+  canvas.addEventListener('mousedown', function(e){ mouseDown=true; lastX=e.clientX; lastY=e.clientY; });
+  canvas.addEventListener('mousemove', function(e){ if(mouseDown){ dragX += (e.clientX-lastX)*0.005; dragY += (e.clientY-lastY)*0.003; dragY=Math.max(-0.8,Math.min(0.8,dragY)); lastX=e.clientX; lastY=e.clientY; }});
+  canvas.addEventListener('mouseup', function(){ mouseDown=false; });
+  canvas.addEventListener('touchstart', function(e){ e.preventDefault(); mouseDown=true; lastX=e.touches[0].clientX; lastY=e.touches[0].clientY; }, {passive:false});
+  canvas.addEventListener('touchmove', function(e){ e.preventDefault(); if(mouseDown){ dragX += (e.touches[0].clientX-lastX)*0.005; dragY += (e.touches[0].clientY-lastY)*0.003; dragY=Math.max(-0.8,Math.min(0.8,dragY)); lastX=e.touches[0].clientX; lastY=e.touches[0].clientY; }}, {passive:false});
+  canvas.addEventListener('touchend', function(){ mouseDown=false; });
+
+  var dpr = Math.min(window.devicePixelRatio||1, 1.5);
+  var running=true, needsResize=true;
+  function resize(){ var w=Math.round(canvas.clientWidth*dpr), h=Math.round(canvas.clientHeight*dpr); if(canvas.width!==w||canvas.height!==h){ canvas.width=w; canvas.height=h; gl.viewport(0,0,w,h); gl.uniform2f(uRes,w,h);} needsResize=false; }
+  function render(now){ if(!running) return; if(needsResize) resize();
+    gl.uniform1f(uTime, now*0.001);
+    gl.uniform1f(uRotateSpeed, rotateSpeedVal);
+    gl.uniform1f(uTilt, tiltVal);
+    gl.uniform1f(uDragX, dragX);
+    gl.uniform1f(uDragY, dragY);
+    gl.uniform1f(uMass, massVal);
+    gl.uniform1f(uSteps, stepsVal);
+    gl.uniform1f(uShowGrid, showGridVal);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+  window.addEventListener('resize', function(){ needsResize=true; });
+  resize(); requestAnimationFrame(render);
+  document.addEventListener('visibilitychange', function(){ if(document.hidden){running=false;} else {running=true; requestAnimationFrame(render);} });
+
+  window.addEventListener('message', function(e){
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'ROTATE_SPEED': rotateSpeedVal = e.data.value; break;
+        case 'TILT':         tiltVal = e.data.value; break;
+        case 'MASS':         massVal = e.data.value; break;
+        case 'STEPS':        stepsVal = e.data.value; break;
+        case 'SHOW_GRID':    showGridVal = e.data.value; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

@@ -158,12 +158,23 @@
 			{/if}
 		</div>
 		<div class="card-info">
-			<div class="card-number">{number}{#if shader.inspiration} <span class="card-muse">— inspired by {shader.inspiration}</span>{/if}</div>
-			<div class="card-title">{shader.title}</div>
+			<div class="card-number">
+				{number}{#if shader.inspiration} <span class="card-muse">— inspired by {shader.inspiration}</span>{/if}
+			</div>
+			<div class="card-title">
+				{shader.title}
+				{#if shader.hasArticle}<span class="card-deep-dive-badge" title="Deep dive available">●</span>{/if}
+			</div>
 			<div class="card-desc">{shader.desc}</div>
 			<span class="card-action">Explore &rarr;</span>
 		</div>
 	</a>
+
+	{#if shader.hasArticle}
+		<a class="deep-dive-link" href="/learn/{shader.id}" onclick={(e) => e.stopPropagation()}>
+			Deep dive &rarr;
+		</a>
+	{/if}
 
 	<button
 		type="button"
@@ -335,5 +346,48 @@
 		color: #c8956c;
 		text-transform: uppercase;
 		letter-spacing: 0.1em;
+	}
+	.card-deep-dive-badge {
+		display: inline-block;
+		margin-left: 0.4em;
+		color: rgba(200, 149, 108, 0.7);
+		font-size: 0.55em;
+		vertical-align: middle;
+		transform: translateY(-2px);
+	}
+	.deep-dive-link {
+		position: absolute;
+		top: 0.6rem;
+		left: 0.6rem;
+		z-index: 4;
+		display: inline-flex;
+		align-items: center;
+		gap: 0.25rem;
+		padding: 0.3rem 0.6rem;
+		font-size: 0.65rem;
+		font-family: inherit;
+		text-transform: uppercase;
+		letter-spacing: 0.12em;
+		color: #c8956c;
+		background: rgba(10, 10, 10, 0.7);
+		backdrop-filter: blur(6px);
+		-webkit-backdrop-filter: blur(6px);
+		border: 1px solid rgba(200, 149, 108, 0.3);
+		border-radius: 4px;
+		opacity: 0;
+		transition: opacity 0.2s, background 0.2s, border-color 0.2s;
+	}
+	.card-shell:hover .deep-dive-link,
+	.card-shell:focus-within .deep-dive-link {
+		opacity: 1;
+	}
+	.deep-dive-link:hover {
+		background: rgba(200, 149, 108, 0.15);
+		border-color: rgba(200, 149, 108, 0.5);
+	}
+	@media (hover: none), (pointer: coarse) {
+		.deep-dive-link {
+			opacity: 1;
+		}
 	}
 </style>

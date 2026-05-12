@@ -43,6 +43,8 @@ export interface Shader {
 	heroConfig?: {
 		params: { name: string; value: number }[];
 	};
+	/** True if a deep-dive article exists for this shader at /learn/[id] */
+	hasArticle?: boolean;
 }
 
 export const shaders: Shader[] = [
@@ -526,7 +528,8 @@ export const shaders: Shader[] = [
 				{ name: 'BH_CENTER_Y', value: 0.45 },
 				{ name: 'BH_SCALE', value: 2.4 }
 			]
-		}
+		},
+		hasArticle: true
 	},
 	{
 		id: 'burning-film',
