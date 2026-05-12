@@ -41,9 +41,9 @@
 		font-family: 'SF Mono', 'Fira Code', monospace;
 		font-size: 0.68rem;
 		text-transform: uppercase;
-		letter-spacing: 0.2em;
+		letter-spacing: 0.18em;
+		line-height: 1.4;
 		color: rgba(200, 149, 108, 0.75);
-		white-space: nowrap;
 	}
 	.rule {
 		flex: 1;

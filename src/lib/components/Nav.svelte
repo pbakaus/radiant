@@ -7,6 +7,7 @@
 	<a href="/" class="logo">Radiant</a>
 	<div class="links">
 		<a href="/gallery">Gallery</a>
+		<a href="/learn">Deep Dives</a>
 		<a href="/#how-to-use">How to Use</a>
 		<a href="https://github.com/pbakaus/radiant" target="_blank" rel="noopener noreferrer">GitHub</a>
 		{#if savedCount > 0}

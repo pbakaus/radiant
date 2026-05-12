@@ -100,9 +100,9 @@
 	<div class="hero-inner">
 		<div class="hero-content">
 			<div class="hero-eyebrow">
-				<a href="/gallery" class="eyebrow-link">Radiant</a>
+				<a href="/" class="eyebrow-link">Radiant</a>
 				<span class="eyebrow-sep">/</span>
-				<span>Deep dive</span>
+				<a href="/learn" class="eyebrow-link">Deep dive</a>
 				<span class="eyebrow-sep">/</span>
 				<span>{shader.title}</span>
 			</div>
@@ -502,29 +502,51 @@
 	}
 
 	@media (max-width: 900px) {
+		/* Mobile hero stacks vertically: shader banner up top, text content
+		   below in normal flow. Overlay vignettes don't work at this width —
+		   the BH dominates the frame and competes with the title. */
 		.hero {
-			height: clamp(480px, 78vh, 680px);
+			height: auto;
+			min-height: 0;
+			margin-top: 0;
+			padding-top: var(--nav-height, 56px);
+			overflow: visible;
+		}
+		.hero iframe {
+			position: relative;
+			width: 100%;
+			height: auto;
+			aspect-ratio: 16 / 10;
+			display: block;
+		}
+		.hero-vignette,
+		.hero-fade-bottom,
+		.hero-scroll-hint {
+			display: none;
 		}
 		.hero-inner {
-			padding: calc(var(--nav-height, 56px) + 1.5rem) 1.25rem 3rem;
-			align-items: flex-end;
+			position: relative;
+			height: auto;
+			max-width: none;
+			padding: 1.75rem 1.25rem 1.25rem;
+			display: block;
+			pointer-events: auto;
 		}
 		.hero-content {
 			max-width: 100%;
 		}
-		/* On mobile the BH dominates the frame — use a stronger bottom vignette
-		   instead of the left-side vignette */
-		.hero-vignette {
-			background:
-				radial-gradient(ellipse at 50% 0%, rgba(10, 10, 10, 0.45) 0%, rgba(10, 10, 10, 0) 50%),
-				linear-gradient(to bottom, rgba(10, 10, 10, 0) 30%, rgba(10, 10, 10, 0.6) 100%);
-		}
 		.hero h1 {
 			font-size: clamp(1.8rem, 7vw, 2.4rem);
+			text-shadow: none;
 		}
-		.hero-scroll-hint {
-			display: none;
+		.hero .subtitle {
+			font-size: 1rem;
+			text-shadow: none;
 		}
+		.hero-eyebrow {
+			margin-bottom: 1rem;
+		}
+
 		.page {
 			grid-template-columns: 1fr;
 			gap: 0;
@@ -533,7 +555,7 @@
 			display: none;
 		}
 		article {
-			padding: 2rem 1.25rem 4rem;
+			padding: 1.5rem 1.25rem 4rem;
 		}
 		.prose :global(.wide) {
 			margin-left: -1.25rem;
