@@ -142,29 +142,30 @@
       var drop = drops[i];
       if (drop.killed) { drops.splice(i, 1); continue; }
 
-      // ── Surface tension: large drops occasionally get a momentum kick
-      // (small drops stay put — that's why a fresh drop sits there)
-      var kickProbability = drop.r / (100 * dpr) * dt * 0.5 / SURFACE_TENSION;
+      // ── Surface tension: drops mostly sit still. Rare kicks tip the
+      // balance — when one happens it's substantial enough to start the
+      // drop actually sliding, not a continuous twitch.
+      var kickProbability = drop.r / (60 * dpr) * dt * 0.015 / SURFACE_TENSION;
       if (Math.random() < kickProbability) {
-        drop.momentum += rand(0.5, 2.5) * dpr;
+        drop.momentum += rand(2.0, 4.5) * dpr;
       }
 
-      // ── Trail spawning: a moving drop sheds smaller drops behind it
-      if (drop === mainDrop && drop.momentum > 0.5) {
+      // ── Trail spawning: a moving drop sheds smaller drops behind it.
+      // Tied to motion distance, not frame count — fast drops trail more.
+      if (drop === mainDrop && drop.momentum > 0.3) {
         drop.lastSpawn += drop.momentum * dt * TRAIL_RATE;
-        if (drop.lastSpawn > 20) {
+        if (drop.lastSpawn > 28 * dpr) {
           drops.push({
-            x: drop.x + rand(-drop.r, drop.r) * 0.15,
-            y: drop.y - drop.r * 0.01,
-            r: drop.r * rand(0.25, 0.4),
+            x: drop.x + rand(-drop.r, drop.r) * 0.12,
+            y: drop.y - drop.r * 0.05,
+            r: drop.r * rand(0.22, 0.36),
             momentum: 0,
             lastSpawn: 0,
             killed: false,
-            // Trail drops inherit a bit of the parent's vertical stretch
             spreadX: 0,
-            spreadY: Math.min(0.4, drop.momentum * 0.08)
+            spreadY: Math.min(0.5, drop.momentum * 0.07)
           });
-          drop.r *= Math.pow(0.97, dt);
+          drop.r *= Math.pow(0.985, dt);   // gentler shrink
           drop.lastSpawn = 0;
         }
       }
@@ -175,8 +176,9 @@
         if (drop.y > h + drop.r) drop.killed = true;
       }
 
-      // ── Momentum decay
-      drop.momentum *= Math.pow(0.95, dt);
+      // ── Momentum decay — slower than before so a single kick produces
+      // a visible slide rather than a quick pulse
+      drop.momentum *= Math.pow(0.975, dt);
       // ── Shape decay — drops settle back from splat to baseline teardrop
       drop.spreadX *= Math.pow(0.4, dt);
       drop.spreadY *= Math.pow(0.7, dt);
