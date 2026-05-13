@@ -176,18 +176,6 @@ drawCurve(a, b, delta, 0.38, 'rgba(220, 180, 130, 1)', 0.85, 1.5);`;
 
 	<Code code={lissajousCode} lang="js" caption="One frame's drawing. 3000 points along the parameter range, one beginPath, one stroke. Canvas 2D handles the rest." />
 
-	<Sandbox
-		src="/learn/analog-drift/01-one-lissajous.html"
-		title="Step 01 — one Lissajous"
-		caption="A single Lissajous curve, hard-cleared every frame. No phosphor, no thickness modulation, no drift. Slide a and b through small integers to feel the closed-curve family."
-		aspect="16/9"
-		params={[
-			{ name: 'A', label: 'a (x frequency)', min: 1, max: 6, step: 1, default: 1 },
-			{ name: 'B', label: 'b (y frequency)', min: 1, max: 6, step: 1, default: 2 },
-			{ name: 'DELTA', label: 'δ (phase)', min: 0, max: Math.PI, step: 0.05, default: Math.PI / 2 }
-		]}
-	/>
-
 	<h2 id="phosphor">Phosphor persistence</h2>
 
 	<p>
@@ -210,8 +198,8 @@ drawCurve(a, b, delta, 0.38, 'rgba(220, 180, 130, 1)', 0.85, 1.5);`;
 	<Code code={phosphorCode} lang="js" caption="The whole phosphor-persistence trick. Three lines of meaningful code." />
 
 	<Sandbox
-		src="/learn/analog-drift/02-phosphor-trail.html"
-		title="Step 02 — phosphor trail"
+		src="/learn/analog-drift/01-phosphor-trail.html"
+		title="Step 01 — phosphor trail"
 		caption="The toggle switches between hard clear (no memory) and phosphor fade (exponential decay). Watch what happens to the same animating curve when you flip it."
 		aspect="16/9"
 		params={[
@@ -259,8 +247,8 @@ drawCurve(a, b, delta, 0.38, 'rgba(220, 180, 130, 1)', 0.85, 1.5);`;
 	<Code code={thicknessCode} lang="js" caption="Compute all points into typed arrays first, then stroke them in batches of 20 with one thickness per batch. Batching keeps Canvas 2D's draw count manageable; without it, calling lineWidth per segment would be ~150× more expensive." />
 
 	<Sandbox
-		src="/learn/analog-drift/03-velocity-thickness.html"
-		title="Step 03 — velocity thickness"
+		src="/learn/analog-drift/02-velocity-thickness.html"
+		title="Step 02 — velocity thickness"
 		caption="Same 3:2 figure either way. Toggle modulation on and watch the slow lobes get fat while the fast sweeps stay thin. The strength slider exaggerates or softens the effect."
 		aspect="16/9"
 		params={[
@@ -304,8 +292,8 @@ drawCurve(a, b, delta, 0.38, 'rgba(220, 180, 130, 1)', 0.85, 1.5);`;
 	<Code code={driftCode} lang="js" caption="Waypoint storage, easing curve, and interpolation. The ease-in-out cubic is the one place where the choice of math directly affects how 'analog' the result feels." />
 
 	<Sandbox
-		src="/learn/analog-drift/04-drift.html"
-		title="Step 04 — waypoint drift"
+		src="/learn/analog-drift/03-drift.html"
+		title="Step 03 — waypoint drift"
 		caption="The figure drifts through ten waypoints on a loop. Toggle easing off and the transitions feel like a software animation; turn it back on and it feels like a knob being turned by hand. The readout in the top-right shows live (a, b, δ)."
 		aspect="16/9"
 		params={[
@@ -334,8 +322,8 @@ drawCurve(a, b, delta, 0.38, 'rgba(220, 180, 130, 1)', 0.85, 1.5);`;
 	<Code code={harmonicsCode} lang="js" caption="Layer order matters: draw back-to-front, so the brightest layer ends up on top. Each harmonic gets its own alpha, thickness, and time-shift, so they don't all phase-lock into one congealed shape." />
 
 	<Sandbox
-		src="/learn/analog-drift/05-harmonics.html"
-		title="Step 05 — harmonics"
+		src="/learn/analog-drift/04-harmonics.html"
+		title="Step 04 — harmonics"
 		caption="A held 2:3 figure with the three harmonic layers toggleable. Turn them off one at a time. The 2nd is the most visually impactful; the sub-harmonic is the most felt-but-not-seen."
 		aspect="16/9"
 		toggle={{ name: 'H2', label: '2× harmonic', onValue: 1, offValue: 0, default: true }}
@@ -358,8 +346,8 @@ drawCurve(a, b, delta, 0.38, 'rgba(220, 180, 130, 1)', 0.85, 1.5);`;
 	</p>
 
 	<Sandbox
-		src="/learn/analog-drift/06-final.html"
-		title="Step 06 — all together"
+		src="/learn/analog-drift/05-final.html"
+		title="Step 05 — all together"
 		caption="The full effect: waypoint drift, phosphor fade, velocity thickness, harmonics, bloom, cyan accent, dot phosphors, grid. Drift speed and trail length are exposed; everything else is hard-coded to taste."
 		aspect="16/9"
 		params={[

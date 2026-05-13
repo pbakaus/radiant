@@ -37,7 +37,7 @@ export const articleMeta: Record<string, ArticleMeta> = {
 		subtitle:
 			'Two sines and a buffer you never clear. Lissajous figures, phosphor persistence, and the velocity-modulated thickness that sells the analog feeling.',
 		author: 'Paul Bakaus & Claude',
-		readingTime: '15 minute read · 6 interactive sandboxes',
+		readingTime: '15 minute read · 5 interactive sandboxes',
 		shareImage: '/share/learn-analog-drift.jpg'
 	}
 };
