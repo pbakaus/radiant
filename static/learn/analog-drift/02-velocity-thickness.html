@@ -84,11 +84,11 @@
     var cx = W / 2, cy = H / 2;
     var size = Math.min(W, H) * 0.38;
 
-    // A held figure with strong speed variation (3:2 ratio).
-    // No phase sweep — keeping the curve still lets you see exactly which
-    // parts of it are slow (fat) vs fast (thin).
+    // A figure with strong speed variation (3:2 ratio). Slow phase sweep
+    // keeps the demo alive; the hard clear above means parameter changes
+    // are visible the same frame, no phosphor lag.
     var a = 3.0, b = 2.0;
-    var delta = Math.PI / 4;
+    var delta = Math.PI / 4 + time * 0.3;
     var N = 3000;
     var coverage = Math.PI * 2 * Math.max(Math.ceil(a), Math.ceil(b));
     var step = coverage / N;
