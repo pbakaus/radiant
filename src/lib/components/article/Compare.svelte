@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
+
 	let {
 		aSrc,
 		bSrc,
@@ -16,17 +18,41 @@
 		aspect?: string;
 		wide?: boolean;
 	} = $props();
+
+	let figureEl: HTMLElement;
+	let mounted = $state(false);
+
+	onMount(() => {
+		const obs = new IntersectionObserver(
+			(entries) => {
+				for (const entry of entries) {
+					if (entry.isIntersecting) {
+						mounted = true;
+						obs.disconnect();
+						return;
+					}
+				}
+			},
+			{ rootMargin: '600px 0px' }
+		);
+		obs.observe(figureEl);
+		return () => obs.disconnect();
+	});
 </script>
 
-<figure class="compare" class:wide style:--aspect={aspect}>
+<figure class="compare" class:wide style:--aspect={aspect} bind:this={figureEl}>
 	<div class="grid">
 		<div class="cell">
 			<div class="label">{aLabel}</div>
-			<iframe src={aSrc} title={aLabel} loading="lazy"></iframe>
+			{#if mounted}
+				<iframe src={aSrc} title={aLabel} loading="lazy"></iframe>
+			{/if}
 		</div>
 		<div class="cell">
 			<div class="label">{bLabel}</div>
-			<iframe src={bSrc} title={bLabel} loading="lazy"></iframe>
+			{#if mounted}
+				<iframe src={bSrc} title={bLabel} loading="lazy"></iframe>
+			{/if}
 		</div>
 	</div>
 	{#if caption}

@@ -31,7 +31,9 @@
 		toggle?: { name: string; label: string; offValue?: number; onValue?: number; default?: boolean };
 	} = $props();
 
+	// svelte-ignore non_reactive_update
 	let iframeEl: HTMLIFrameElement;
+	let frameEl: HTMLDivElement;
 	// svelte-ignore state_referenced_locally
 	let values = $state<Record<string, number>>(
 		Object.fromEntries(params.map((p) => [p.name, p.default]))
@@ -39,6 +41,12 @@
 	// svelte-ignore state_referenced_locally
 	let toggleOn = $state(toggle?.default ?? true);
 	let loaded = $state(false);
+	// Iframe is only mounted once it scrolls near the viewport. Every shader
+	// in a sandbox is non-trivial to initialize (Canvas 2D pre-baking, WebGL
+	// shader compile, procedural background generation), so mounting all of
+	// them at page load freezes the main thread for several seconds on
+	// shader-heavy articles. We defer until the user is about to see them.
+	let mounted = $state(false);
 
 	function applyAll() {
 		if (!iframeEl?.contentWindow) return;
@@ -91,6 +99,22 @@
 	onMount(() => {
 		// In case iframe already loaded
 		if (iframeEl?.contentDocument?.readyState === 'complete') onLoad();
+
+		// Mount the iframe when this sandbox is within 600px of the viewport.
+		const obs = new IntersectionObserver(
+			(entries) => {
+				for (const entry of entries) {
+					if (entry.isIntersecting) {
+						mounted = true;
+						obs.disconnect();
+						return;
+					}
+				}
+			},
+			{ rootMargin: '600px 0px' }
+		);
+		obs.observe(frameEl);
+		return () => obs.disconnect();
 	});
 
 	function digitsForStep(step?: number): number {
@@ -109,16 +133,18 @@
 </script>
 
 <figure class="sandbox" class:wide style:--aspect={aspect}>
-	<div class="frame">
-		<iframe
-			bind:this={iframeEl}
-			{src}
-			{title}
-			loading="lazy"
-			onload={onLoad}
-		></iframe>
+	<div class="frame" bind:this={frameEl}>
+		{#if mounted}
+			<iframe
+				bind:this={iframeEl}
+				{src}
+				{title}
+				loading="lazy"
+				onload={onLoad}
+			></iframe>
+		{/if}
 		{#if !loaded}
-			<div class="loading">Loading sandbox…</div>
+			<div class="loading">{mounted ? 'Loading sandbox…' : ''}</div>
 		{/if}
 	</div>
 

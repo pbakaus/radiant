@@ -5,29 +5,26 @@
 
 	let dropCanvas: HTMLCanvasElement;
 	let bgCanvas: HTMLCanvasElement;
-	// svelte-ignore state_referenced_locally
 	let sampleX = $state(0.5);
-	// svelte-ignore state_referenced_locally
 	let sampleY = $state(0.5);
 	let isDragging = $state(false);
 	let rgba = $state({ r: 128, g: 128, b: 0, a: 0 });
 
 	const SIZE = 320;
+	const dpr = typeof window !== 'undefined' ? Math.min(window.devicePixelRatio || 1, 2) : 2;
 
-	function drawDrop() {
-		if (!dropCanvas) return;
-		const dpr = Math.min(window.devicePixelRatio || 1, 2);
-		dropCanvas.width = SIZE * dpr;
-		dropCanvas.height = SIZE * dpr;
-		const ctx = dropCanvas.getContext('2d');
-		if (!ctx) return;
+	// Cached offscreen bitmaps — generated once, not regenerated on every pointer event.
+	let dropBitmap: HTMLCanvasElement | null = null;
+	let bgBitmap: HTMLCanvasElement | null = null;
 
-		// Background: dark surround so out-of-drop area reads as "no data"
+	function buildDropBitmap() {
+		const c = document.createElement('canvas');
+		const w = SIZE * dpr;
+		c.width = c.height = w;
+		const ctx = c.getContext('2d');
+		if (!ctx) return c;
 		ctx.fillStyle = '#0d0d0d';
-		ctx.fillRect(0, 0, dropCanvas.width, dropCanvas.height);
-
-		// Render the same drop bitmap the shaders use
-		const w = dropCanvas.width;
+		ctx.fillRect(0, 0, w, w);
 		const img = ctx.createImageData(w, w);
 		const d = img.data;
 		const cx = w / 2;
@@ -51,51 +48,23 @@
 				d[idx + 3] = Math.round(Math.min(255, Math.max(0, alpha)));
 			}
 		}
-		// Composite the drop on the dark background
+		// We need to composite the drop on a dark background. Build a second
+		// canvas with both layers so the final stamp is one drawImage.
 		const tmp = document.createElement('canvas');
-		tmp.width = w;
-		tmp.height = w;
-		tmp.getContext('2d')?.putImageData(img, 0, 0);
+		tmp.width = tmp.height = w;
+		const tctx = tmp.getContext('2d');
+		if (!tctx) return c;
+		tctx.putImageData(img, 0, 0);
 		ctx.drawImage(tmp, 0, 0);
-
-		// Sample point marker
-		const sx = sampleX * w;
-		const sy = sampleY * w;
-		ctx.strokeStyle = '#fff';
-		ctx.lineWidth = 2 * dpr;
-		ctx.beginPath();
-		ctx.arc(sx, sy, 8 * dpr, 0, Math.PI * 2);
-		ctx.stroke();
-		ctx.fillStyle = 'rgba(0,0,0,0.55)';
-		ctx.beginPath();
-		ctx.arc(sx, sy, 8 * dpr, 0, Math.PI * 2);
-		ctx.fill();
+		return c;
 	}
 
-	function sampleRGBA(x: number, y: number) {
-		if (!dropCanvas) return;
-		const ctx = dropCanvas.getContext('2d');
-		if (!ctx) return;
-		const px = Math.round(x * dropCanvas.width);
-		const py = Math.round(y * dropCanvas.height);
-		try {
-			const data = ctx.getImageData(px, py, 1, 1).data;
-			rgba = { r: data[0], g: data[1], b: data[2], a: data[3] };
-		} catch {
-			/* canvas read can fail with cross-origin — shouldn't happen here */
-		}
-	}
-
-	function drawBg() {
-		if (!bgCanvas) return;
-		const dpr = Math.min(window.devicePixelRatio || 1, 2);
-		bgCanvas.width = SIZE * dpr;
-		bgCanvas.height = SIZE * dpr;
-		const ctx = bgCanvas.getContext('2d');
-		if (!ctx) return;
-		const w = bgCanvas.width;
-
-		// Diagonal warm bands matching the teaching shaders' test background
+	function buildBackgroundBitmap() {
+		const c = document.createElement('canvas');
+		const w = SIZE * dpr;
+		c.width = c.height = w;
+		const ctx = c.getContext('2d');
+		if (!ctx) return c;
 		const grad = ctx.createLinearGradient(0, 0, w, w);
 		grad.addColorStop(0, '#1a0e22');
 		grad.addColorStop(0.3, '#3a1a18');
@@ -112,19 +81,50 @@
 			ctx.lineTo(w + 50, y + w * 0.18);
 			ctx.stroke();
 		}
+		return c;
+	}
 
-		// Sample-point origin and the refracted lookup
+	function paintDrop() {
+		if (!dropCanvas || !dropBitmap) return;
+		dropCanvas.width = SIZE * dpr;
+		dropCanvas.height = SIZE * dpr;
+		const ctx = dropCanvas.getContext('2d');
+		if (!ctx) return;
+		ctx.drawImage(dropBitmap, 0, 0);
+
+		// Sample-point marker (cheap to draw)
+		const w = dropCanvas.width;
+		const sx = sampleX * w;
+		const sy = sampleY * w;
+		ctx.strokeStyle = '#fff';
+		ctx.lineWidth = 2 * dpr;
+		ctx.beginPath();
+		ctx.arc(sx, sy, 8 * dpr, 0, Math.PI * 2);
+		ctx.stroke();
+		ctx.fillStyle = 'rgba(0,0,0,0.55)';
+		ctx.beginPath();
+		ctx.arc(sx, sy, 8 * dpr, 0, Math.PI * 2);
+		ctx.fill();
+	}
+
+	function paintBg() {
+		if (!bgCanvas || !bgBitmap) return;
+		bgCanvas.width = SIZE * dpr;
+		bgCanvas.height = SIZE * dpr;
+		const ctx = bgCanvas.getContext('2d');
+		if (!ctx) return;
+		ctx.drawImage(bgBitmap, 0, 0);
+
+		const w = bgCanvas.width;
 		const sx = sampleX * w;
 		const sy = sampleY * w;
 		const offsetX = (rgba.g / 255 - 0.5) * 2;
 		const offsetY = (rgba.r / 255 - 0.5) * 2;
 		const depth = rgba.b / 255;
-		// Same offset scaling the teaching shaders use, normalized to widget size
 		const scale = (256 + depth * 256) * (dpr / 2);
 		const refX = sx + offsetX * scale;
 		const refY = sy + offsetY * scale;
 
-		// Arrow: origin → refracted position
 		ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
 		ctx.lineWidth = 2 * dpr;
 		ctx.beginPath();
@@ -132,7 +132,6 @@
 		ctx.lineTo(refX, refY);
 		ctx.stroke();
 
-		// Arrowhead
 		const ang = Math.atan2(refY - sy, refX - sx);
 		const ah = 10 * dpr;
 		ctx.beginPath();
@@ -143,18 +142,30 @@
 		ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
 		ctx.fill();
 
-		// Origin dot
 		ctx.fillStyle = 'rgba(200, 149, 108, 0.6)';
 		ctx.beginPath();
 		ctx.arc(sx, sy, 5 * dpr, 0, Math.PI * 2);
 		ctx.fill();
 
-		// Refracted sample target
 		ctx.strokeStyle = '#f0e8de';
 		ctx.lineWidth = 2 * dpr;
 		ctx.beginPath();
 		ctx.arc(refX, refY, 8 * dpr, 0, Math.PI * 2);
 		ctx.stroke();
+	}
+
+	function sampleRGBA(x: number, y: number) {
+		if (!dropBitmap) return;
+		const ctx = dropBitmap.getContext('2d');
+		if (!ctx) return;
+		const px = Math.max(0, Math.min(dropBitmap.width - 1, Math.round(x * dropBitmap.width)));
+		const py = Math.max(0, Math.min(dropBitmap.height - 1, Math.round(y * dropBitmap.height)));
+		try {
+			const data = ctx.getImageData(px, py, 1, 1).data;
+			rgba = { r: data[0], g: data[1], b: data[2], a: data[3] };
+		} catch {
+			/* ignore */
+		}
 	}
 
 	function onPointer(e: PointerEvent) {
@@ -164,18 +175,28 @@
 		const y = Math.max(0.02, Math.min(0.98, (e.clientY - rect.top) / rect.height));
 		sampleX = x;
 		sampleY = y;
+		// Update the sampled RGBA synchronously here, NOT inside an $effect.
+		// Doing it in the effect creates a write-then-read cycle on `rgba`
+		// (the effect writes rgba via sampleRGBA, and reads it via paintBg)
+		// which Svelte 5 catches as effect_update_depth_exceeded.
+		sampleRGBA(x, y);
 	}
 
 	$effect(() => {
-		sampleRGBA(sampleX, sampleY);
-		drawDrop();
-		drawBg();
+		// Pure paint side-effect, reads state but never writes
+		sampleX;
+		sampleY;
+		rgba;
+		paintDrop();
+		paintBg();
 	});
 
 	onMount(() => {
+		dropBitmap = buildDropBitmap();
+		bgBitmap = buildBackgroundBitmap();
 		sampleRGBA(sampleX, sampleY);
-		drawDrop();
-		drawBg();
+		paintDrop();
+		paintBg();
 	});
 
 	const offsetX = $derived(((rgba.g / 255 - 0.5) * 2).toFixed(2));
