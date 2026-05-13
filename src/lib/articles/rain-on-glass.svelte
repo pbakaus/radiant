@@ -199,12 +199,15 @@ for (var i = 0; i < drops.length; i++) {
 	<Code code={bitmapCode} lang="js" caption="The drop bitmap, built once at init. This is plain Canvas 2D, no shader, no GPU. We're filling an ImageData buffer by hand because we need full control over individual channels." />
 
 	<p>
-		Two things to notice about line 13. First, the visible portion of the bitmap is much smaller
-		than the drawn radius: the <code>pow(dist / 0.45, 6)</code> alpha falloff means only the
-		inner ~45% of the bitmap is opaque. That's deliberate. The bitmap gets drawn at many
-		different scales, and the rest of the 256×256 frame is unused padding for safe blending at
-		the edges. Second, the <code>dy *= 1 + dy * 0.15</code> on line 7 gives the drop a slight
-		teardrop shape, taller than wide. Surface tension does that on real glass.
+		The visible portion of the bitmap is much smaller than the drawn radius. The
+		<code>pow(dist / 0.45, 6)</code> alpha falloff means only the inner ~45% of the bitmap is
+		opaque. That's deliberate: the bitmap gets drawn at many different scales, and the rest of the
+		256×256 frame is unused padding for safe blending at the edges.
+	</p>
+
+	<p>
+		Line 7's <code>dy *= 1 + dy * 0.15</code> bias gives the drop a slight teardrop shape, taller
+		than wide. Surface tension does that on real glass.
 	</p>
 
 	<Sandbox
@@ -320,7 +323,7 @@ for (const drop of drops) {
 	<Sandbox
 		src="/learn/rain-on-glass/04-rolling-drop.html"
 		title="Step 04 — a rolling drop"
-		caption="A single drop with physics. Notice the teardrop shape — drops aren't round. Crank surface tension down to see drops slide more easily; crank trail rate up to see them shed mass faster."
+		caption="A single drop with physics. Notice the teardrop shape; drops aren't round. Crank surface tension down to see drops slide more easily; crank trail rate up to see them shed mass faster."
 		aspect="16/9"
 		params={[
 			{ name: 'GRAVITY', label: 'Gravity', min: 0.3, max: 3.0, step: 0.05, default: 1.0 },
@@ -340,14 +343,14 @@ for (const drop of drops) {
 
 	<p>
 		Look closely at the rolling drop above. It's not a circle. A real water drop on glass is taller
-		than it is wide, with a flattened bottom — gravity pulls the bottom down, surface tension pulls
-		the top back up, and the steady-state shape is a teardrop. The drops in our shader cheat the
-		same way real drops do.
+		than it is wide, with a flattened bottom. Gravity pulls down, surface tension pulls the top
+		back up, and the steady-state shape is a teardrop. The drops in our shader cheat the same way
+		real drops do.
 	</p>
 
 	<p>
-		The shape is two factors stacked together. <code>scaleY</code> is constant — every drop is
-		drawn ~1.5x taller than wide. That's the teardrop baseline. On top of that, <code>spreadX</code>
+		The shape is two factors stacked together. <code>scaleY</code> is constant. Every drop is
+		drawn ~1.5x taller than wide; that's the teardrop baseline. On top of that, <code>spreadX</code>
 		and <code>spreadY</code> are transient "splat" factors. A freshly-spawned drop hits the glass
 		spread out; a freshly-merged drop bulges from the impact. Both spreads decay every frame, which
 		is what surface tension does in real life.
@@ -358,7 +361,7 @@ for (const drop of drops) {
 	<p>
 		The decay rates matter. <code>pow(0.4, dt)</code> on X means horizontal spread collapses in
 		~3 frames. <code>pow(0.7, dt)</code> on Y means vertical settling takes ~6 frames. Drops snap
-		back narrow first, then settle vertically — the same asymmetry you see in a real droplet
+		back narrow first, then settle vertically. That's the asymmetry you see in a real droplet
 		flattening on glass.
 	</p>
 
@@ -393,7 +396,7 @@ for (const drop of drops) {
 	<Sandbox
 		src="/learn/rain-on-glass/05-merging-field.html"
 		title="Step 05 — drops that merge"
-		caption="Drops spawn over time, slide when surface tension lets go, and absorb the smaller drops they touch. Watch for the moment of impact — the merged drop spreads briefly before pulling itself back into a teardrop. That's what makes the merge read as physical instead of as one circle eating another."
+		caption="Drops spawn over time, slide when surface tension lets go, and absorb the smaller drops they touch. Watch the moment of impact: the merged drop spreads briefly before pulling itself back into a teardrop. That's what makes the merge read as physical instead of as one circle eating another."
 		aspect="16/9"
 		params={[
 			{ name: 'SPAWN_RATE', label: 'Spawn rate', min: 0.1, max: 3.0, step: 0.05, default: 1.0 },
@@ -422,8 +425,7 @@ for (const drop of drops) {
 		The effect is psychological. Wet glass is hazy because the water on the surface is itself
 		acting as a million tiny micro-lenses, each one slightly blurring what's behind. But the
 		moment a real drop forms, it concentrates that view back into focus, like a magnifying glass.
-		Our drops feel like portals: they reveal <em>more</em> detail than the surrounding glass,
-		not less.
+		Our drops become portals; they reveal sharper detail than the surrounding glass.
 	</p>
 
 	<p>
@@ -501,7 +503,7 @@ for (const drop of drops) {
 	<p>
 		A windowful of rain is two hundred drops, each with its own physics update, plus a few
 		thousand static spray droplets, plus a per-pixel refraction lookup. None of that is
-		intuitively cheap. Three things keep it real-time.
+		intuitively cheap.
 	</p>
 
 	<p>
