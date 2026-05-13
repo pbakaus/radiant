@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Step 01 — One Lissajous</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed; top: 16px; left: 18px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 10px; letter-spacing: 0.15em; text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.55); z-index: 10; pointer-events: none;
+  }
+  .readout {
+    position: fixed; top: 16px; right: 18px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 11px; line-height: 1.6;
+    color: rgba(200, 149, 108, 0.7); z-index: 10; pointer-events: none;
+    text-align: right;
+  }
+  .readout b { color: rgba(255, 245, 230, 0.9); font-weight: 500; }
+</style>
+</head>
+<body>
+<div class="label">01 · One Lissajous</div>
+<div class="readout" id="readout"></div>
+<canvas id="canvas"></canvas>
+<script>
+// Step 01 — Just the math. Clear the canvas every frame. One curve.
+// x(t) = sin(a·t + δ),  y(t) = sin(b·t)
+(function () {
+  'use strict';
+  var canvas = document.getElementById('canvas');
+  var readout = document.getElementById('readout');
+  var ctx = canvas.getContext('2d');
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  var A = 3.0;
+  var B = 2.0;
+  var DELTA = Math.PI / 4;
+  var W = 0, H = 0;
+
+  function resize() {
+    W = window.innerWidth; H = window.innerHeight;
+    canvas.width = W * dpr; canvas.height = H * dpr;
+    canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  var paused = false;
+  document.addEventListener('visibilitychange', function () { paused = document.hidden; });
+
+  window.addEventListener('message', function (e) {
+    if (!e.data || e.data.type !== 'param') return;
+    if (e.data.name === 'A') A = parseFloat(e.data.value);
+    if (e.data.name === 'B') B = parseFloat(e.data.value);
+    if (e.data.name === 'DELTA') DELTA = parseFloat(e.data.value);
+  });
+
+  function fmt(n) { return (Math.round(n * 100) / 100).toFixed(2); }
+
+  function draw() {
+    requestAnimationFrame(draw);
+    if (paused) return;
+
+    // Clear every frame — no phosphor here.
+    ctx.fillStyle = '#0a0a0a';
+    ctx.fillRect(0, 0, W, H);
+
+    var cx = W / 2, cy = H / 2;
+    var size = Math.min(W, H) * 0.38;
+    var N = 2000;
+    var coverage = Math.PI * 2 * Math.max(Math.ceil(A), Math.ceil(B), 1);
+    var step = coverage / N;
+
+    ctx.strokeStyle = 'rgba(200, 149, 108, 0.9)';
+    ctx.lineWidth = 1.5;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    for (var i = 0; i <= N; i++) {
+      var t = i * step;
+      var x = cx + Math.sin(A * t + DELTA) * size;
+      var y = cy + Math.sin(B * t) * size;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    readout.innerHTML =
+      'a = <b>' + fmt(A) + '</b>  ·  b = <b>' + fmt(B) + '</b>  ·  δ = <b>' + fmt(DELTA) + '</b>';
+  }
+  draw();
+})();
+</script>
+</body>
+</html>

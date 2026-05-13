@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Step 06 — Final Assembly</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed; top: 16px; left: 18px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 10px; letter-spacing: 0.15em; text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.55); z-index: 10; pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">06 · All together</div>
+<canvas id="canvas"></canvas>
+<script>
+// Step 06 — Everything in. Phosphor fade + velocity thickness +
+// waypoint drift with ease-in-out + harmonic overtones + CRT bloom +
+// the cyan/amber gradient shimmer + grid + dot phosphors.
+(function () {
+  'use strict';
+  var canvas = document.getElementById('canvas');
+  var ctx = canvas.getContext('2d');
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  var DRIFT_SPEED = 0.5;
+  var TRAIL_LENGTH = 1.0;
+  var W = 0, H = 0;
+
+  function resize() {
+    W = window.innerWidth; H = window.innerHeight;
+    canvas.width = W * dpr; canvas.height = H * dpr;
+    canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = '#0a0a0a';
+    ctx.fillRect(0, 0, W, H);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  var paused = false;
+  document.addEventListener('visibilitychange', function () {
+    paused = document.hidden;
+    if (!paused) lastTs = 0;
+  });
+
+  window.addEventListener('message', function (e) {
+    if (!e.data) return;
+    if (e.data.type === 'param') {
+      if (e.data.name === 'DRIFT_SPEED') DRIFT_SPEED = parseFloat(e.data.value);
+      if (e.data.name === 'TRAIL_LENGTH') TRAIL_LENGTH = parseFloat(e.data.value);
+    }
+    if (e.data.name === 'RESET') {
+      DRIFT_SPEED = 0.5; TRAIL_LENGTH = 1.0;
+      ctx.fillStyle = '#0a0a0a'; ctx.fillRect(0, 0, W, H);
+    }
+  });
+
+  var waypoints = [
+    { a: 1.0, b: 1.0, delta: Math.PI / 2 },
+    { a: 1.0, b: 2.0, delta: 0 },
+    { a: 2.0, b: 3.0, delta: Math.PI / 4 },
+    { a: 3.0, b: 2.0, delta: Math.PI / 3 },
+    { a: 3.0, b: 4.0, delta: Math.PI / 6 },
+    { a: 2.0, b: 5.0, delta: Math.PI / 2 },
+    { a: 1.0, b: 3.0, delta: Math.PI / 5 },
+    { a: 4.0, b: 3.0, delta: Math.PI / 7 },
+    { a: 3.0, b: 5.0, delta: Math.PI / 3 },
+    { a: 1.0, b: 1.0, delta: 0 }
+  ];
+  var driftTime = 0;
+  var currentA = 1, currentB = 1, currentDelta = Math.PI / 2;
+
+  function getWp(t) {
+    var n = waypoints.length;
+    var pos = ((t % n) + n) % n;
+    var idx = Math.floor(pos);
+    var frac = pos - idx;
+    frac = frac < 0.5 ? 4 * frac * frac * frac : 1 - Math.pow(-2 * frac + 2, 3) / 2;
+    var from = waypoints[idx];
+    var to = waypoints[(idx + 1) % n];
+    return {
+      a: from.a + (to.a - from.a) * frac,
+      b: from.b + (to.b - from.b) * frac,
+      delta: from.delta + (to.delta - from.delta) * frac
+    };
+  }
+
+  var ptX = new Float64Array(4001);
+  var ptY = new Float64Array(4001);
+
+  function drawCurve(a, b, delta, scale, color, alpha, lineWidth, bloomSize, N) {
+    var cx = W / 2, cy = H / 2;
+    var size = Math.min(W, H) * scale;
+    var coverage = Math.PI * 2 * Math.max(Math.ceil(a), Math.ceil(b));
+    var step = coverage / N;
+    for (var i = 0; i <= N; i++) {
+      var t = i * step;
+      ptX[i] = cx + Math.sin(a * t + delta) * size;
+      ptY[i] = cy + Math.sin(b * t) * size;
+    }
+    if (bloomSize > 0) {
+      ctx.save();
+      ctx.globalAlpha = alpha * 0.15;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = lineWidth + bloomSize;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.shadowColor = color;
+      ctx.shadowBlur = bloomSize * 2;
+      ctx.beginPath();
+      ctx.moveTo(ptX[0], ptY[0]);
+      for (var i = 1; i <= N; i++) ctx.lineTo(ptX[i], ptY[i]);
+      ctx.stroke();
+      ctx.restore();
+    }
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = color;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    var batch = 20;
+    for (var i = 0; i < N; i += batch) {
+      var end = Math.min(i + batch, N);
+      var mid = Math.min(i + (batch >> 1), N - 1);
+      var dx = ptX[mid + 1] - ptX[mid];
+      var dy = ptY[mid + 1] - ptY[mid];
+      var speed = Math.sqrt(dx * dx + dy * dy);
+      var mult = 1.0 / (1.0 + speed * 0.25);
+      mult = 0.6 + mult * 1.2;
+      ctx.lineWidth = lineWidth * mult;
+      ctx.beginPath();
+      ctx.moveTo(ptX[i], ptY[i]);
+      for (var j = i + 1; j <= end; j++) ctx.lineTo(ptX[j], ptY[j]);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  var gridOpacity = 0;
+  function drawGrid(time) {
+    var target = 0.04 + Math.sin(time * 0.3) * 0.02;
+    gridOpacity += (target - gridOpacity) * 0.02;
+    var cx = W / 2, cy = H / 2;
+    var size = Math.min(W, H) * 0.4;
+    ctx.strokeStyle = 'rgba(200, 149, 108, ' + (gridOpacity * 0.5) + ')';
+    ctx.lineWidth = 0.5;
+    ctx.beginPath();
+    ctx.moveTo(cx - size, cy); ctx.lineTo(cx + size, cy);
+    ctx.moveTo(cx, cy - size); ctx.lineTo(cx, cy + size);
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(200, 149, 108, ' + (gridOpacity * 0.25) + ')';
+    ctx.lineWidth = 0.3;
+    var divisions = 8;
+    var step = size * 2 / divisions;
+    ctx.beginPath();
+    for (var i = 1; i < divisions; i++) {
+      if (i === divisions / 2) continue;
+      var off = -size + step * i;
+      ctx.moveTo(cx + off, cy - size); ctx.lineTo(cx + off, cy + size);
+      ctx.moveTo(cx - size, cy + off); ctx.lineTo(cx + size, cy + off);
+    }
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(200, 149, 108, ' + (gridOpacity * 0.4) + ')';
+    ctx.lineWidth = 0.6;
+    ctx.strokeRect(cx - size, cy - size, size * 2, size * 2);
+  }
+
+  var lastTs = 0;
+  var time = 0;
+
+  function draw(ts) {
+    requestAnimationFrame(draw);
+    if (paused) return;
+    if (lastTs === 0) lastTs = ts;
+    var dt = Math.min((ts - lastTs) / 1000, 0.05);
+    lastTs = ts;
+    time += dt;
+
+    driftTime += dt * DRIFT_SPEED * 0.06;
+    var wp = getWp(driftTime);
+    currentA += (wp.a - currentA) * 0.03;
+    currentB += (wp.b - currentB) * 0.03;
+    currentDelta += (wp.delta - currentDelta) * 0.03;
+
+    var fadeAlpha = 0.025 * TRAIL_LENGTH;
+    ctx.fillStyle = 'rgba(10, 10, 10, ' + fadeAlpha + ')';
+    ctx.fillRect(0, 0, W, H);
+
+    drawGrid(time);
+
+    // 2nd harmonic
+    drawCurve(currentA * 2, currentB * 2, currentDelta + time * 0.15, 0.32,
+      'rgba(200, 149, 108, 0.7)', 0.12, 0.8, 0, 2000);
+    // 3rd harmonic
+    drawCurve(currentA * 3, currentB * 2, currentDelta * 1.5 + time * 0.08, 0.28,
+      'rgba(200, 149, 108, 0.5)', 0.08, 0.6, 0, 2000);
+    // Sub-harmonic
+    drawCurve(currentA * 0.5, currentB * 0.5, currentDelta * 0.7 - time * 0.05, 0.38,
+      'rgba(180, 130, 90, 0.4)', 0.06, 0.5, 0, 1500);
+
+    // Main amber trace
+    drawCurve(currentA, currentB, currentDelta, 0.35,
+      'rgba(200, 149, 108, 1.0)', 0.7, 1.5, 8, 3000);
+    // Cyan shimmer accent (slightly offset)
+    drawCurve(currentA, currentB, currentDelta + 0.01, 0.35,
+      'rgba(0, 221, 255, 1.0)', 0.35, 1.0, 12, 3000);
+
+    // Phosphor dots
+    var cx = W / 2, cy = H / 2;
+    var size = Math.min(W, H) * 0.35;
+    var dotCount = 40;
+    var coverage = Math.PI * 2 * Math.max(Math.ceil(currentA), Math.ceil(currentB));
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.shadowColor = 'rgba(200, 149, 108, 0.6)';
+    ctx.shadowBlur = 6;
+    ctx.fillStyle = 'rgba(200, 149, 108, 0.12)';
+    ctx.beginPath();
+    for (var i = 0; i < dotCount; i++) {
+      var t = (i / dotCount) * coverage;
+      var x = cx + Math.sin(currentA * t + currentDelta) * size;
+      var y = cy + Math.sin(currentB * t) * size;
+      ctx.moveTo(x + 2, y);
+      ctx.arc(x, y, 2, 0, Math.PI * 2);
+    }
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = 'rgba(255, 245, 230, 0.35)';
+    ctx.beginPath();
+    for (var i = 0; i < dotCount; i++) {
+      var t = (i / dotCount) * coverage;
+      var x = cx + Math.sin(currentA * t + currentDelta) * size;
+      var y = cy + Math.sin(currentB * t) * size;
+      var pulse = 0.5 + 0.5 * Math.abs(Math.sin(t * 3 + time * 2));
+      ctx.moveTo(x + 1.2 * pulse, y);
+      ctx.arc(x, y, 1.2 * pulse, 0, Math.PI * 2);
+    }
+    ctx.fill();
+    ctx.restore();
+  }
+  requestAnimationFrame(draw);
+})();
+</script>
+</body>
+</html>

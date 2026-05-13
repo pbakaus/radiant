@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Step 05 — Harmonics</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed; top: 16px; left: 18px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 10px; letter-spacing: 0.15em; text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.55); z-index: 10; pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">05 · Harmonics</div>
+<canvas id="canvas"></canvas>
+<script>
+// Step 05 — Stack harmonic overtones behind the main trace. Doubling
+// the frequencies (2x) makes the figure look denser without crowding;
+// halving (0.5x) drapes a slower, larger silhouette behind. They share
+// the same drift, so they breathe with the main curve.
+(function () {
+  'use strict';
+  var canvas = document.getElementById('canvas');
+  var ctx = canvas.getContext('2d');
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  var H2 = 1.0;  // 2nd harmonic on
+  var H3 = 1.0;  // 3rd harmonic on
+  var HS = 1.0;  // sub-harmonic (0.5x) on
+  var W = 0, H = 0;
+
+  function resize() {
+    W = window.innerWidth; H = window.innerHeight;
+    canvas.width = W * dpr; canvas.height = H * dpr;
+    canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = '#0a0a0a';
+    ctx.fillRect(0, 0, W, H);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  var paused = false;
+  document.addEventListener('visibilitychange', function () {
+    paused = document.hidden;
+    if (!paused) lastTs = 0;
+  });
+
+  window.addEventListener('message', function (e) {
+    if (!e.data) return;
+    if (e.data.type === 'param') {
+      if (e.data.name === 'H2') H2 = parseFloat(e.data.value);
+      if (e.data.name === 'H3') H3 = parseFloat(e.data.value);
+      if (e.data.name === 'HS') HS = parseFloat(e.data.value);
+    }
+    if (e.data.name === 'RESET') {
+      ctx.fillStyle = '#0a0a0a'; ctx.fillRect(0, 0, W, H);
+    }
+  });
+
+  var lastTs = 0;
+  var time = 0;
+  var ptX = new Float64Array(3001);
+  var ptY = new Float64Array(3001);
+
+  function drawCurve(a, b, delta, scale, color, alpha, lineWidth, N) {
+    var cx = W / 2, cy = H / 2;
+    var size = Math.min(W, H) * scale;
+    var coverage = Math.PI * 2 * Math.max(Math.ceil(a), Math.ceil(b), 1);
+    var step = coverage / N;
+    for (var i = 0; i <= N; i++) {
+      var t = i * step;
+      ptX[i] = cx + Math.sin(a * t + delta) * size;
+      ptY[i] = cy + Math.sin(b * t) * size;
+    }
+    ctx.strokeStyle = color;
+    ctx.globalAlpha = alpha;
+    ctx.lineWidth = lineWidth;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(ptX[0], ptY[0]);
+    for (var i = 1; i <= N; i++) ctx.lineTo(ptX[i], ptY[i]);
+    ctx.stroke();
+    ctx.globalAlpha = 1.0;
+  }
+
+  function draw(ts) {
+    requestAnimationFrame(draw);
+    if (paused) return;
+    if (lastTs === 0) lastTs = ts;
+    var dt = Math.min((ts - lastTs) / 1000, 0.05);
+    lastTs = ts;
+    time += dt;
+
+    ctx.fillStyle = 'rgba(10, 10, 10, 0.04)';
+    ctx.fillRect(0, 0, W, H);
+
+    // Hold a single nicer waypoint so the user focuses on harmonics.
+    var a = 2.0, b = 3.0;
+    var delta = Math.PI / 4 + time * 0.12;
+
+    // Sub-harmonic (drawn first, largest, dimmest)
+    if (HS > 0.5) {
+      drawCurve(a * 0.5, b * 0.5, delta * 0.7 - time * 0.05, 0.42,
+        'rgba(180, 130, 90, 1.0)', 0.18, 0.6, 1800);
+    }
+
+    // 3rd harmonic
+    if (H3 > 0.5) {
+      drawCurve(a * 3, b * 2, delta * 1.5 + time * 0.08, 0.32,
+        'rgba(200, 149, 108, 1.0)', 0.20, 0.7, 2400);
+    }
+
+    // 2nd harmonic
+    if (H2 > 0.5) {
+      drawCurve(a * 2, b * 2, delta + time * 0.15, 0.34,
+        'rgba(200, 149, 108, 1.0)', 0.28, 0.9, 2400);
+    }
+
+    // Main trace
+    drawCurve(a, b, delta, 0.38, 'rgba(220, 180, 130, 1.0)', 0.85, 1.5, 3000);
+  }
+  requestAnimationFrame(draw);
+})();
+</script>
+</body>
+</html>
