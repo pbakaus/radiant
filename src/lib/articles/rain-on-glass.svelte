@@ -428,7 +428,7 @@ for (const drop of drops) {
 
 	<p>
 		Toggle the trick on and off below. Off, the scene is sharp everywhere and drops are
-		just refractions of a clear image — they read as bumps, not lenses. On, the surrounding glass
+		just refractions of a clear image; they read as bumps, not lenses. On, the surrounding glass
 		fogs out and the drops become clear windows into a more detailed view.
 	</p>
 

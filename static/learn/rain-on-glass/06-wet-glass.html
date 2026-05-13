@@ -7,7 +7,8 @@
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
-  canvas { display: block; width: 100vw; height: 100vh; }
+  canvas { display: block; position: absolute; top: 0; left: 0; }
+  #canvas { width: 100vw; height: 100vh; z-index: 1; }
   .label {
     position: fixed; top: 16px; left: 18px;
     font-family: 'SF Mono', 'Fira Code', monospace;
@@ -20,71 +21,137 @@
 <div class="label">06 · Wet glass</div>
 <canvas id="canvas"></canvas>
 <script>
-// ─────────────────────────────────────────────
 // Step 06 — The "wet glass" two-background trick.
-// Outside the drops: a heavily-blurred version of the scene (the look
-// of glass that's been rained on for a while — micro-droplets blur
-// everything).
-// Inside the drops: a less-blurred version. The bigger refracting
-// drops act as magnifying portals, revealing the sharper image.
-// Toggle the WET_GLASS slider to see what the trick does.
-// ─────────────────────────────────────────────
+// Two background textures: a sharp one (sampled through the drops) and
+// a heavily-blurred one (everything outside the drops). The drops
+// become magnifying portals that reveal the sharper image.
 (function () {
-  var canvas = document.getElementById('canvas');
-  var gl = canvas.getContext('webgl', { alpha: false, antialias: false });
-  if (!gl) return;
+  'use strict';
 
-  var dpr = Math.min(window.devicePixelRatio || 1, 2);
-  var BITMAP_SIZE = 256;
-  var SPAWN_RATE = 0.5;
-  var COLLISION_RADIUS = 0.55;
+  var canvas = document.getElementById('canvas');
+
+  var RAIN_AMOUNT = 1.0;
   var REFRACTION = 1.0;
   var WET_GLASS = 1.0;
-  var MAX_DROPS = 110;
-  var minR = 20 * dpr;
-  var maxR = 60 * dpr;
-  var SHAPE_TEARDROP = 1.45;
 
-  function rand(a, b) { return a + Math.random() * (b - a); }
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
 
-  // ─── Procedural city background ────────────────────────
-  // A moody warm/violet sky over an indigo skyline with scattered
-  // light bokeh. Generated once at init time.
-  var bgSeed = 42;
-  function srand() {
-    bgSeed = (bgSeed * 16807 + 0) % 2147483647;
-    return (bgSeed - 1) / 2147483646;
+  var paused = false;
+  var reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  document.addEventListener('visibilitychange', function () { paused = document.hidden; });
+
+  window.addEventListener('message', function (e) {
+    if (!e.data) return;
+    if (e.data.type === 'param') {
+      if (e.data.name === 'SPAWN_RATE') RAIN_AMOUNT = parseFloat(e.data.value);
+      if (e.data.name === 'RAIN_AMOUNT') RAIN_AMOUNT = parseFloat(e.data.value);
+      if (e.data.name === 'REFRACTION') REFRACTION = parseFloat(e.data.value);
+      if (e.data.name === 'WET_GLASS') WET_GLASS = parseFloat(e.data.value);
+    }
+    if (e.data.name === 'RESET' || e.data === 'RESET') {
+      RAIN_AMOUNT = 1.0;
+      REFRACTION = 1.0;
+      WET_GLASS = 1.0;
+      drops = [];
+      if (dropletsCtx) dropletsCtx.clearRect(0, 0, dropletsCanvas.width, dropletsCanvas.height);
+    }
+  });
+
+  function random(from, to, interp) {
+    if (from == null) { from = 0; to = 1; }
+    else if (to == null) { to = from; from = 0; }
+    if (typeof to === 'function') { interp = to; to = from; from = 0; }
+    if (!interp) interp = function(n) { return n; };
+    return from + (interp(Math.random()) * (to - from));
+  }
+  function chance(c) { return Math.random() <= c; }
+  function createCanvas(w, h) { var c = document.createElement('canvas'); c.width = w; c.height = h; return c; }
+
+  // Drop alpha mask (compact, so only the centre of the stamp is visible)
+  var dropSize = 64;
+  function generateDropAlpha(size) {
+    var c = createCanvas(size, size);
+    var ctx = c.getContext('2d');
+    var img = ctx.createImageData(size, size);
+    var d = img.data, cx = size / 2, cy = size / 2;
+    for (var py = 0; py < size; py++) {
+      for (var px = 0; px < size; px++) {
+        var dx = (px - cx) / cx;
+        var dy = (py - cy) / cy;
+        dy *= 1.0 + dy * 0.15;
+        var dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > 1.0) continue;
+        var alpha = Math.max(0, 1.0 - Math.pow(dist / 0.35, 6)) * 255;
+        var idx = (py * size + px) * 4;
+        d[idx] = d[idx + 1] = d[idx + 2] = 255;
+        d[idx + 3] = Math.round(Math.min(255, Math.max(0, alpha)));
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    return c;
   }
 
-  function makeCityBg(w, h, blurPx) {
-    var c = document.createElement('canvas');
-    c.width = w; c.height = h;
+  // Drop refraction normal map: R/G encode the refraction direction, B encodes depth
+  function generateDropColor(size) {
+    var c = createCanvas(size, size);
+    var ctx = c.getContext('2d');
+    var img = ctx.createImageData(size, size);
+    var d = img.data, cx = size / 2, cy = size / 2;
+    for (var py = 0; py < size; py++) {
+      for (var px = 0; px < size; px++) {
+        var dx = (px - cx) / cx;
+        var dy = (py - cy) / cy;
+        dy *= 1.0 + dy * 0.15;
+        var dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > 1.0) continue;
+        var nx = dist > 0.001 ? dx / dist : 0;
+        var ny = dist > 0.001 ? dy / dist : 0;
+        var r = Math.round(ny * 60 * dist + 128);
+        var g = Math.round(nx * 60 * dist + 128);
+        var depth = Math.sqrt(Math.max(0, 1.0 - dist * dist)) * 255;
+        var idx = (py * size + px) * 4;
+        d[idx] = Math.max(0, Math.min(255, r));
+        d[idx + 1] = Math.max(0, Math.min(255, g));
+        d[idx + 2] = Math.round(depth);
+        d[idx + 3] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    return c;
+  }
+
+  var dropAlphaTex = generateDropAlpha(dropSize);
+  var dropColorTex = generateDropColor(dropSize);
+
+  // Amber cityscape (procedural, seeded so sharp + blurred match)
+  var bgSeed = 42;
+  function srand() { bgSeed = (bgSeed * 16807) % 2147483647; return (bgSeed - 1) / 2147483646; }
+
+  function generateCityBg(w, h, blurPx) {
+    var c = createCanvas(w, h);
     var ctx = c.getContext('2d');
     bgSeed = 42;
 
-    // Sky — deep indigo at top, warm amber near horizon
     var sky = ctx.createLinearGradient(0, 0, 0, h);
-    sky.addColorStop(0,    '#0c0a1a');
-    sky.addColorStop(0.18, '#1a1228');
-    sky.addColorStop(0.45, '#2a1830');
-    sky.addColorStop(0.65, '#4a2520');
-    sky.addColorStop(0.85, '#6a3818');
-    sky.addColorStop(1,    '#8a4a10');
+    sky.addColorStop(0, '#0c0a1a');
+    sky.addColorStop(0.15, '#1a1228');
+    sky.addColorStop(0.35, '#2a1830');
+    sky.addColorStop(0.55, '#4a2520');
+    sky.addColorStop(0.75, '#6a3818');
+    sky.addColorStop(1, '#8a4a10');
     ctx.fillStyle = sky;
     ctx.fillRect(0, 0, w, h);
 
-    // Warm city glow rising from the bottom
     var glow = ctx.createLinearGradient(0, h * 0.3, 0, h);
     glow.addColorStop(0, 'rgba(200, 100, 30, 0)');
     glow.addColorStop(0.3, 'rgba(200, 120, 40, 0.15)');
     glow.addColorStop(0.6, 'rgba(210, 140, 50, 0.3)');
-    glow.addColorStop(1, 'rgba(220, 150, 60, 0.45)');
+    glow.addColorStop(1, 'rgba(220, 150, 60, 0.5)');
     ctx.fillStyle = glow;
     ctx.fillRect(0, 0, w, h);
 
-    // Building silhouettes
     var bColors = ['#08060e', '#0a0812', '#0c0a16', '#0e0c1a'];
-    for (var b = 0; b < 30; b++) {
+    for (var b = 0; b < 35; b++) {
       var bx = srand() * w * 1.3 - w * 0.15;
       var bw = w * 0.02 + srand() * w * 0.12;
       var bh = h * 0.15 + srand() * h * 0.55;
@@ -96,68 +163,63 @@
       var wCols = Math.floor(bw / (w * 0.02));
       for (var wr = 0; wr < wRows; wr++) {
         for (var wc = 0; wc < wCols; wc++) {
-          if (srand() > 0.5) {
+          if (srand() > 0.45) {
             var wx = bx + w * 0.005 + wc * (w * 0.02);
             var wy = by + h * 0.01 + wr * (h * 0.04);
             var warmth = srand();
-            if (warmth > 0.3) {
-              ctx.fillStyle = 'rgba(255, 200, 120, ' + (0.4 + srand() * 0.5) + ')';
-            } else if (warmth > 0.1) {
-              ctx.fillStyle = 'rgba(255, 160, 80, ' + (0.3 + srand() * 0.4) + ')';
-            } else {
-              ctx.fillStyle = 'rgba(180, 220, 255, ' + (0.2 + srand() * 0.3) + ')';
-            }
+            if (warmth > 0.3) ctx.fillStyle = 'rgba(255, 200, 120, ' + (0.4 + srand() * 0.5) + ')';
+            else if (warmth > 0.1) ctx.fillStyle = 'rgba(255, 160, 80, ' + (0.3 + srand() * 0.4) + ')';
+            else ctx.fillStyle = 'rgba(180, 220, 255, ' + (0.2 + srand() * 0.3) + ')';
             ctx.fillRect(wx, wy, w * 0.008, h * 0.02);
           }
         }
       }
     }
 
-    // Bokeh circles — soft warm + cool light blobs
-    for (var i = 0; i < 70; i++) {
+    for (var i = 0; i < 80; i++) {
       var bkx = srand() * w;
       var bky = h * 0.1 + srand() * h * 0.85;
-      var bkr = w * 0.02 + srand() * w * 0.14;
+      var bkr = w * 0.02 + srand() * w * 0.15;
       var rndC = srand();
       var hue, sat, lit;
-      if (rndC < 0.5)       { hue = 25 + srand() * 20; sat = 80 + srand() * 20; lit = 55 + srand() * 35; }
-      else if (rndC < 0.75) { hue = 10 + srand() * 15; sat = 85 + srand() * 15; lit = 50 + srand() * 30; }
-      else if (rndC < 0.88) { hue = 40 + srand() * 15; sat = 75 + srand() * 25; lit = 60 + srand() * 30; }
-      else if (rndC < 0.95) { hue = 200 + srand() * 30; sat = 60 + srand() * 30; lit = 50 + srand() * 30; }
-      else                  { hue = 330 + srand() * 25; sat = 65 + srand() * 25; lit = 55 + srand() * 25; }
+      if (rndC < 0.45) { hue = 25 + srand() * 20; sat = 80 + srand() * 20; lit = 55 + srand() * 35; }
+      else if (rndC < 0.7) { hue = 10 + srand() * 15; sat = 85 + srand() * 15; lit = 50 + srand() * 30; }
+      else if (rndC < 0.85) { hue = 40 + srand() * 15; sat = 75 + srand() * 25; lit = 60 + srand() * 30; }
+      else if (rndC < 0.93) { hue = 200 + srand() * 30; sat = 60 + srand() * 30; lit = 50 + srand() * 30; }
+      else { hue = 330 + srand() * 25; sat = 65 + srand() * 25; lit = 55 + srand() * 25; }
       var alpha = 0.08 + srand() * 0.25;
       var g = ctx.createRadialGradient(bkx, bky, 0, bkx, bky, bkr);
-      g.addColorStop(0,   'hsla(' + hue + ',' + sat + '%,' + lit + '%,' + (alpha * 1.3) + ')');
+      g.addColorStop(0, 'hsla(' + hue + ',' + sat + '%,' + lit + '%,' + (alpha * 1.3) + ')');
       g.addColorStop(0.3, 'hsla(' + hue + ',' + sat + '%,' + lit + '%,' + (alpha * 0.6) + ')');
       g.addColorStop(0.6, 'hsla(' + hue + ',' + sat + '%,' + lit + '%,' + (alpha * 0.15) + ')');
-      g.addColorStop(1,   'hsla(' + hue + ',' + sat + '%,' + lit + '%,0)');
+      g.addColorStop(1, 'hsla(' + hue + ',' + sat + '%,' + lit + '%,0)');
       ctx.fillStyle = g;
-      ctx.beginPath();
-      ctx.arc(bkx, bky, bkr, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.beginPath(); ctx.arc(bkx, bky, bkr, 0, Math.PI * 2); ctx.fill();
     }
 
-    // Bright pinpoint highlights
-    for (var p = 0; p < 22; p++) {
-      var px = srand() * w;
-      var py = h * 0.35 + srand() * h * 0.6;
-      var pr = w * 0.005 + srand() * w * 0.025;
-      var pRnd = srand();
-      var pH = pRnd > 0.3 ? (20 + srand() * 25) : (195 + srand() * 30);
-      var pg = ctx.createRadialGradient(px, py, 0, px, py, pr);
-      pg.addColorStop(0,   'hsla(' + pH + ',95%,90%,0.9)');
+    for (var p = 0; p < 25; p++) {
+      var ppx = srand() * w;
+      var ppy = h * 0.35 + srand() * h * 0.6;
+      var pr = w * 0.005 + srand() * w * 0.03;
+      var pH = srand() > 0.3 ? (20 + srand() * 25) : (195 + srand() * 30);
+      var pg = ctx.createRadialGradient(ppx, ppy, 0, ppx, ppy, pr);
+      pg.addColorStop(0, 'hsla(' + pH + ',95%,90%,0.9)');
       pg.addColorStop(0.2, 'hsla(' + pH + ',90%,75%,0.45)');
       pg.addColorStop(0.5, 'hsla(' + pH + ',85%,60%,0.15)');
-      pg.addColorStop(1,   'hsla(' + pH + ',80%,55%,0)');
+      pg.addColorStop(1, 'hsla(' + pH + ',80%,55%,0)');
       ctx.fillStyle = pg;
-      ctx.beginPath();
-      ctx.arc(px, py, pr, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.beginPath(); ctx.arc(ppx, ppy, pr, 0, Math.PI * 2); ctx.fill();
     }
 
+    var amb = ctx.createLinearGradient(0, h * 0.5, 0, h);
+    amb.addColorStop(0, 'rgba(200, 130, 50, 0)');
+    amb.addColorStop(0.5, 'rgba(200, 130, 50, 0.06)');
+    amb.addColorStop(1, 'rgba(220, 150, 60, 0.12)');
+    ctx.fillStyle = amb;
+    ctx.fillRect(0, 0, w, h);
+
     if (blurPx > 0) {
-      var tmp = document.createElement('canvas');
-      tmp.width = w; tmp.height = h;
+      var tmp = createCanvas(w, h);
       var tctx = tmp.getContext('2d');
       tctx.drawImage(c, 0, 0);
       ctx.clearRect(0, 0, w, h);
@@ -168,250 +230,530 @@
     return c;
   }
 
-  // ─── Drop bitmap (same as Steps 03–05) ─────────────────
-  function makeDropBitmap() {
-    var c = document.createElement('canvas');
-    c.width = c.height = BITMAP_SIZE;
-    var ctx = c.getContext('2d');
-    var img = ctx.createImageData(BITMAP_SIZE, BITMAP_SIZE);
-    var d = img.data;
-    var cx = BITMAP_SIZE / 2;
-    for (var py = 0; py < BITMAP_SIZE; py++) {
-      for (var px = 0; px < BITMAP_SIZE; px++) {
-        var dx = (px - cx) / cx;
-        var dy = (py - cx) / cx;
-        dy *= 1.0 + dy * 0.15;
-        var dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist > 1.0) continue;
-        var nx = dist > 0.001 ? dx / dist : 0;
-        var ny = dist > 0.001 ? dy / dist : 0;
-        var r = Math.round(ny * 60 * dist + 128);
-        var g = Math.round(nx * 60 * dist + 128);
-        var depth = Math.sqrt(Math.max(0, 1.0 - dist * dist)) * 255;
-        var alpha = Math.max(0, 1.0 - Math.pow(dist / 0.45, 6)) * 255;
-        var idx = (py * BITMAP_SIZE + px) * 4;
-        d[idx] = Math.max(0, Math.min(255, r));
-        d[idx + 1] = Math.max(0, Math.min(255, g));
-        d[idx + 2] = Math.round(depth);
-        d[idx + 3] = Math.round(Math.min(255, Math.max(0, alpha)));
+  var textureFgCanvas = generateCityBg(96, 64, 1);
+  var textureBgCanvas = generateCityBg(384, 256, 8);
+
+  // Pre-render 255 depth-variant drop stamps
+  var dropsGfx = [];
+  var clearDropletsGfx = null;
+  function renderDropsGfx() {
+    var dropBuffer = createCanvas(dropSize, dropSize);
+    var dropBufferCtx = dropBuffer.getContext('2d');
+    dropsGfx = [];
+    for (var i = 0; i < 255; i++) {
+      var drop = createCanvas(dropSize, dropSize);
+      var dropCtx = drop.getContext('2d');
+      dropBufferCtx.clearRect(0, 0, dropSize, dropSize);
+      dropBufferCtx.globalCompositeOperation = 'source-over';
+      dropBufferCtx.drawImage(dropColorTex, 0, 0, dropSize, dropSize);
+      dropBufferCtx.globalCompositeOperation = 'screen';
+      dropBufferCtx.fillStyle = 'rgba(0,0,' + i + ',1)';
+      dropBufferCtx.fillRect(0, 0, dropSize, dropSize);
+      dropCtx.globalCompositeOperation = 'source-over';
+      dropCtx.drawImage(dropAlphaTex, 0, 0, dropSize, dropSize);
+      dropCtx.globalCompositeOperation = 'source-in';
+      dropCtx.drawImage(dropBuffer, 0, 0, dropSize, dropSize);
+      dropsGfx.push(drop);
+    }
+    clearDropletsGfx = createCanvas(128, 128);
+    var clearCtx = clearDropletsGfx.getContext('2d');
+    clearCtx.fillStyle = '#000';
+    clearCtx.beginPath(); clearCtx.arc(64, 64, 64, 0, Math.PI * 2); clearCtx.fill();
+  }
+
+  // Drop physics
+  var Drop = {
+    x: 0, y: 0, r: 0,
+    spreadX: 0, spreadY: 0,
+    momentum: 0, momentumX: 0,
+    lastSpawn: 0, nextSpawn: 0,
+    parent: null, isNew: true,
+    killed: false, shrink: 0
+  };
+
+  var options = {
+    minR: 20, maxR: 50,
+    maxDrops: 900,
+    rainChance: 0.35, rainLimit: 6,
+    dropletsRate: 120, dropletsSize: [2, 5],
+    dropletsCleaningRadiusMultiplier: 0.28,
+    raining: true,
+    globalTimeScale: 1, trailRate: 1,
+    autoShrink: true,
+    spawnArea: [-0.1, 0.95],
+    trailScaleRange: [0.25, 0.35],
+    collisionRadius: 0.45,
+    collisionRadiusIncrease: 0.0002,
+    dropFallMultiplier: 1,
+    collisionBoostMultiplier: 0.05,
+    collisionBoost: 1
+  };
+
+  var rdWidth = 0, rdHeight = 0, rdScale = 1;
+  var rdCanvas, rdCtx;
+  var dropletsCanvas, dropletsCtx;
+  var dropletsPixelDensity = 1;
+  var dropletsCounter = 0;
+  var drops = [];
+  var textureCleaningIterations = 0;
+  var rdLastRender = null;
+
+  function deltaR() { return options.maxR - options.minR; }
+  function area() { return (rdWidth * rdHeight) / rdScale; }
+  function areaMultiplier() { return Math.sqrt(area() / (1024 * 768)); }
+
+  function drawDrop(ctx, drop) {
+    if (dropsGfx.length <= 0) return;
+    var x = drop.x, y = drop.y, r = drop.r;
+    var spreadX = drop.spreadX, spreadY = drop.spreadY;
+    var scaleX = 1, scaleY = 1.5;
+    var d = Math.max(0, Math.min(1, ((r - options.minR) / deltaR()) * 0.9));
+    d *= 1 / (((spreadX + spreadY) * 0.5) + 1);
+    d = Math.floor(d * (dropsGfx.length - 1));
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.drawImage(
+      dropsGfx[d],
+      (x - (r * scaleX * (spreadX + 1))) * rdScale,
+      (y - (r * scaleY * (spreadY + 1))) * rdScale,
+      (r * 2 * scaleX * (spreadX + 1)) * rdScale,
+      (r * 2 * scaleY * (spreadY + 1)) * rdScale
+    );
+  }
+
+  function drawDroplet(x, y, r) {
+    drawDrop(dropletsCtx, {
+      x: x * dropletsPixelDensity,
+      y: y * dropletsPixelDensity,
+      r: r * dropletsPixelDensity,
+      spreadX: 0, spreadY: 0
+    });
+  }
+
+  function clearDroplets(x, y, r) {
+    if (!r) r = 30;
+    dropletsCtx.globalCompositeOperation = 'destination-out';
+    dropletsCtx.drawImage(
+      clearDropletsGfx,
+      (x - r) * dropletsPixelDensity * rdScale,
+      (y - r) * dropletsPixelDensity * rdScale,
+      (r * 2) * dropletsPixelDensity * rdScale,
+      (r * 2) * dropletsPixelDensity * rdScale * 1.5
+    );
+  }
+
+  function rdCreateDrop(opts) {
+    if (drops.length >= options.maxDrops * areaMultiplier()) return null;
+    var d = {};
+    for (var k in Drop) { if (Drop.hasOwnProperty(k)) d[k] = Drop[k]; }
+    for (var k2 in opts) { if (opts.hasOwnProperty(k2)) d[k2] = opts[k2]; }
+    return d;
+  }
+
+  function updateRain(timeScale) {
+    var rainDrops = [];
+    if (options.raining) {
+      var limit = options.rainLimit * timeScale * areaMultiplier() * RAIN_AMOUNT;
+      var count = 0;
+      while (chance(options.rainChance * timeScale * areaMultiplier() * RAIN_AMOUNT) && count < limit) {
+        count++;
+        var r = random(options.minR, options.maxR, function(n) { return Math.pow(n, 3); });
+        var rd = rdCreateDrop({
+          x: random(rdWidth / rdScale),
+          y: random((rdHeight / rdScale) * options.spawnArea[0], (rdHeight / rdScale) * options.spawnArea[1]),
+          r: r,
+          momentum: 1 + ((r - options.minR) * 0.1) + random(2),
+          spreadX: 1.5, spreadY: 1.5
+        });
+        if (rd != null) rainDrops.push(rd);
       }
     }
-    ctx.putImageData(img, 0, 0);
-    return c;
+    return rainDrops;
   }
 
-  var dropBitmap = makeDropBitmap();
-  var waterMapCanvas = document.createElement('canvas');
-  var waterCtx = waterMapCanvas.getContext('2d');
-  var sharpBgCanvas = null;
-  var blurryBgCanvas = null;
-  var drops = [];
-  var lastTime = 0;
-
-  function spawnDrops(dt) {
-    var w = waterMapCanvas.width, h = waterMapCanvas.height;
-    var spawnCount = SPAWN_RATE * dt;
-    while (spawnCount > 0 && drops.length < MAX_DROPS) {
-      if (Math.random() > spawnCount) break;
-      spawnCount -= 1;
-      var t = Math.random(); t = t * t;
-      var r = minR + (maxR - minR) * t;
-      drops.push({
-        x: rand(0, w),
-        y: rand(-50, h * 0.6),
-        r: r,
-        momentum: 0,
-        killed: false,
-        spreadX: 0.5 + rand(-0.1, 0.2),
-        spreadY: 0.4
-      });
+  function updateDroplets(timeScale) {
+    if (textureCleaningIterations > 0) {
+      textureCleaningIterations -= 1 * timeScale;
+      dropletsCtx.globalCompositeOperation = 'destination-out';
+      dropletsCtx.fillStyle = 'rgba(0,0,0,' + (0.05 * timeScale) + ')';
+      dropletsCtx.fillRect(0, 0, rdWidth * dropletsPixelDensity, rdHeight * dropletsPixelDensity);
     }
-  }
-
-  function handleCollisions() {
-    drops.sort(function(a, b) { return a.y - b.y; });
-    for (var i = 0; i < drops.length; i++) {
-      var d1 = drops[i];
-      if (d1.killed) continue;
-      var end = Math.min(i + 30, drops.length);
-      for (var j = i + 1; j < end; j++) {
-        var d2 = drops[j];
-        if (d2.killed) continue;
-        if (d1.r <= d2.r) continue;
-        var dx = d2.x - d1.x;
-        var dy = d2.y - d1.y;
-        var dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist < (d1.r + d2.r) * COLLISION_RADIUS) {
-          var a1 = Math.PI * d1.r * d1.r;
-          var a2 = Math.PI * d2.r * d2.r;
-          var targetR = Math.sqrt((a1 + a2 * 0.8) / Math.PI);
-          if (targetR > maxR * 1.5) targetR = maxR * 1.5;
-          d1.r = targetR;
-          d1.momentum = Math.max(d2.momentum, d1.momentum + 1.5);
-          d1.spreadX = Math.max(d1.spreadX, 0.25);
-          d1.spreadY = Math.max(d1.spreadY, 0.15);
-          d2.killed = true;
+    if (options.raining) {
+      dropletsCounter += options.dropletsRate * timeScale * areaMultiplier() * RAIN_AMOUNT;
+      var totalToSpawn = Math.floor(dropletsCounter);
+      dropletsCounter -= totalToSpawn;
+      while (totalToSpawn > 0) {
+        if (chance(0.8) && totalToSpawn >= 4) {
+          var clusterSize = Math.min(totalToSpawn, 4 + Math.floor(Math.random() * 5));
+          var cx = random(rdWidth / rdScale);
+          var cy = random(rdHeight / rdScale);
+          var clusterSpread = 4 + Math.random() * 8;
+          for (var ci = 0; ci < clusterSize; ci++) {
+            var angle = Math.random() * Math.PI * 2;
+            var dist = Math.random() * clusterSpread;
+            drawDroplet(
+              cx + Math.cos(angle) * dist,
+              cy + Math.sin(angle) * dist,
+              random(options.dropletsSize[0], options.dropletsSize[1], function(n) { return n * n; })
+            );
+          }
+          totalToSpawn -= clusterSize;
+        } else {
+          drawDroplet(
+            random(rdWidth / rdScale),
+            random(rdHeight / rdScale),
+            random(options.dropletsSize[0], options.dropletsSize[1], function(n) { return n * n; })
+          );
+          totalToSpawn--;
         }
       }
     }
+    rdCtx.drawImage(dropletsCanvas, 0, 0, rdWidth, rdHeight);
   }
 
-  function updatePhysics(dt) {
-    var h = waterMapCanvas.height;
-    spawnDrops(dt);
-    for (var i = drops.length - 1; i >= 0; i--) {
-      var d = drops[i];
-      if (d.killed) { drops.splice(i, 1); continue; }
-      if (Math.random() < d.r / (90 * dpr) * dt * 0.3) {
-        d.momentum += rand(0.3, 1.2) * dpr;
-      }
-      if (d.momentum > 4.0 * dpr) d.momentum = 4.0 * dpr;
-      d.y += d.momentum * dt;
-      d.momentum *= Math.pow(0.94, dt);
-      d.spreadX *= Math.pow(0.4, dt);
-      d.spreadY *= Math.pow(0.7, dt);
-      if (d.y > h + d.r) d.killed = true;
-    }
-    handleCollisions();
-  }
+  function updateDrops(timeScale) {
+    var newDrops = [];
+    updateDroplets(timeScale);
+    var rainDrops = updateRain(timeScale);
+    newDrops = newDrops.concat(rainDrops);
 
-  function rebuildWaterMap() {
-    waterCtx.clearRect(0, 0, waterMapCanvas.width, waterMapCanvas.height);
-    waterCtx.globalCompositeOperation = 'source-over';
+    drops.sort(function(a, b) {
+      var va = (a.y * (rdWidth / rdScale)) + a.x;
+      var vb = (b.y * (rdWidth / rdScale)) + b.x;
+      return va > vb ? 1 : va === vb ? 0 : -1;
+    });
+
     for (var i = 0; i < drops.length; i++) {
-      var d = drops[i];
-      var w_ = d.r * 2 * (1 + d.spreadX);
-      var h_ = d.r * 2 * SHAPE_TEARDROP * (1 + d.spreadY);
-      waterCtx.drawImage(dropBitmap, d.x - w_ / 2, d.y - h_ / 2, w_, h_);
+      var drop = drops[i];
+      if (drop.killed) continue;
+
+      if (chance((drop.r - (options.minR * options.dropFallMultiplier)) * (0.1 / deltaR()) * timeScale)) {
+        drop.momentum += random((drop.r / options.maxR) * 4);
+      }
+      if (options.autoShrink && drop.r <= options.minR && chance(0.05 * timeScale)) {
+        drop.shrink += 0.01;
+      }
+      drop.r -= drop.shrink * timeScale;
+      if (drop.r <= 0) { drop.killed = true; continue; }
+
+      if (options.raining) {
+        drop.lastSpawn += drop.momentum * timeScale * options.trailRate;
+        if (drop.lastSpawn > drop.nextSpawn) {
+          var trailDrop = rdCreateDrop({
+            x: drop.x + (random(-drop.r, drop.r) * 0.1),
+            y: drop.y - (drop.r * 0.01),
+            r: drop.r * random(options.trailScaleRange[0], options.trailScaleRange[1]),
+            spreadY: drop.momentum * 0.1,
+            parent: drop
+          });
+          if (trailDrop != null) {
+            newDrops.push(trailDrop);
+            drop.r *= Math.pow(0.97, timeScale);
+            drop.lastSpawn = 0;
+            drop.nextSpawn = random(options.minR, options.maxR) - (drop.momentum * 2 * options.trailRate) + (options.maxR - drop.r);
+          }
+        }
+      }
+
+      drop.spreadX *= Math.pow(0.4, timeScale);
+      drop.spreadY *= Math.pow(0.7, timeScale);
+
+      var moved = drop.momentum > 0;
+      if (moved && !drop.killed) {
+        drop.y += drop.momentum * options.globalTimeScale;
+        drop.x += drop.momentumX * options.globalTimeScale;
+        if (drop.y > (rdHeight / rdScale) + drop.r) drop.killed = true;
+      }
+
+      var checkCollision = (moved || drop.isNew) && !drop.killed;
+      drop.isNew = false;
+
+      if (checkCollision) {
+        var end = Math.min(i + 70, drops.length);
+        for (var j = i + 1; j < end; j++) {
+          var drop2 = drops[j];
+          if (drop === drop2 || drop.r <= drop2.r || drop.parent === drop2 || drop2.parent === drop || drop2.killed) continue;
+          var ddx = drop2.x - drop.x;
+          var ddy = drop2.y - drop.y;
+          var dist = Math.sqrt(ddx * ddx + ddy * ddy);
+          if (dist < (drop.r + drop2.r) * (options.collisionRadius + (drop.momentum * options.collisionRadiusIncrease * timeScale))) {
+            var r1 = drop.r, r2 = drop2.r;
+            var a1 = Math.PI * r1 * r1;
+            var a2 = Math.PI * r2 * r2;
+            var targetR = Math.sqrt((a1 + (a2 * 0.8)) / Math.PI);
+            if (targetR > options.maxR) targetR = options.maxR;
+            drop.r = targetR;
+            drop.momentumX += ddx * 0.1;
+            drop.spreadX = 0;
+            drop.spreadY = 0;
+            drop2.killed = true;
+            drop.momentum = Math.max(drop2.momentum, Math.min(40, drop.momentum + (targetR * options.collisionBoostMultiplier) + options.collisionBoost));
+          }
+        }
+      }
+
+      drop.momentum -= Math.max(1, (options.minR * 0.5) - drop.momentum) * 0.1 * timeScale;
+      if (drop.momentum < 0) drop.momentum = 0;
+      drop.momentumX *= Math.pow(0.7, timeScale);
+
+      if (!drop.killed) {
+        newDrops.push(drop);
+        if (moved && options.dropletsRate > 0) clearDroplets(drop.x, drop.y, drop.r * options.dropletsCleaningRadiusMultiplier);
+        drawDrop(rdCtx, drop);
+      }
     }
+    drops = newDrops;
   }
 
-  // ─── Shader — the two-background trick ─────────────────
-  var vertSrc = 'attribute vec2 a_pos; void main(){ gl_Position = vec4(a_pos, 0.0, 1.0); }';
-  var fragSrc = `
-precision mediump float;
-uniform sampler2D u_waterMap;
-uniform sampler2D u_sharpBg;
-uniform sampler2D u_blurryBg;
-uniform vec2 u_res;
-uniform float u_refraction;
-uniform float u_wetGlass;
+  function rdUpdate() {
+    rdCtx.clearRect(0, 0, rdWidth, rdHeight);
+    var now = Date.now();
+    if (rdLastRender == null) rdLastRender = now;
+    var deltaT = now - rdLastRender;
+    var timeScale = deltaT / ((1 / 60) * 1000);
+    if (timeScale > 1.1) timeScale = 1.1;
+    timeScale *= options.globalTimeScale;
+    rdLastRender = now;
+    updateDrops(timeScale);
+  }
 
-void main() {
-  vec2 uv = gl_FragCoord.xy / u_res;
-  vec2 waterUV = vec2(uv.x, 1.0 - uv.y);
-  vec4 water = texture2D(u_waterMap, waterUV);
+  function initRaindrops(width, height, scale) {
+    rdWidth = width;
+    rdHeight = height;
+    rdScale = scale;
+    rdCanvas = createCanvas(rdWidth, rdHeight);
+    rdCtx = rdCanvas.getContext('2d');
+    dropletsCanvas = createCanvas(rdWidth * dropletsPixelDensity, rdHeight * dropletsPixelDensity);
+    dropletsCtx = dropletsCanvas.getContext('2d');
+    drops = [];
+    dropletsCounter = 0;
+    rdLastRender = null;
+    renderDropsGfx();
+  }
 
-  vec2 offset = (vec2(water.g, water.r) - 0.5) * 2.0;
-  float depth = water.b;
-  vec2 refractedUV = uv + offset * (256.0 + depth * 256.0) / u_res.x * u_refraction;
+  // WebGL — fragment shader with WET_GLASS toggle
+  var gl = canvas.getContext('webgl', { alpha: false, antialias: false });
+  if (!gl) return;
 
-  // OUTSIDE drops: heavy blur when wet-glass is on, sharp when off.
-  // INSIDE drops: always the sharper image — drops reveal more detail.
-  vec4 outsideDrop = mix(
-    texture2D(u_sharpBg, uv),
-    texture2D(u_blurryBg, uv),
-    u_wetGlass
-  );
-  vec4 insideDrop = texture2D(u_sharpBg, refractedUV);
+  var vertSrc = [
+    'precision mediump float;',
+    'attribute vec2 a_position;',
+    'void main() { gl_Position = vec4(a_position, 0.0, 1.0); }'
+  ].join('\n');
 
-  float dropMask = clamp(water.a * 4.0 - 1.0, 0.0, 1.0);
-  gl_FragColor = mix(outsideDrop, insideDrop, dropMask);
-}
-`;
+  var fragSrc = [
+    'precision mediump float;',
+    'uniform sampler2D u_waterMap;',
+    'uniform sampler2D u_textureFg;',
+    'uniform sampler2D u_textureBg;',
+    'uniform vec2 u_resolution;',
+    'uniform float u_textureRatio;',
+    'uniform float u_minRefraction;',
+    'uniform float u_refractionDelta;',
+    'uniform float u_brightness;',
+    'uniform float u_alphaMultiply;',
+    'uniform float u_alphaSubtract;',
+    'uniform float u_wetGlass;',
+    '',
+    'vec4 blend(vec4 bg, vec4 fg) {',
+    '  vec3 bgm = bg.rgb * bg.a;',
+    '  vec3 fgm = fg.rgb * fg.a;',
+    '  float ia = 1.0 - fg.a;',
+    '  float a = (fg.a + bg.a * ia);',
+    '  vec3 rgb = a != 0.0 ? (fgm + bgm * ia) / a : vec3(0.0);',
+    '  return vec4(rgb, a);',
+    '}',
+    '',
+    'vec2 pixel() { return vec2(1.0, 1.0) / u_resolution; }',
+    '',
+    'vec2 texCoord() {',
+    '  return vec2(gl_FragCoord.x, u_resolution.y - gl_FragCoord.y) / u_resolution;',
+    '}',
+    '',
+    'vec2 scaledTexCoord() {',
+    '  float ratio = u_resolution.x / u_resolution.y;',
+    '  vec2 scale = vec2(1.0, 1.0);',
+    '  vec2 offset = vec2(0.0, 0.0);',
+    '  float ratioDelta = ratio - u_textureRatio;',
+    '  if (ratioDelta >= 0.0) { scale.y = (1.0 + ratioDelta); offset.y = ratioDelta / 2.0; }',
+    '  else { scale.x = (1.0 - ratioDelta); offset.x = -ratioDelta / 2.0; }',
+    '  return (texCoord() + offset) / scale;',
+    '}',
+    '',
+    'void main() {',
+    // Sample blurred and sharp at the same screen pos for the "outside drops" region
+    '  vec2 stc = scaledTexCoord();',
+    '  vec4 blurred = texture2D(u_textureBg, stc);',
+    '  vec4 sharpBg = texture2D(u_textureFg, stc);',
+    '  vec4 outsideColor = mix(sharpBg, blurred, u_wetGlass);',
+    '',
+    '  vec4 cur = texture2D(u_waterMap, texCoord());',
+    '  float d = cur.b;',
+    '  float x = cur.g;',
+    '  float y = cur.r;',
+    '  float a = clamp(cur.a * u_alphaMultiply - u_alphaSubtract, 0.0, 1.0);',
+    '',
+    '  vec2 refraction = (vec2(x, y) - 0.5) * 2.0;',
+    '  vec2 refractionPos = stc + (pixel() * refraction * (u_minRefraction + (d * u_refractionDelta)));',
+    '  vec4 throughDrop = texture2D(u_textureFg, refractionPos);',
+    '',
+    '  vec4 fg = vec4(throughDrop.rgb * u_brightness, a);',
+    '  gl_FragColor = blend(outsideColor, fg);',
+    '}'
+  ].join('\n');
 
-  function compile(type, src) {
-    var s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
-    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) console.error(gl.getShaderInfoLog(s));
+  function compileShader(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) console.error('Shader compile:', gl.getShaderInfoLog(s));
     return s;
   }
-  var prog = gl.createProgram();
-  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
-  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
-  gl.linkProgram(prog); gl.useProgram(prog);
 
-  var buf = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
-  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compileShader(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compileShader(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  gl.useProgram(prog);
+
+  var quad = new Float32Array([-1,-1, 1,-1, -1,1, -1,1, 1,-1, 1,1]);
+  var posBuffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, posBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, quad, gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_position');
   gl.enableVertexAttribArray(aPos);
   gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
 
-  function makeTex(unit, source) {
-    var t = gl.createTexture();
+  var uniforms = {
+    resolution: gl.getUniformLocation(prog, 'u_resolution'),
+    textureRatio: gl.getUniformLocation(prog, 'u_textureRatio'),
+    minRefraction: gl.getUniformLocation(prog, 'u_minRefraction'),
+    refractionDelta: gl.getUniformLocation(prog, 'u_refractionDelta'),
+    brightness: gl.getUniformLocation(prog, 'u_brightness'),
+    alphaMultiply: gl.getUniformLocation(prog, 'u_alphaMultiply'),
+    alphaSubtract: gl.getUniformLocation(prog, 'u_alphaSubtract'),
+    wetGlass: gl.getUniformLocation(prog, 'u_wetGlass'),
+    waterMap: gl.getUniformLocation(prog, 'u_waterMap'),
+    textureFg: gl.getUniformLocation(prog, 'u_textureFg'),
+    textureBg: gl.getUniformLocation(prog, 'u_textureBg')
+  };
+
+  var bgRatio = textureBgCanvas.width / textureBgCanvas.height;
+
+  function initTexture(unit, source) {
+    var tex = gl.createTexture();
     gl.activeTexture(gl['TEXTURE' + unit]);
-    gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     if (source) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
-    return t;
+    return tex;
   }
-  var waterTex = makeTex(0, null);
-  var sharpTex = makeTex(1, null);
-  var blurryTex = makeTex(2, null);
-  var uWaterMap = gl.getUniformLocation(prog, 'u_waterMap');
-  var uSharpBg = gl.getUniformLocation(prog, 'u_sharpBg');
-  var uBlurryBg = gl.getUniformLocation(prog, 'u_blurryBg');
-  var uRes = gl.getUniformLocation(prog, 'u_res');
-  var uRefraction = gl.getUniformLocation(prog, 'u_refraction');
-  var uWetGlass = gl.getUniformLocation(prog, 'u_wetGlass');
+
+  var waterTex = initTexture(0, null);
+  var fgTex = initTexture(1, textureFgCanvas);
+  var bgTex = initTexture(2, textureBgCanvas);
 
   function resize() {
-    var w = Math.round(canvas.clientWidth * dpr);
-    var h = Math.round(canvas.clientHeight * dpr);
-    if (canvas.width !== w || canvas.height !== h) {
-      canvas.width = w; canvas.height = h;
-      gl.viewport(0, 0, w, h);
-      waterMapCanvas.width = w; waterMapCanvas.height = h;
-      // Sharp version: slight 1px blur (camera-ish softness).
-      // Blurry version: heavy blur (the wet-glass look).
-      sharpBgCanvas = makeCityBg(Math.round(w / 2), Math.round(h / 2), 1);
-      blurryBgCanvas = makeCityBg(Math.round(w / 3), Math.round(h / 3), 14);
-      gl.activeTexture(gl.TEXTURE1);
-      gl.bindTexture(gl.TEXTURE_2D, sharpTex);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, sharpBgCanvas);
-      gl.activeTexture(gl.TEXTURE2);
-      gl.bindTexture(gl.TEXTURE_2D, blurryTex);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, blurryBgCanvas);
-    }
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+    canvas.style.width = w + 'px';
+    canvas.style.height = h + 'px';
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    initRaindrops(canvas.width, canvas.height, dpr);
   }
+  window.addEventListener('resize', resize);
+  resize();
 
-  function render(now) {
-    if (!lastTime) lastTime = now;
-    var dt = Math.min(2.0, (now - lastTime) / 16.67);
-    lastTime = now;
-    resize();
-    updatePhysics(dt);
-    rebuildWaterMap();
+  function render() {
+    requestAnimationFrame(render);
+    if (paused || reducedMotion) return;
+
+    rdUpdate();
+
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, waterTex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, waterMapCanvas);
-    gl.uniform2f(uRes, canvas.width, canvas.height);
-    gl.uniform1f(uRefraction, REFRACTION);
-    gl.uniform1f(uWetGlass, WET_GLASS);
-    gl.uniform1i(uWaterMap, 0);
-    gl.uniform1i(uSharpBg, 1);
-    gl.uniform1i(uBlurryBg, 2);
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
-    requestAnimationFrame(render);
-  }
-  requestAnimationFrame(render);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, rdCanvas);
 
-  window.addEventListener('message', function(e){
-    if (e.data && e.data.type === 'param') {
-      switch (e.data.name) {
-        case 'WET_GLASS':        WET_GLASS = e.data.value; break;
-        case 'REFRACTION':       REFRACTION = e.data.value; break;
-        case 'SPAWN_RATE':       SPAWN_RATE = e.data.value; break;
-        case 'CLEAR':
-        case 'RESET':
-          drops = [];
-          break;
+    gl.useProgram(prog);
+    gl.uniform2f(uniforms.resolution, canvas.width, canvas.height);
+    gl.uniform1f(uniforms.textureRatio, bgRatio);
+    gl.uniform1f(uniforms.minRefraction, 256.0 * REFRACTION);
+    gl.uniform1f(uniforms.refractionDelta, 256.0 * REFRACTION);
+    gl.uniform1f(uniforms.brightness, 1.04);
+    gl.uniform1f(uniforms.alphaMultiply, 6.0);
+    gl.uniform1f(uniforms.alphaSubtract, 3.0);
+    gl.uniform1f(uniforms.wetGlass, WET_GLASS);
+
+    gl.uniform1i(uniforms.waterMap, 0);
+    gl.uniform1i(uniforms.textureFg, 1);
+    gl.uniform1i(uniforms.textureBg, 2);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, posBuffer);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+  }
+
+  // Mouse splash + wipe
+  function createSplash(clientX, clientY) {
+    var rect = canvas.getBoundingClientRect();
+    var x = (clientX - rect.left) / rect.width * (rdWidth / rdScale);
+    var y = (clientY - rect.top) / rect.height * (rdHeight / rdScale);
+    var mainDrop = rdCreateDrop({ x: x, y: y, r: random(options.minR * 1.5, options.maxR), momentum: 1 + random(3), spreadX: 2.0, spreadY: 2.0 });
+    if (mainDrop) drops.push(mainDrop);
+    for (var i = 0; i < 8; i++) {
+      var ang = Math.random() * Math.PI * 2;
+      var dst = 10 + Math.random() * 30;
+      var sd = rdCreateDrop({
+        x: x + Math.cos(ang) * dst,
+        y: y + Math.sin(ang) * dst,
+        r: random(options.minR * 0.5, options.minR * 1.2),
+        momentum: 0.5 + Math.random() * 1.5,
+        spreadX: 1.0, spreadY: 1.0
+      });
+      if (sd) drops.push(sd);
+    }
+    for (var j = 0; j < 20; j++) {
+      var sa = Math.random() * Math.PI * 2;
+      var sd2 = 5 + Math.random() * 25;
+      drawDroplet(x + Math.cos(sa) * sd2, y + Math.sin(sa) * sd2, random(options.dropletsSize[0], options.dropletsSize[1]));
+    }
+  }
+  var mouseDown = false;
+  function screenToRd(cx, cy) {
+    var rect = canvas.getBoundingClientRect();
+    return { x: (cx - rect.left) / rect.width * (rdWidth / rdScale), y: (cy - rect.top) / rect.height * (rdHeight / rdScale) };
+  }
+  function wipeAt(cx, cy) {
+    var p = screenToRd(cx, cy);
+    var wipeR = 60 * rdScale;
+    var killR = wipeR * 0.5;
+    var pushR = wipeR * 1.5;
+    clearDroplets(p.x, p.y, wipeR / rdScale);
+    for (var i = drops.length - 1; i >= 0; i--) {
+      var d = drops[i];
+      var dxw = d.x - p.x, dyw = d.y - p.y;
+      var dist = Math.sqrt(dxw * dxw + dyw * dyw);
+      if (dist < killR) drops.splice(i, 1);
+      else if (dist < pushR) {
+        var push = (1 - (dist - killR) / (pushR - killR)) * 20;
+        d.x += (dxw / dist) * push;
+        d.y += (dyw / dist) * push * 0.6;
       }
     }
-  });
+  }
+  canvas.addEventListener('mousedown', function(e) { mouseDown = true; createSplash(e.clientX, e.clientY); });
+  canvas.addEventListener('mousemove', function(e) { if (mouseDown) wipeAt(e.clientX, e.clientY); });
+  canvas.addEventListener('mouseup', function() { mouseDown = false; });
+  canvas.addEventListener('mouseleave', function() { mouseDown = false; });
+  canvas.addEventListener('touchstart', function(e) { e.preventDefault(); mouseDown = true; createSplash(e.touches[0].clientX, e.touches[0].clientY); }, { passive: false });
+  canvas.addEventListener('touchmove', function(e) { e.preventDefault(); if (mouseDown) wipeAt(e.touches[0].clientX, e.touches[0].clientY); }, { passive: false });
+  canvas.addEventListener('touchend', function() { mouseDown = false; });
+
+  requestAnimationFrame(render);
 })();
 </script>
 </body>
