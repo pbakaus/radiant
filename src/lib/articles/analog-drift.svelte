@@ -182,9 +182,9 @@ drawCurve(a, b, delta, 0.38, 'rgba(220, 180, 130, 1)', 0.85, 1.5);`;
 		caption="A single Lissajous curve, hard-cleared every frame. No phosphor, no thickness modulation, no drift. Slide a and b through small integers to feel the closed-curve family."
 		aspect="16/9"
 		params={[
-			{ name: 'A', label: 'a (x frequency)', min: 1, max: 6, step: 1, default: 3 },
+			{ name: 'A', label: 'a (x frequency)', min: 1, max: 6, step: 1, default: 1 },
 			{ name: 'B', label: 'b (y frequency)', min: 1, max: 6, step: 1, default: 2 },
-			{ name: 'DELTA', label: 'δ (phase)', min: 0, max: Math.PI, step: 0.05, default: Math.PI / 4 }
+			{ name: 'DELTA', label: 'δ (phase)', min: 0, max: Math.PI, step: 0.05, default: Math.PI / 2 }
 		]}
 	/>
 
