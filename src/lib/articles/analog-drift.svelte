@@ -252,7 +252,7 @@ drawCurve(a, b, delta, 0.38, 'rgba(220, 180, 130, 1)', 0.85, 1.5);`;
 		caption="Same 3:2 figure either way. Toggle modulation on and watch the slow lobes get fat while the fast sweeps stay thin. The strength slider exaggerates or softens the effect."
 		aspect="16/9"
 		params={[
-			{ name: 'STRENGTH', label: 'Modulation strength', min: 0.0, max: 1.0, step: 0.02, default: 0.25 }
+			{ name: 'STRENGTH', label: 'Modulation strength', min: 0.0, max: 1.0, step: 0.02, default: 0.5 }
 		]}
 		toggle={{ name: 'MODULATE', label: 'Velocity-modulated thickness', onValue: 1, offValue: 0, default: true }}
 	/>

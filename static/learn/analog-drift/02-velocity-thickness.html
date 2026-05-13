@@ -31,7 +31,7 @@
   var dpr = Math.min(window.devicePixelRatio || 1, 2);
 
   var MODULATE = 1.0;   // 0 = constant thickness, 1 = velocity-modulated
-  var STRENGTH = 0.25;   // higher = more dramatic difference
+  var STRENGTH = 0.5;    // higher = more dramatic difference
   var W = 0, H = 0;
 
   function resize() {
@@ -76,16 +76,19 @@
     lastTs = ts;
     time += dt;
 
-    // Slow phosphor fade so the figure persists.
-    ctx.fillStyle = 'rgba(10, 10, 10, 0.04)';
+    // Hard clear each frame so toggling MODULATE / STRENGTH is immediately
+    // visible. No phosphor here — this demo is about thickness, not trails.
+    ctx.fillStyle = '#0a0a0a';
     ctx.fillRect(0, 0, W, H);
 
     var cx = W / 2, cy = H / 2;
     var size = Math.min(W, H) * 0.38;
 
-    // A figure with strong speed variation (3:2 ratio).
+    // A held figure with strong speed variation (3:2 ratio).
+    // No phase sweep — keeping the curve still lets you see exactly which
+    // parts of it are slow (fat) vs fast (thin).
     var a = 3.0, b = 2.0;
-    var delta = Math.PI / 4 + time * 0.25;
+    var delta = Math.PI / 4;
     var N = 3000;
     var coverage = Math.PI * 2 * Math.max(Math.ceil(a), Math.ceil(b));
     var step = coverage / N;
@@ -101,7 +104,7 @@
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
-    var BASE = 1.5;
+    var BASE = 3.0;
     if (MODULATE < 0.5) {
       ctx.lineWidth = BASE;
       ctx.beginPath();
@@ -110,6 +113,8 @@
       ctx.stroke();
     } else {
       // Batch in groups; one thickness per batch from the midpoint speed.
+      // STRENGTH is a clean dial: 0 = no variation (matches MODULATE off),
+      // 1 = dramatic, range roughly [0.3 × BASE, 1.7 × BASE].
       var batch = 20;
       for (var i = 0; i < N; i += batch) {
         var end = Math.min(i + batch, N);
@@ -117,8 +122,8 @@
         var dx = ptX[mid + 1] - ptX[mid];
         var dy = ptY[mid + 1] - ptY[mid];
         var speed = Math.sqrt(dx * dx + dy * dy);
-        var mult = 1.0 / (1.0 + speed * STRENGTH);
-        mult = 0.6 + mult * 1.2;
+        var slowness = 1.0 - Math.min(speed / 3.0, 1.0);  // [0..1], 1 = stopped
+        var mult = 1.0 + STRENGTH * (slowness * 1.4 - 0.7);
         ctx.lineWidth = BASE * mult;
         ctx.beginPath();
         ctx.moveTo(ptX[i], ptY[i]);
