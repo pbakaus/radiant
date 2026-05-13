@@ -28,7 +28,7 @@ export const articleMeta: Record<string, ArticleMeta> = {
 		subtitle:
 			'Two pipelines, one image. Canvas 2D builds a water map of refraction normals; a fragment shader bends a background through it. The drop physics is the whole article.',
 		author: 'Paul Bakaus & Claude',
-		readingTime: '18 minute read · 5 interactive sandboxes',
+		readingTime: '20 minute read · 6 interactive sandboxes',
 		shareImage: '/share/learn-rain-on-glass.jpg'
 	}
 };

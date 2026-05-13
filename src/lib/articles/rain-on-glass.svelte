@@ -412,10 +412,10 @@ for (const drop of drops) {
 	<h2 id="wet-glass">The wet-glass trick</h2>
 
 	<p>
-		The production shader has one more visual sleight of hand worth mentioning: <strong>two
-		different background textures</strong>. The "no drop here" pixels sample a heavily-blurred
-		version of the scene; the "you're looking through a drop" pixels sample a less-blurred
-		version. The drop's alpha mask switches between them.
+		There's one more piece of visual sleight of hand that does most of the heavy lifting in the
+		final shader: <strong>two different background textures</strong>. The "no drop here" pixels
+		sample a heavily-blurred version of the scene; the "you're looking through a drop" pixels
+		sample a less-blurred version. The drop's alpha mask switches between them.
 	</p>
 
 	<p>
@@ -427,9 +427,28 @@ for (const drop of drops) {
 	</p>
 
 	<p>
+		Toggle the trick on and off below. Off, the scene is sharp everywhere and drops are
+		just refractions of a clear image — they read as bumps, not lenses. On, the surrounding glass
+		fogs out and the drops become clear windows into a more detailed view.
+	</p>
+
+	<Sandbox
+		src="/learn/rain-on-glass/06-wet-glass.html"
+		title="Step 06 — the wet-glass trick"
+		caption="Same drops, same physics. The toggle controls whether the area outside the drops is the heavily-blurred or the sharp version of the city. The drops themselves always sample the sharp one."
+		aspect="16/9"
+		params={[
+			{ name: 'REFRACTION', label: 'Refraction', min: 0.1, max: 2.5, step: 0.05, default: 1.0 },
+			{ name: 'SPAWN_RATE', label: 'Spawn rate', min: 0.1, max: 2.0, step: 0.05, default: 0.5 }
+		]}
+		toggle={{ name: 'WET_GLASS', label: 'Wet glass (two-background trick)', onValue: 1, offValue: 0, default: true }}
+	/>
+
+	<p>
 		The Radiant production shader does this with a 384×256 heavy-blur background and a 96×64
-		lighter-blur foreground, both procedurally generated cityscapes. The teaching variants above
-		skip this for clarity (one background, one lookup); the final shader puts it back.
+		lighter-blur foreground, both procedurally generated cityscapes. The cost is one extra texture
+		upload and one extra <code>texture2D</code> call per pixel. The payoff is the entire
+		atmosphere of the effect.
 	</p>
 
 	<h2 id="two-layers">Two layers of drops</h2>
