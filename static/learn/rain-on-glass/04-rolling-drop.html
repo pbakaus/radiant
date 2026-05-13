@@ -110,9 +110,14 @@
   var bgCanvas = null;
 
   // ─── Drop state ─────────────────────────────────────────
-  var drops = [];        // array of { x, y, r, momentum, lastSpawn, killed }
+  var drops = [];        // array of { x, y, r, momentum, lastSpawn, killed, spreadX, spreadY }
   var mainDrop = null;
   var lastTime = 0;
+  // Visual shape parameters — drops aren't perfectly round. scaleY > 1 gives
+  // the always-present teardrop look; spreadX/Y are transient "splat" factors
+  // that decay back to zero after a spawn or impact.
+  var SHAPE_TEARDROP = 1.5;
+  var SHAPE_IMPACT = 1.0;
 
   function spawnMain() {
     var w = waterMapCanvas.width;
@@ -122,7 +127,9 @@
       r: 70 * dpr,
       momentum: 0,
       lastSpawn: 0,
-      killed: false
+      killed: false,
+      spreadX: 0.6,        // fresh drops are splatty
+      spreadY: 0.4
     };
     drops.push(mainDrop);
   }
@@ -152,7 +159,10 @@
             r: drop.r * rand(0.25, 0.4),
             momentum: 0,
             lastSpawn: 0,
-            killed: false
+            killed: false,
+            // Trail drops inherit a bit of the parent's vertical stretch
+            spreadX: 0,
+            spreadY: Math.min(0.4, drop.momentum * 0.08)
           });
           drop.r *= Math.pow(0.97, dt);
           drop.lastSpawn = 0;
@@ -167,6 +177,9 @@
 
       // ── Momentum decay
       drop.momentum *= Math.pow(0.95, dt);
+      // ── Shape decay — drops settle back from splat to baseline teardrop
+      drop.spreadX *= Math.pow(0.4, dt);
+      drop.spreadY *= Math.pow(0.7, dt);
     }
   }
 
@@ -175,8 +188,11 @@
     waterCtx.globalCompositeOperation = 'source-over';
     for (var i = 0; i < drops.length; i++) {
       var drop = drops[i];
-      var size = drop.r * 2;
-      waterCtx.drawImage(dropBitmap, drop.x - size / 2, drop.y - size / 2, size, size);
+      // Width/height come from r times a scaleX/Y plus the transient spread.
+      // scaleY ~1.5 is the natural drop teardrop; spread is the splat factor.
+      var w_ = drop.r * 2 * (1 + drop.spreadX);
+      var h_ = drop.r * 2 * SHAPE_TEARDROP * (1 + drop.spreadY);
+      waterCtx.drawImage(dropBitmap, drop.x - w_ / 2, drop.y - h_ / 2, w_, h_);
     }
   }
 

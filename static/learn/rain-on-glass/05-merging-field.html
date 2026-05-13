@@ -117,14 +117,18 @@
   var drops = [];
   var lastTime = 0;
 
+  // Drop shape is not a perfect circle. Two factors are at play:
+  //   scaleY (constant) — the natural teardrop, taller than wide
+  //   spreadX/Y (transient) — the "splat" applied on spawn or merge,
+  //     which decays back to zero (surface tension settling)
+  var SHAPE_TEARDROP = 1.45;
+
   function spawnDrops(dt) {
     var w = waterMapCanvas.width, h = waterMapCanvas.height;
     var spawnCount = SPAWN_RATE * dt;
     while (spawnCount > 0 && drops.length < MAX_DROPS) {
       if (Math.random() > spawnCount) break;
       spawnCount -= 1;
-      // Squared (not cubed) → more balanced size distribution. Cubed
-      // produces too many tiny drops to clearly show merging.
       var t = Math.random(); t = t * t;
       var r = minR + (maxR - minR) * t;
       drops.push({
@@ -132,7 +136,9 @@
         y: rand(-50, h * 0.6),
         r: r,
         momentum: 0,
-        killed: false
+        killed: false,
+        spreadX: 0.5 + rand(-0.1, 0.2),   // fresh drops splat on landing
+        spreadY: 0.4
       });
     }
   }
@@ -162,6 +168,11 @@
           d1.r = targetR;
           // Merger momentum boost — drops snowball as they fall
           d1.momentum = Math.max(d2.momentum, d1.momentum + 1.5);
+          // Small settle wobble — a fresh merger gets a brief bulge that
+          // surface tension pulls back into a teardrop. Keep this modest;
+          // bigger values look like a glitchy "pop" rather than physics.
+          d1.spreadX = Math.max(d1.spreadX, 0.25);
+          d1.spreadY = Math.max(d1.spreadY, 0.15);
           d2.killed = true;
         }
       }
@@ -184,6 +195,9 @@
       if (d.momentum > 4.0 * dpr) d.momentum = 4.0 * dpr;
       d.y += d.momentum * dt;
       d.momentum *= Math.pow(0.94, dt);
+      // Shape decay — surface tension pulls drops back to the teardrop
+      d.spreadX *= Math.pow(0.4, dt);
+      d.spreadY *= Math.pow(0.7, dt);
       if (d.y > h + d.r) d.killed = true;
     }
 
@@ -195,8 +209,11 @@
     waterCtx.globalCompositeOperation = 'source-over';
     for (var i = 0; i < drops.length; i++) {
       var d = drops[i];
-      var size = d.r * 2;
-      waterCtx.drawImage(dropBitmap, d.x - size / 2, d.y - size / 2, size, size);
+      // The visible drop is a stretched teardrop, not a circle. Width is
+      // r * 2 * (1 + spreadX); height is r * 2 * scaleY * (1 + spreadY).
+      var w_ = d.r * 2 * (1 + d.spreadX);
+      var h_ = d.r * 2 * SHAPE_TEARDROP * (1 + d.spreadY);
+      waterCtx.drawImage(dropBitmap, d.x - w_ / 2, d.y - h_ / 2, w_, h_);
     }
   }
 

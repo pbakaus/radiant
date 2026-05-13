@@ -82,6 +82,21 @@ if (drop.momentum > 0.5 && drop.lastSpawn > 20) {
   drop.lastSpawn = 0;
 }`;
 
+	const shapeCode = `// The drop's drawn size has three components.
+//   scaleY is constant — a real drop on glass is taller than wide.
+//   spreadX/Y are transient "splat" factors set on spawn or collision.
+//   Both spreads decay every frame, which is surface tension settling.
+function drawDrop(d) {
+  const SHAPE_TEARDROP = 1.5;
+  const w = d.r * 2 * (1 + d.spreadX);
+  const h = d.r * 2 * SHAPE_TEARDROP * (1 + d.spreadY);
+  ctx.drawImage(dropBitmap, d.x - w/2, d.y - h/2, w, h);
+}
+
+// Per frame, in updatePhysics:
+drop.spreadX *= Math.pow(0.4, dt);   // rapid X collapse
+drop.spreadY *= Math.pow(0.7, dt);   // slower Y settling`;
+
 	const collisionCode = `// Sort by y so we only check nearby drops (O(n·k), not O(n²))
 drops.sort((a, b) => a.y - b.y);
 
@@ -99,6 +114,8 @@ for (var i = 0; i < drops.length; i++) {
       var a2 = Math.PI * d2.r * d2.r;
       d1.r = Math.sqrt((a1 + a2 * 0.8) / Math.PI);
       d1.momentum += 1.5;   // mergers snowball
+      d1.spreadX = Math.max(d1.spreadX, 0.25);  // small settle wobble
+      d1.spreadY = Math.max(d1.spreadY, 0.15);
       d2.killed = true;
     }
   }
@@ -303,7 +320,7 @@ for (const drop of drops) {
 	<Sandbox
 		src="/learn/rain-on-glass/04-rolling-drop.html"
 		title="Step 04 — a rolling drop"
-		caption="A single drop with physics. Crank surface tension down to see drops slide more easily; crank trail rate up to see them shed mass faster."
+		caption="A single drop with physics. Notice the teardrop shape — drops aren't round. Crank surface tension down to see drops slide more easily; crank trail rate up to see them shed mass faster."
 		aspect="16/9"
 		params={[
 			{ name: 'GRAVITY', label: 'Gravity', min: 0.3, max: 3.0, step: 0.05, default: 1.0 },
@@ -317,6 +334,38 @@ for (const drop of drops) {
 		Watch what happens when surface tension drops to 0.2: the kicks happen constantly, drops never
 		really sit still, and the glass becomes a wash of streaks. Crank it up to 3 and drops freeze
 		in place after a brief slide. Real plausibility is somewhere around 0.7–1.5.
+	</p>
+
+	<h2 id="shape">Drops aren't round</h2>
+
+	<p>
+		Look closely at the rolling drop above. It's not a circle. A real water drop on glass is taller
+		than it is wide, with a flattened bottom — gravity pulls the bottom down, surface tension pulls
+		the top back up, and the steady-state shape is a teardrop. The drops in our shader cheat the
+		same way real drops do.
+	</p>
+
+	<p>
+		The shape is two factors stacked together. <code>scaleY</code> is constant — every drop is
+		drawn ~1.5x taller than wide. That's the teardrop baseline. On top of that, <code>spreadX</code>
+		and <code>spreadY</code> are transient "splat" factors. A freshly-spawned drop hits the glass
+		spread out; a freshly-merged drop bulges from the impact. Both spreads decay every frame, which
+		is what surface tension does in real life.
+	</p>
+
+	<Code code={shapeCode} lang="js" caption="Drop shape in three lines: a constant teardrop multiplier, transient spreads, and per-frame decay back to the baseline." />
+
+	<p>
+		The decay rates matter. <code>pow(0.4, dt)</code> on X means horizontal spread collapses in
+		~3 frames. <code>pow(0.7, dt)</code> on Y means vertical settling takes ~6 frames. Drops snap
+		back narrow first, then settle vertically — the same asymmetry you see in a real droplet
+		flattening on glass.
+	</p>
+
+	<p>
+		Without this, a merge looks like two circles snapping into one bigger circle. With it, the
+		bigger circle <em>bulges</em> for a moment and then pulls itself back together. That bulge is
+		the difference between "fake" and "real" in this shader.
 	</p>
 
 	<h2 id="merging">Drops that merge</h2>
@@ -344,7 +393,7 @@ for (const drop of drops) {
 	<Sandbox
 		src="/learn/rain-on-glass/05-merging-field.html"
 		title="Step 05 — drops that merge"
-		caption="Drops spawn over time, slide when surface tension lets go, and absorb the smaller drops they touch. Mergers accelerate the bigger drop, which is why a rolling drop snowballs as it picks up siblings on the way down."
+		caption="Drops spawn over time, slide when surface tension lets go, and absorb the smaller drops they touch. Watch for the moment of impact — the merged drop spreads briefly before pulling itself back into a teardrop. That's what makes the merge read as physical instead of as one circle eating another."
 		aspect="16/9"
 		params={[
 			{ name: 'SPAWN_RATE', label: 'Spawn rate', min: 0.1, max: 3.0, step: 0.05, default: 1.0 },
