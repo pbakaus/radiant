@@ -35,12 +35,15 @@
 
   var dpr = Math.min(window.devicePixelRatio || 1, 2);
   var BITMAP_SIZE = 256;
-  var SPAWN_RATE = 1.0;
-  var COLLISION_RADIUS = 0.45;
+  // Tuned so the merge behavior is the focus, not "a busy field of tiny dots".
+  // Drops are large enough to read as drops, sparse enough that you can see
+  // two collide and become one without losing the moment in noise.
+  var SPAWN_RATE = 0.35;
+  var COLLISION_RADIUS = 0.55;
   var REFRACTION = 1.0;
-  var MAX_DROPS = 350;
-  var minR = 14 * dpr;
-  var maxR = 60 * dpr;
+  var MAX_DROPS = 90;
+  var minR = 32 * dpr;
+  var maxR = 95 * dpr;
 
   function rand(a, b) { return a + Math.random() * (b - a); }
 
@@ -120,11 +123,13 @@
     while (spawnCount > 0 && drops.length < MAX_DROPS) {
       if (Math.random() > spawnCount) break;
       spawnCount -= 1;
-      var t = Math.random(); t = t * t * t;       // cubed → mostly small drops
+      // Squared (not cubed) → more balanced size distribution. Cubed
+      // produces too many tiny drops to clearly show merging.
+      var t = Math.random(); t = t * t;
       var r = minR + (maxR - minR) * t;
       drops.push({
         x: rand(0, w),
-        y: rand(-50, h * 0.5),
+        y: rand(-50, h * 0.6),
         r: r,
         momentum: 0,
         killed: false
@@ -170,12 +175,15 @@
     for (var i = drops.length - 1; i >= 0; i--) {
       var d = drops[i];
       if (d.killed) { drops.splice(i, 1); continue; }
-      // Surface tension: kicks proportional to size
-      if (Math.random() < d.r / (60 * dpr) * dt * 0.4) {
-        d.momentum += rand(0.5, 2.0) * dpr;
+      // Surface tension: kicks proportional to size, but gentler — we want
+      // drops to slide slowly enough that you can watch them collide.
+      if (Math.random() < d.r / (90 * dpr) * dt * 0.3) {
+        d.momentum += rand(0.3, 1.2) * dpr;
       }
+      // Cap momentum so big drops don't snowball off-screen too fast
+      if (d.momentum > 4.0 * dpr) d.momentum = 4.0 * dpr;
       d.y += d.momentum * dt;
-      d.momentum *= Math.pow(0.95, dt);
+      d.momentum *= Math.pow(0.94, dt);
       if (d.y > h + d.r) d.killed = true;
     }
 
