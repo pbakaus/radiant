@@ -17,14 +17,15 @@
 	let dropBitmap: HTMLCanvasElement | null = null;
 	let bgBitmap: HTMLCanvasElement | null = null;
 
+	// The bitmap holds the RAW drop pixels (RGB = encoded refraction, A = mask).
+	// We don't pre-composite the dark background here, because sampleRGBA needs
+	// to read the unmodified encoded values. The background is filled by paintDrop.
 	function buildDropBitmap() {
 		const c = document.createElement('canvas');
 		const w = SIZE * dpr;
 		c.width = c.height = w;
 		const ctx = c.getContext('2d');
 		if (!ctx) return c;
-		ctx.fillStyle = '#0d0d0d';
-		ctx.fillRect(0, 0, w, w);
 		const img = ctx.createImageData(w, w);
 		const d = img.data;
 		const cx = w / 2;
@@ -48,14 +49,7 @@
 				d[idx + 3] = Math.round(Math.min(255, Math.max(0, alpha)));
 			}
 		}
-		// We need to composite the drop on a dark background. Build a second
-		// canvas with both layers so the final stamp is one drawImage.
-		const tmp = document.createElement('canvas');
-		tmp.width = tmp.height = w;
-		const tctx = tmp.getContext('2d');
-		if (!tctx) return c;
-		tctx.putImageData(img, 0, 0);
-		ctx.drawImage(tmp, 0, 0);
+		ctx.putImageData(img, 0, 0);
 		return c;
 	}
 
@@ -90,6 +84,10 @@
 		dropCanvas.height = SIZE * dpr;
 		const ctx = dropCanvas.getContext('2d');
 		if (!ctx) return;
+		// Fill dark background here (not in the bitmap), so the bitmap stays
+		// pristine for sampleRGBA to read the raw encoded values.
+		ctx.fillStyle = '#0d0d0d';
+		ctx.fillRect(0, 0, dropCanvas.width, dropCanvas.height);
 		ctx.drawImage(dropBitmap, 0, 0);
 
 		// Sample-point marker (cheap to draw)
