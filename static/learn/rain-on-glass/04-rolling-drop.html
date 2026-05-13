@@ -280,7 +280,13 @@ void main() {
         case 'SURFACE_TENSION': SURFACE_TENSION = e.data.value; break;
         case 'TRAIL_RATE':      TRAIL_RATE = e.data.value; break;
         case 'REFRACTION':      REFRACTION = e.data.value; break;
-        case 'RESPAWN':         if (mainDrop) mainDrop.killed = true; break;
+        case 'RESPAWN':
+        case 'RESET':
+          // Kill every existing drop so the next physics tick respawns
+          // a fresh main drop and clears trails.
+          for (var i = 0; i < drops.length; i++) drops[i].killed = true;
+          mainDrop = null;
+          break;
       }
     }
   });

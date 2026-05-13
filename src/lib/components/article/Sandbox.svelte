@@ -81,6 +81,9 @@
 			iframeEl?.contentWindow?.postMessage({ type: 'param', name: p.name, value: p.default }, '*');
 		}
 		if (toggle) setToggle(toggle.default ?? true);
+		// Generic "restart your simulation" signal — state-heavy shaders
+		// listen for this to clear accumulated drops/rays/etc.
+		iframeEl?.contentWindow?.postMessage({ type: 'param', name: 'RESET', value: 1 }, '*');
 	}
 
 	function onLoad() {

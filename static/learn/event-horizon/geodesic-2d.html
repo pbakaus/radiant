@@ -263,7 +263,10 @@
       switch (e.data.name) {
         case 'MASS': RS = Math.max(0.1, e.data.value); rays = []; seedDemo(); draw(); break;
         case 'FIELD': showField = e.data.value > 0.5; draw(); break;
-        case 'RESEED': rays = []; seedDemo(); draw(); break;
+        case 'RESEED':
+        case 'RESET':
+          rays = []; seedDemo(); draw();
+          break;
       }
     }
   });

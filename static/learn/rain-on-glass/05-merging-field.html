@@ -291,7 +291,10 @@ void main() {
         case 'SPAWN_RATE':       SPAWN_RATE = e.data.value; break;
         case 'COLLISION_RADIUS': COLLISION_RADIUS = e.data.value; break;
         case 'REFRACTION':       REFRACTION = e.data.value; break;
-        case 'CLEAR':            drops = []; break;
+        case 'CLEAR':
+        case 'RESET':
+          drops = [];
+          break;
       }
     }
   });
