@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Step 03 — A Static Field of Drops</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .label {
+    position: fixed; top: 16px; left: 18px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 10px; letter-spacing: 0.15em; text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.55); z-index: 10; pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<div class="label">03 · A static field of drops</div>
+<canvas id="canvas"></canvas>
+<script>
+// ─────────────────────────────────────────────
+// Step 03 — Many drops, no physics.
+// Same refraction shader as Step 01, but the water map is now
+// the union of many drop bitmaps stamped at random positions.
+// This is what Canvas 2D is great for: drawing N images cheaply.
+// ─────────────────────────────────────────────
+(function () {
+  var canvas = document.getElementById('canvas');
+  var gl = canvas.getContext('webgl', { alpha: false, antialias: false });
+  if (!gl) return;
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+  var BITMAP_SIZE = 256;
+  var DROP_COUNT = 200;
+  var DROP_SIZE_MIN = 30;
+  var DROP_SIZE_MAX = 90;
+  var REFRACTION = 1.0;
+  var SEED = 1;
+  var needsRebuild = true;
+
+  function rand(seed) {
+    // Mulberry32 — deterministic so the field is stable across rebuilds
+    var t = (seed >>> 0) + 0x6D2B79F5;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }
+
+  function makeDropBitmap() {
+    var c = document.createElement('canvas');
+    c.width = c.height = BITMAP_SIZE;
+    var ctx = c.getContext('2d');
+    var img = ctx.createImageData(BITMAP_SIZE, BITMAP_SIZE);
+    var d = img.data;
+    var cx = BITMAP_SIZE / 2, cy = BITMAP_SIZE / 2;
+    for (var py = 0; py < BITMAP_SIZE; py++) {
+      for (var px = 0; px < BITMAP_SIZE; px++) {
+        var dx = (px - cx) / cx;
+        var dy = (py - cy) / cy;
+        dy *= 1.0 + dy * 0.15;
+        var dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > 1.0) continue;
+        var nx = dist > 0.001 ? dx / dist : 0;
+        var ny = dist > 0.001 ? dy / dist : 0;
+        var r = Math.round(ny * 60 * dist + 128);
+        var g = Math.round(nx * 60 * dist + 128);
+        var depth = Math.sqrt(Math.max(0, 1.0 - dist * dist)) * 255;
+        var alpha = Math.max(0, 1.0 - Math.pow(dist / 0.45, 6)) * 255;
+        var idx = (py * BITMAP_SIZE + px) * 4;
+        d[idx]     = Math.max(0, Math.min(255, r));
+        d[idx + 1] = Math.max(0, Math.min(255, g));
+        d[idx + 2] = Math.round(depth);
+        d[idx + 3] = Math.round(Math.min(255, Math.max(0, alpha)));
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    return c;
+  }
+
+  function makeBackground(w, h) {
+    var c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    var ctx = c.getContext('2d');
+    var g = ctx.createLinearGradient(0, 0, w, h);
+    g.addColorStop(0,   '#1a0e22');
+    g.addColorStop(0.3, '#3a1a18');
+    g.addColorStop(0.6, '#7a3818');
+    g.addColorStop(1,   '#c87038');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+    for (var i = 0; i < 18; i++) {
+      var y = (i / 18) * h * 1.3 - h * 0.15;
+      ctx.strokeStyle = i % 3 === 0
+        ? 'rgba(255, 200, 120, 0.35)'
+        : (i % 3 === 1 ? 'rgba(180, 220, 255, 0.18)' : 'rgba(220, 130, 60, 0.22)');
+      ctx.lineWidth = 18 + (i % 4) * 6;
+      ctx.beginPath(); ctx.moveTo(-50, y); ctx.lineTo(w + 50, y + h * 0.18); ctx.stroke();
+    }
+    for (var p = 0; p < 60; p++) {
+      var px = (p * 137.5) % w;
+      var py = ((p * 91.7) % h) * 0.9 + h * 0.05;
+      var pr = 4 + (p % 5) * 3;
+      var pg = ctx.createRadialGradient(px, py, 0, px, py, pr * 4);
+      pg.addColorStop(0, p % 7 === 0 ? 'rgba(180, 220, 255, 0.9)' : 'rgba(255, 200, 120, 0.9)');
+      pg.addColorStop(0.3, 'rgba(255, 180, 100, 0.3)');
+      pg.addColorStop(1, 'rgba(255, 150, 80, 0)');
+      ctx.fillStyle = pg;
+      ctx.beginPath(); ctx.arc(px, py, pr * 4, 0, Math.PI * 2); ctx.fill();
+    }
+    return c;
+  }
+
+  var dropBitmap = makeDropBitmap();
+  var waterMapCanvas = document.createElement('canvas');
+  var waterCtx = waterMapCanvas.getContext('2d');
+  var bgCanvas = null;
+
+  // ─── Build the water map by stamping many drops onto Canvas 2D ──
+  function rebuildWaterMap() {
+    waterCtx.clearRect(0, 0, waterMapCanvas.width, waterMapCanvas.height);
+    var w = waterMapCanvas.width;
+    var h = waterMapCanvas.height;
+    waterCtx.globalCompositeOperation = 'source-over';
+    var seed = SEED * 1000;
+    for (var i = 0; i < DROP_COUNT; i++) {
+      var x = rand(seed++) * w;
+      var y = rand(seed++) * h;
+      // Drop sizes follow a cubed distribution — lots of small drops,
+      // a few big ones — same as the production shader.
+      var t = rand(seed++);
+      var size = (DROP_SIZE_MIN + (DROP_SIZE_MAX - DROP_SIZE_MIN) * t * t * t) * dpr;
+      waterCtx.drawImage(dropBitmap, x - size / 2, y - size / 2, size, size);
+    }
+    needsRebuild = false;
+  }
+
+  // ─── Refraction shader (same six lines as Step 01) ──
+  var vertSrc = 'attribute vec2 a_pos; void main(){ gl_Position = vec4(a_pos, 0.0, 1.0); }';
+  var fragSrc = `
+precision mediump float;
+uniform sampler2D u_waterMap;
+uniform sampler2D u_background;
+uniform vec2 u_res;
+uniform float u_refraction;
+
+void main() {
+  vec2 uv = gl_FragCoord.xy / u_res;
+  vec2 waterUV = vec2(uv.x, 1.0 - uv.y);
+  vec4 water = texture2D(u_waterMap, waterUV);
+  vec2 offset = (vec2(water.g, water.r) - 0.5) * 2.0;
+  float depth = water.b;
+  vec2 refractedUV = uv + offset * (256.0 + depth * 256.0) / u_res.x * u_refraction;
+  vec4 bg = texture2D(u_background, refractedUV);
+  vec4 outColor = mix(texture2D(u_background, uv), bg, clamp(water.a * 4.0 - 1.0, 0.0, 1.0));
+  gl_FragColor = outColor;
+}
+`;
+
+  function compile(type, src) {
+    var s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) console.error(gl.getShaderInfoLog(s));
+    return s;
+  }
+  var prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, vertSrc));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog); gl.useProgram(prog);
+
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+  var aPos = gl.getAttribLocation(prog, 'a_pos');
+  gl.enableVertexAttribArray(aPos);
+  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+  function makeTex(unit, source) {
+    var t = gl.createTexture();
+    gl.activeTexture(gl['TEXTURE' + unit]);
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    if (source) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+    return t;
+  }
+
+  var waterTex = makeTex(0, null);
+  var bgTex = makeTex(1, null);
+  var uWaterMap = gl.getUniformLocation(prog, 'u_waterMap');
+  var uBackground = gl.getUniformLocation(prog, 'u_background');
+  var uRes = gl.getUniformLocation(prog, 'u_res');
+  var uRefraction = gl.getUniformLocation(prog, 'u_refraction');
+
+  function resize() {
+    var w = Math.round(canvas.clientWidth * dpr);
+    var h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w; canvas.height = h;
+      gl.viewport(0, 0, w, h);
+      waterMapCanvas.width = w; waterMapCanvas.height = h;
+      bgCanvas = makeBackground(w, h);
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, bgTex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bgCanvas);
+      needsRebuild = true;
+    }
+  }
+
+  function render() {
+    resize();
+    if (needsRebuild) {
+      rebuildWaterMap();
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, waterTex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, waterMapCanvas);
+    }
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform1f(uRefraction, REFRACTION);
+    gl.uniform1i(uWaterMap, 0);
+    gl.uniform1i(uBackground, 1);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    requestAnimationFrame(render);
+  }
+  render();
+
+  window.addEventListener('message', function(e){
+    if (e.data && e.data.type === 'param') {
+      switch (e.data.name) {
+        case 'DROP_COUNT':    DROP_COUNT = e.data.value; needsRebuild = true; break;
+        case 'DROP_SIZE_MIN': DROP_SIZE_MIN = e.data.value; needsRebuild = true; break;
+        case 'DROP_SIZE_MAX': DROP_SIZE_MAX = e.data.value; needsRebuild = true; break;
+        case 'REFRACTION':    REFRACTION = e.data.value; break;
+        case 'RESHUFFLE':     SEED = e.data.value; needsRebuild = true; break;
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

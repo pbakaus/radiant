@@ -1,6 +1,7 @@
 import type { Component } from 'svelte';
 import type { Shader } from '$lib/shaders';
 import EventHorizon from './event-horizon.svelte';
+import RainOnGlass from './rain-on-glass.svelte';
 
 export type ArticleComponent = Component<{ shader: Shader }>;
 
@@ -21,11 +22,20 @@ export const articleMeta: Record<string, ArticleMeta> = {
 		author: 'Paul Bakaus & Claude',
 		readingTime: '20 minute read · 5 interactive sandboxes',
 		shareImage: '/share/learn-event-horizon.jpg'
+	},
+	'rain-on-glass': {
+		title: 'How to render rain on glass',
+		subtitle:
+			'Two pipelines, one image. Canvas 2D builds a water map of refraction normals; a fragment shader bends a background through it. The drop physics is the whole article.',
+		author: 'Paul Bakaus & Claude',
+		readingTime: '18 minute read · 5 interactive sandboxes',
+		shareImage: '/share/learn-rain-on-glass.jpg'
 	}
 };
 
 export const articles: Record<string, ArticleComponent> = {
-	'event-horizon': EventHorizon
+	'event-horizon': EventHorizon,
+	'rain-on-glass': RainOnGlass
 };
 
 export function hasArticle(id: string): boolean {

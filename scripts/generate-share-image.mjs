@@ -27,7 +27,16 @@ const HEIGHT = 630;
 const DPR = 2;
 
 // Long warmup so the shader is in a settled, photogenic state.
-const WARMUP_MS = 6000;
+// Rain-style shaders accumulate state over time and need more.
+const WARMUP_MS = 10000;
+
+// Per-shader capture-time parameter overrides (sent via postMessage during
+// warmup). Used to push state-accumulating shaders into a richer state for
+// the share image without changing their gallery defaults.
+const CAPTURE_PARAMS = {
+	'rain-on-glass': { RAIN_AMOUNT: 2.0 },
+	'rain-umbrella': { RAIN_AMOUNT: 2.0 }
+};
 
 // ───────────────────────────────────────────────────────────────────────────
 // Parse shader list + heroConfig from src/lib/shaders.ts
@@ -125,7 +134,16 @@ async function captureShareImage(page, baseUrl, shader, meta) {
 	const url = `${baseUrl}/${shader.file}`;
 	await page.goto(url, { waitUntil: 'domcontentloaded' });
 
-	// Hide the shader's own label, apply heroConfig, inject fonts + overlay.
+	// Combine hero config with capture-time overrides (latter wins)
+	const captureOverrides = CAPTURE_PARAMS[shader.id] || {};
+	const combinedParams = [...(shader.heroParams || [])];
+	for (const [name, value] of Object.entries(captureOverrides)) {
+		const existing = combinedParams.find((p) => p.name === name);
+		if (existing) existing.value = value;
+		else combinedParams.push({ name, value });
+	}
+
+	// Hide the shader's own label, apply params, inject fonts + overlay.
 	await page.evaluate(
 		(heroParams, meta) => {
 			// Hide the shader's built-in label
@@ -237,7 +255,7 @@ async function captureShareImage(page, baseUrl, shader, meta) {
 			brand.textContent = 'Radiant';
 			document.body.appendChild(brand);
 		},
-		shader.heroParams,
+		combinedParams,
 		meta
 	);
 
@@ -297,6 +315,10 @@ async function main() {
 	});
 	const page = await browser.newPage();
 	await page.setViewport({ width: WIDTH, height: HEIGHT, deviceScaleFactor: DPR });
+	// Some shaders honor prefers-reduced-motion by skipping frames. Headless
+	// puppeteer sometimes reports `reduce` by default — force it off so the
+	// shader animates normally during warmup.
+	await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'no-preference' }]);
 
 	let done = 0;
 	for (const t of targets) {

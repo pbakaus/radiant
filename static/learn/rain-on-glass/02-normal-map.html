@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Step 02 — The Drop Normal Map</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a;
+               font-family: 'SF Mono', 'Fira Code', monospace; color: rgba(232,224,216,0.7); }
+  canvas { display: block; image-rendering: pixelated; }
+  .stage {
+    position: fixed; inset: 0;
+    display: grid; grid-template-columns: 1fr 1fr;
+  }
+  .pane {
+    position: relative;
+    display: flex; align-items: center; justify-content: center;
+    background: #0a0a0a;
+  }
+  .pane + .pane { border-left: 1px solid rgba(200, 149, 108, 0.1); }
+  .label {
+    position: fixed;
+    top: 16px;
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: rgba(200, 149, 108, 0.65);
+    z-index: 10;
+    pointer-events: none;
+  }
+  .label.left { left: 18px; }
+  .label.right { left: calc(50% + 18px); }
+  .channels {
+    position: absolute;
+    bottom: 18px; left: 18px; right: 18px;
+    display: flex; gap: 0.8rem;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    color: rgba(232, 224, 216, 0.5);
+    pointer-events: none;
+  }
+  .channels span:before { content: '■ '; margin-right: 0.2rem; }
+  .chR:before { color: #d96a52; }
+  .chG:before { color: #6ec47e; }
+  .chB:before { color: #5c8fd6; }
+  .chA:before { color: rgba(255,255,255,0.6); }
+  .stage .pane canvas {
+    width: min(80%, 80vh);
+    aspect-ratio: 1;
+    border-radius: 50%;
+    box-shadow: 0 0 40px rgba(0,0,0,0.6);
+  }
+</style>
+</head>
+<body>
+<div class="label left">02 · The drop normal map</div>
+<div class="label right">RGB channels = (offset.y, offset.x, depth)</div>
+<div class="stage">
+  <div class="pane">
+    <canvas id="alpha"></canvas>
+    <div class="channels">
+      <span class="chA">alpha = drop shape mask</span>
+    </div>
+  </div>
+  <div class="pane">
+    <canvas id="color"></canvas>
+    <div class="channels">
+      <span class="chR">R: y-offset</span>
+      <span class="chG">X-offset</span>
+      <span class="chB">depth</span>
+    </div>
+  </div>
+</div>
+<script>
+// ─────────────────────────────────────────────
+// Step 02 — Visualize the drop's normal map.
+// The drop is a single procedurally-generated bitmap. Two channels
+// of the RGB encode 2D offsets (G→x, R→y) for the refraction shader
+// to use later. We don't run any shader here — just look at the texture.
+// ─────────────────────────────────────────────
+(function () {
+  var SIZE = 256;
+
+  // ── Drop shape mask: a soft falloff inside the drop, zero outside.
+  // The exponent on `dist/0.35` controls how "compact" the visible
+  // edge is — most of the drawn area is fully transparent so the
+  // visible drop appears smaller than the bitmap. The slight `dy *= ...`
+  // gives the drop a tear-shape (taller than wide).
+  function drawDropAlpha(canvas) {
+    canvas.width = canvas.height = SIZE;
+    var ctx = canvas.getContext('2d');
+    var img = ctx.createImageData(SIZE, SIZE);
+    var d = img.data;
+    var cx = SIZE / 2, cy = SIZE / 2;
+    for (var py = 0; py < SIZE; py++) {
+      for (var px = 0; px < SIZE; px++) {
+        var dx = (px - cx) / cx;
+        var dy = (py - cy) / cy;
+        dy *= 1.0 + dy * 0.15;
+        var dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > 1.0) continue;
+        var alpha = Math.max(0, 1.0 - Math.pow(dist / 0.35, 6)) * 255;
+        var idx = (py * SIZE + px) * 4;
+        d[idx] = d[idx + 1] = d[idx + 2] = 255;
+        d[idx + 3] = Math.round(Math.min(255, Math.max(0, alpha)));
+      }
+    }
+    ctx.fillStyle = '#0a0a0a';
+    ctx.fillRect(0, 0, SIZE, SIZE);
+    ctx.putImageData(img, 0, 0);
+  }
+
+  // ── Refraction normal map: each pixel encodes a 2D offset.
+  // R = vertical offset (0.5 = no offset, away from center)
+  // G = horizontal offset (same convention)
+  // B = "depth" — how far into the drop. Used to scale refraction strength.
+  // A = 1.0 always (the alpha mask is the OTHER bitmap).
+  function drawDropColor(canvas) {
+    canvas.width = canvas.height = SIZE;
+    var ctx = canvas.getContext('2d');
+    var img = ctx.createImageData(SIZE, SIZE);
+    var d = img.data;
+    var cx = SIZE / 2, cy = SIZE / 2;
+    for (var py = 0; py < SIZE; py++) {
+      for (var px = 0; px < SIZE; px++) {
+        var dx = (px - cx) / cx;
+        var dy = (py - cy) / cy;
+        dy *= 1.0 + dy * 0.15;
+        var dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > 1.0) continue;
+        var nx = dist > 0.001 ? dx / dist : 0;
+        var ny = dist > 0.001 ? dy / dist : 0;
+        // Refraction strength grows from center to edge — exactly the
+        // behavior a real lens has at glancing angles.
+        var r = Math.round(ny * 60 * dist + 128);
+        var g = Math.round(nx * 60 * dist + 128);
+        var depth = Math.sqrt(Math.max(0, 1.0 - dist * dist)) * 255;
+        var idx = (py * SIZE + px) * 4;
+        d[idx] = Math.max(0, Math.min(255, r));
+        d[idx + 1] = Math.max(0, Math.min(255, g));
+        d[idx + 2] = Math.round(depth);
+        d[idx + 3] = 255;
+      }
+    }
+    ctx.fillStyle = '#0a0a0a';
+    ctx.fillRect(0, 0, SIZE, SIZE);
+    ctx.putImageData(img, 0, 0);
+  }
+
+  drawDropAlpha(document.getElementById('alpha'));
+  drawDropColor(document.getElementById('color'));
+
+  window.addEventListener('message', function(e){
+    if (e.data && e.data.type === 'param') {
+      // No tunables — this is a still life of the bitmap.
+    }
+  });
+})();
+</script>
+</body>
+</html>

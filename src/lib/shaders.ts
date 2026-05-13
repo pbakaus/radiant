@@ -429,7 +429,8 @@ export const shaders: Shader[] = [
 		params: [
 			{ name: 'RAIN_AMOUNT', label: 'Rain Amount', min: 0.1, max: 2.0, step: 0.1, default: 1.0 },
 			{ name: 'REFRACTION', label: 'Refraction Strength', min: 0.1, max: 3.0, step: 0.1, default: 1.0 }
-		]
+		],
+		hasArticle: true
 	},
 	{
 		id: 'rain-umbrella',
