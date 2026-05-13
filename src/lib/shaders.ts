@@ -1259,7 +1259,15 @@ export const shaders: Shader[] = [
 		params: [
 			{ name: 'DRIFT_SPEED', label: 'Drift Speed', min: 0.1, max: 2.0, step: 0.05, default: 0.5 },
 			{ name: 'TRAIL_LENGTH', label: 'Trail Length', min: 0.3, max: 2.0, step: 0.05, default: 1.0 }
-		]
+		],
+		heroConfig: {
+			params: [
+				{ name: 'CENTER_X', value: 0.72 },
+				{ name: 'CENTER_Y', value: 0.5 },
+				{ name: 'SCALE', value: 1.15 }
+			]
+		},
+		hasArticle: true
 	},
 ];
 

@@ -58,6 +58,11 @@
   // ── Tunable parameters ──
   var DRIFT_SPEED = 0.5;
   var TRAIL_LENGTH = 1.0;
+  // Normalized figure center + scale — exposed so the article hero can
+  // push the scope off-center without affecting the standalone shader.
+  var CENTER_X = 0.5;
+  var CENTER_Y = 0.5;
+  var SCALE = 1.0;
 
   // ── Mouse tracking ──
   var mouse = { x: -1, y: -1, active: false };
@@ -138,9 +143,9 @@
   function drawGrid() {
     // Subtle grid that breathes
     gridOpacity += (gridTarget - gridOpacity) * 0.02;
-    var cx = W / 2;
-    var cy = H / 2;
-    var size = Math.min(W, H) * 0.4;
+    var cx = W * CENTER_X;
+    var cy = H * CENTER_Y;
+    var size = Math.min(W, H) * 0.4 * SCALE;
 
     ctx.strokeStyle = 'rgba(200, 149, 108, ' + (gridOpacity * 0.5) + ')';
     ctx.lineWidth = 0.5;
@@ -195,9 +200,9 @@
 
   // ── Draw a single Lissajous curve ──
   function drawLissajous(a, b, delta, scale, color, alpha, lineWidth, bloomSize, numPoints) {
-    var cx = W * 0.5;
-    var cy = H * 0.5;
-    var size = Math.min(W, H) * scale;
+    var cx = W * CENTER_X;
+    var cy = H * CENTER_Y;
+    var size = Math.min(W, H) * scale * SCALE;
     var coverage = Math.PI * 2 * Math.max(Math.ceil(a), Math.ceil(b));
     var step = coverage / numPoints;
 
@@ -366,9 +371,9 @@
     );
 
     // ── Bright phosphor dots at key points ──
-    var cx = W / 2;
-    var cy = H / 2;
-    var size = Math.min(W, H) * 0.35;
+    var cx = W * CENTER_X;
+    var cy = H * CENTER_Y;
+    var size = Math.min(W, H) * 0.35 * SCALE;
     var dotCount = 40;
     var coverage = Math.PI * 2 * Math.max(Math.ceil(currentA), Math.ceil(currentB));
 
@@ -425,6 +430,9 @@
       switch (e.data.name) {
         case 'DRIFT_SPEED': DRIFT_SPEED = e.data.value; break;
         case 'TRAIL_LENGTH': TRAIL_LENGTH = e.data.value; break;
+        case 'CENTER_X': CENTER_X = e.data.value; break;
+        case 'CENTER_Y': CENTER_Y = e.data.value; break;
+        case 'SCALE': SCALE = e.data.value; break;
       }
     }
   });
