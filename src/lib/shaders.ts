@@ -1264,7 +1264,7 @@ export const shaders: Shader[] = [
 			params: [
 				{ name: 'CENTER_X', value: 0.72 },
 				{ name: 'CENTER_Y', value: 0.5 },
-				{ name: 'SCALE', value: 1.15 }
+				{ name: 'SCALE', value: 0.85 }
 			]
 		},
 		hasArticle: true
